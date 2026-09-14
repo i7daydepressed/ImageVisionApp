@@ -1,0 +1,62 @@
+# Результаты сборки .NET
+bin/
+obj/
+[Bb]uild/
+[Dd]ebug/
+[Rr]elease/
+publish/
+
+# Пользовательские файлы Visual Studio
+.vs/
+*.user
+*.suo
+*.userprefs
+*.rsuser
+
+# Visual Studio Code
+.vscode/
+
+# JetBrains Rider
+.idea/
+*.sln.iml
+
+# Пакеты NuGet
+packages/
+.nuget/
+*.nupkg
+*.snupkg
+
+# Результаты тестов и покрытия
+TestResults/
+coverage/
+coverage.*
+*.coverage
+*.coveragexml
+
+# Логи и временные файлы
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Linux
+*~
+.Trash-*
+
+# Файлы публикации и установочные пакеты
+artifacts/
+*.app
+*.dmg
+*.pkg
+*.msi
+*.exe

@@ -1,0 +1,293 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:ImageVisionApp.ViewModels"
+        xmlns:models="using:ImageVisionApp.Models"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        d:DesignWidth="1000"
+        d:DesignHeight="700"
+        x:Class="ImageVisionApp.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Title="Обработка изображений"
+        Width="1000"
+        Height="700"
+        MinWidth="700"
+        MinHeight="500">
+
+<Grid RowDefinitions="Auto,*">
+
+    <!-- верх панель выбора картинки -->
+    <Border Grid.Row="0"
+            Padding="12"
+            BorderBrush="Gray"
+            BorderThickness="0,0,0,1">
+
+        <StackPanel Orientation="Horizontal"
+                    Spacing="12">
+
+            <Button Content="Открыть изображение"
+                    Click="OpenImageButton_OnClick" />
+
+            <TextBlock Text="{Binding StatusMessage}"
+                        VerticalAlignment="Center" />
+
+        </StackPanel>
+    </Border>
+    <!-- /верх панель выбора картинки -->
+
+    <!-- осн обл -->
+    <Grid Grid.Row="1"
+            ColumnDefinitions="340,*"
+            ColumnSpacing="12"
+            Margin="12">
+
+        <!-- инф изб -->
+        <Border Grid.Column="0"
+                Padding="14"
+                BorderBrush="Gray"
+                BorderThickness="1"
+                CornerRadius="6">
+
+            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                            HorizontalScrollBarVisibility="Disabled">
+
+                <StackPanel Spacing="8"> <!-- осн блок прокрутки данных-->
+                    <!-- раздел инфы -->
+                    <TextBlock Text="Информация"
+                                FontSize="20"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="Файл"
+                                Margin="0,10,0,2"
+                                FontSize="17"
+                                FontWeight="Bold" />
+
+                    <TextBlock Text="Имя файла:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.FileName}"
+                                TextWrapping="Wrap" />
+                    <!-- /раздел инфы -->
+
+                    <!-- Раздел инфы о размере -->
+                    <TextBlock Text="Размер файла:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.FormattedFileSize}" />
+
+                    <TextBlock Text="Формат:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.Format}" />
+
+                    <Separator Margin="0,8" />
+
+                    <TextBlock Text="Размеры изображения"
+                                FontSize="17"
+                                FontWeight="Bold" />
+
+                    <TextBlock Text="Разрешение:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.Resolution}" />
+
+                    <TextBlock Text="Количество пикселей:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.PixelCount}" />
+
+                    <TextBlock Text="Мегапиксели:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.Megapixels}" />
+
+                    <TextBlock Text="Соотношение сторон:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.AspectRatio}" />
+
+                    <TextBlock Text="Ориентация:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.Orientation}" />
+
+                    <TextBlock Text="Плотность изображения:"
+                                FontWeight="SemiBold" />
+
+                    <!-- <TextBlock Text="{Binding CurrentImageInfo.Density}"
+                                TextWrapping="Wrap" /> -->
+
+                    <!-- /Раздел инфы о размере -->
+
+                    <Separator Margin="0,8" />
+                    
+                    <!-- раздел инфы о цвете -->
+
+                    <TextBlock Text="Цвет"
+                                FontSize="17"
+                                FontWeight="Bold" />
+
+                    <TextBlock Text="Цветовая модель:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.ColorModel}" />
+
+                    <TextBlock Text="Тип цвета:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.ColorType}" />
+
+                    <TextBlock Text="Глубина одного канала:"
+                                FontWeight="SemiBold" />
+
+                    <StackPanel Orientation="Horizontal">
+
+                        <TextBlock Text="{Binding CurrentImageInfo.BitsPerChannel}" />
+
+                        <TextBlock Text=" бит" />
+
+                    </StackPanel>
+
+                    <TextBlock Text="Общая глубина цвета:"
+                                FontWeight="SemiBold" />
+
+                    <StackPanel Orientation="Horizontal">
+
+                        <TextBlock Text="{Binding CurrentImageInfo.BitsPerPixel}" />
+
+                        <TextBlock Text=" бит на пиксель" />
+
+                    </StackPanel>
+
+                    <TextBlock Text="Количество каналов:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.ChannelCount}" />
+
+                    <TextBlock Text="Наличие альфа канала:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.AlphaDescription}" />
+
+                    <TextBlock Text="Количество уникальных цветов:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.UniqueColorCount}" />
+
+                    <TextBlock Text="Гамма:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.GammaDescription}" />
+
+                    <!-- /раздел инфы о цвете -->
+
+                    <Separator Margin="0,8" />
+
+                    <!-- раздел о тех данных -->
+
+                    <TextBlock Text="Технические данные"
+                                FontSize="17"
+                                FontWeight="Bold" />
+
+                    <TextBlock Text="Сжатие:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.Compression}" />
+
+                    <TextBlock Text="Параметр качества:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.Quality}" />
+
+                    <TextBlock Text="Чересстрочность:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.Interlace}" />
+
+                    <TextBlock Text="Встроенные профили:"
+                                FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.Profiles}"
+                                TextWrapping="Wrap" />
+
+                    <!-- /раздел о тех данных -->
+
+                    <Separator Margin="0,8" />
+
+                    <!-- раздел о ехифе -->
+
+                    <TextBlock Text="EXIF"
+                                FontSize="17"
+                                FontWeight="Bold" />
+
+                    <TextBlock Text="{Binding CurrentImageInfo.ExifStatus}"
+                                Margin="0,0,0,6" />
+
+                    <ItemsControl ItemsSource="{Binding CurrentImageInfo.ExifData}">
+
+                        <ItemsControl.ItemTemplate>
+
+                            <DataTemplate x:DataType="models:MetadataItem">
+
+                                <StackPanel Margin="0,0,0,10">
+
+                                    <TextBlock Text="{Binding Name}"
+                                                FontWeight="SemiBold"
+                                                TextWrapping="Wrap" />
+
+                                    <TextBlock Text="{Binding Value}"
+                                                TextWrapping="Wrap" />
+
+                                </StackPanel>
+
+                            </DataTemplate>
+
+                        </ItemsControl.ItemTemplate>
+
+                    </ItemsControl>
+                    <!-- раздел о ехифе -->
+
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+        <!-- /инф изб -->
+
+        <!-- поле изображения -->
+        <TabControl Grid.Column="1">
+
+            <TabControl.ItemsPanel> <!-- центрирование -->
+                <ItemsPanelTemplate>
+                    <WrapPanel Orientation="Horizontal"
+                            HorizontalAlignment="Center" />
+                </ItemsPanelTemplate>
+            </TabControl.ItemsPanel> <!-- /центрирование -->
+
+            <TabItem Header="Оригинал" >
+                <Border Background="#181818"
+                        Padding="10">
+
+                    <Image Source="{Binding OriginalImage}"
+                            Stretch="Uniform" />
+
+                </Border>
+            </TabItem>
+
+            <TabItem Header="Изменённое">
+                <Border Background="#181818"
+                        Padding="10">
+
+                    <Image Source="{Binding ModifiedImage}"
+                            Stretch="Uniform" />
+
+                </Border>
+            </TabItem>
+
+        </TabControl>
+        <!--/ поле изображения -->
+
+    </Grid>
+
+</Grid>
+
+</Window>
