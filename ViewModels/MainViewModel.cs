@@ -22,6 +22,18 @@ public partial class MainViewModel : ViewModelBase{
     public partial string StatusMessage { get; set; }
         = "Изображение не выбрано";
 
+    // 0 — исходная яркость без изменений.
+    [ObservableProperty]
+    public partial double BrightnessAdjustment { get; set; }= 0;
+
+    // 100 — исходная насыщенность изображения.
+    [ObservableProperty]
+    public partial double SaturationPercentage { get; set; } = 100;
+
+    // 0 — исходная контрастность без изменений.
+    [ObservableProperty]
+    public partial double ContrastAdjustment { get; set; }= 0;
+
     public void LoadImage(byte[] imageData, string fileName)//реактим на событие загрузки збр
     {
         var newImageInfo =
