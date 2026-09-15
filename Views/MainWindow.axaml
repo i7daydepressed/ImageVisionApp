@@ -222,7 +222,8 @@
                             FontSize="17"
                             FontWeight="Bold" />
                         <Button Content="Перевести в градации серого"
-                            HorizontalAlignment="Stretch" />
+                            HorizontalAlignment="Stretch"
+                            Click="ConvertToGrayscaleButton_OnClick"/>
                         <Button Content="Повернуть на 90°"
                             HorizontalAlignment="Stretch" />
 

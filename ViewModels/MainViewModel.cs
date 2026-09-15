@@ -8,6 +8,10 @@ namespace ImageVisionApp.ViewModels;
 
 public partial class MainViewModel : ViewModelBase{
     private readonly ImageStatsFileService imageStatsFileService = new();
+    private readonly ImageProcessingService imageProcessingService= new();
+
+    // исходник изоб
+    private byte[]? originalImageData;// для magick
 
     [ObservableProperty] //когда значение свойства изменилось, нужно уведомить интерфейс - тот подставит значение в внутренние созданные классы для отображения/работы визуализации
     public partial Bitmap? OriginalImage { get; set; }
@@ -22,20 +26,23 @@ public partial class MainViewModel : ViewModelBase{
     public partial string StatusMessage { get; set; }
         = "Изображение не выбрано";
 
-    // 0 — исходная яркость без изменений.
+    // 0 — исходная яркость без изменений
     [ObservableProperty]
     public partial double BrightnessAdjustment { get; set; }= 0;
 
-    // 100 — исходная насыщенность изображения.
+    // 100 — исходная насыщенность изображения
     [ObservableProperty]
     public partial double SaturationPercentage { get; set; } = 100;
 
-    // 0 — исходная контрастность без изменений.
+    // 0 — исходная контрастность без изменений
     [ObservableProperty]
     public partial double ContrastAdjustment { get; set; }= 0;
 
-    public void LoadImage(byte[] imageData, string fileName)//реактим на событие загрузки збр
-    {
+    public void LoadImage(byte[] imageData, string fileName){//реактим на событие загрузки збр
+
+        // сохр исхд байты
+        originalImageData = imageData;
+        
         var newImageInfo =
                 imageStatsFileService.readImageInfo(imageData, fileName);
 
@@ -52,6 +59,28 @@ public partial class MainViewModel : ViewModelBase{
         ModifiedImage = newModifiedImage;
         CurrentImageInfo = newImageInfo;
         StatusMessage = fileName;
+    }
+
+    public void ConvertImageToGrayscale(){
+        if (originalImageData is null){
+            StatusMessage = "Сначала выберите изображение";
+            return;
+        }
+
+        // originalImageData - данные до изменения ползунков - любое изменение ползунков будет браться относительно ориг даты
+
+        // наше серое изобрж
+        byte[] grayscaleImageData = imageProcessingService.ConvertToGrayscale(originalImageData);
+
+        // avalonia Bitmap принимает поток поэтому оборачиваем полученные байты в memstream
+        using MemoryStream grayscaleImageStream = new MemoryStream(grayscaleImageData);
+
+        Bitmap newModifiedImage = new Bitmap(grayscaleImageStream);
+
+        ModifiedImage?.Dispose();
+
+        // подставляем новое в вкладку
+        ModifiedImage = newModifiedImage;
     }
 
     public void ShowError(string message)

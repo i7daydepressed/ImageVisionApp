@@ -62,4 +62,21 @@ public partial class MainWindow : Window
     }
     // </IFilePickerService, реализацию FilePickerService>
     
+    private void ConvertToGrayscaleButton_OnClick(
+        object? sender,
+        RoutedEventArgs e
+        ){
+        if (DataContext is not MainViewModel viewModel){
+            return;
+        }
+
+        try{
+            viewModel.ConvertImageToGrayscale();
+        }
+        catch (Exception exception){
+            viewModel.ShowError(
+                $"Не удалось перевести изображение в градации серого: " +
+                exception.Message);
+        }
+    }
 }
