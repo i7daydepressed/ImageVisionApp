@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.IO;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -14,6 +15,13 @@ public partial class MainViewModel : ViewModelBase{
     private byte[]? originalImageData;// для magick
     private bool suppressTransformationUpdates;//флаг запрещающий автообновляться редактируемой картинки сразу после изменения одного какогото ползунка
 
+    public ImageTransformationSettings Settings { get; } =
+        new ImageTransformationSettings();//настройки изменения изображения
+
+    public MainViewModel() {
+        Settings.PropertyChanged += Settings_PropertyChanged;
+    }
+
     [ObservableProperty] //когда значение свойства изменилось, нужно уведомить интерфейс - тот подставит значение в внутренние созданные классы для отображения/работы визуализации
     public partial Bitmap? OriginalImage { get; set; }
 
@@ -27,36 +35,11 @@ public partial class MainViewModel : ViewModelBase{
     public partial string StatusMessage { get; set; }
         = "Изображение не выбрано";
 
-    // 0 — исходная яркость без изменений
-    // авалония автоприсваивает сюда значение по изменению ползунка
-    [ObservableProperty]
-    public partial double BrightnessAdjustment { get; set; }= 0;
-
-    // 100 — исходная насыщенность
-    [ObservableProperty]
-    public partial double SaturationPercentage { get; set; } = 100;
-
-    // 0 — исходная контрастность без изменений
-    [ObservableProperty]
-    public partial double ContrastAdjustment { get; set; }= 0;
-
-    // false — изображение цветное
-    // true — применяются градации серого
-    [ObservableProperty]
-    public partial bool IsGrayscaleEnabled { get; set; } = false;
-
-
-
     public void LoadImage(byte[] imageData, string fileName){//реактим на событие загрузки збр
 
         // сохр исхд байты
         originalImageData = imageData;
-        // Новый файл открывается без преобразований предыдущего.
-        IsGrayscaleEnabled = false;// хз по идее надо джсончике параметры сохранять
-        IsGrayscaleEnabled = false;
-        BrightnessAdjustment = 0;
-        SaturationPercentage = 100;
-        ContrastAdjustment = 0;
+        ResetTransformationSettings();
         
         var newImageInfo =
                 imageStatsFileService.readImageInfo(imageData, fileName);
@@ -80,17 +63,11 @@ public partial class MainViewModel : ViewModelBase{
         if (originalImageData is null){
             return;
         }
-        ImageTransformationSettings settings =
-            new ImageTransformationSettings {
-                IsGrayscaleEnabled = IsGrayscaleEnabled,
-                BrightnessAdjustment = BrightnessAdjustment
-            };
-
         // собираем результат заново с учетом всех настроек
         byte[] processedImageData =
             imageProcessingService.ApplyTransformations(//применяем фильтры
                 originalImageData,
-                settings);//фильтры
+                Settings);//фильтры
 
         using MemoryStream processedImageStream =
             new MemoryStream(processedImageData);
@@ -110,38 +87,35 @@ public partial class MainViewModel : ViewModelBase{
             return;
         }
         // серое енаблед
-        IsGrayscaleEnabled = !IsGrayscaleEnabled;
+        Settings.IsGrayscaleEnabled =
+            !Settings.IsGrayscaleEnabled;
+    }
+    
+    private void Settings_PropertyChanged(// если ползунок изменился вызывается этот метод
+        object? sender,
+        PropertyChangedEventArgs e) {
+
+        if (suppressTransformationUpdates) {
+            return;
+        }
+
+        if (originalImageData is null) {
+            return;
+        }
+
         // пересобираем
         UpdateModifiedImage();
     }
-    
-    // автоматически вызывается после перемещения ползунка 
-    // в хамле Value="{Binding BrightnessAdjustment, Mode=TwoWay}"
-    // реализуем предусмотренную генератором точку расширения 
-    // условно это компилится в это
-    // public double BrightnessAdjustment {
-    //     get {
-    //         return brightnessAdjustment;
-    //     }
 
-    //     set {
-    //         if (brightnessAdjustment == value) {
-    //             return;
-    //         }
+    private void ResetTransformationSettings() {
+        suppressTransformationUpdates = true;
 
-    //         brightnessAdjustment = value;
-
-    //         OnPropertyChanged(
-    //             nameof(BrightnessAdjustment));
-
-    //         OnBrightnessAdjustmentChanged(value);
-    //     }
-    // }
-    partial void OnBrightnessAdjustmentChanged(// если ползунок изменился вызывается этот метод
-        double value
-        ) {
-
-        UpdateModifiedImage();
+        try {
+            Settings.Reset();
+        }
+        finally {
+            suppressTransformationUpdates = false;
+        }
     }
 
     public void ShowError(string message)

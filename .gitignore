@@ -60,3 +60,5 @@ artifacts/
 *.pkg
 *.msi
 *.exe
+
+docs/

@@ -235,13 +235,13 @@
                         <StackPanel Orientation="Horizontal"
                             Spacing="4">
                             <TextBlock Text="Текущее значение:" />
-                            <TextBlock Text="{Binding BrightnessAdjustment}" />
+                            <TextBlock Text="{Binding Settings.BrightnessAdjustment}" />
                         </StackPanel>
                         <Slider Minimum="-100"
                             Maximum="100"
                             TickFrequency="1"
                             IsSnapToTickEnabled="True"
-                            Value="{Binding BrightnessAdjustment, Mode=TwoWay}" />
+                            Value="{Binding Settings.BrightnessAdjustment, Mode=TwoWay}" />
 
                         <!-- 100 процентов означает исходную насыщенность;
                             0 превращает цвета в серые, больше 100 усиливает цвета -->
@@ -251,14 +251,14 @@
                         <StackPanel Orientation="Horizontal"
                             Spacing="4">
                             <TextBlock Text="Текущее значение:" />
-                            <TextBlock Text="{Binding SaturationPercentage}" />
+                            <TextBlock Text="{Binding Settings.SaturationPercentage}" />
                             <TextBlock Text="%" />
                         </StackPanel>
                         <Slider Minimum="0"
                             Maximum="200"
                             TickFrequency="1"
                             IsSnapToTickEnabled="True"
-                            Value="{Binding SaturationPercentage, Mode=TwoWay}" />
+                            Value="{Binding Settings.SaturationPercentage, Mode=TwoWay}" />
 
                         <!-- 0 означает, что контрастность пока не изменена -->
                         <TextBlock Text="Контрастность"
@@ -267,13 +267,13 @@
                         <StackPanel Orientation="Horizontal"
                             Spacing="4">
                             <TextBlock Text="Текущее значение:" />
-                            <TextBlock Text="{Binding ContrastAdjustment}" />
+                            <TextBlock Text="{Binding Settings.ContrastAdjustment}" />
                         </StackPanel>
                         <Slider Minimum="-100"
                             Maximum="100"
                             TickFrequency="1"
                             IsSnapToTickEnabled="True"
-                            Value="{Binding ContrastAdjustment, Mode=TwoWay}" />
+                            Value="{Binding Settings.ContrastAdjustment, Mode=TwoWay}" />
 
                         <Separator Margin="0,8" />
 
