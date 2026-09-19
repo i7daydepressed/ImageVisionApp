@@ -12,6 +12,7 @@ public partial class MainViewModel : ViewModelBase{
 
     // исходник изоб
     private byte[]? originalImageData;// для magick
+    private bool suppressTransformationUpdates;//флаг запрещающий автообновляться редактируемой картинки сразу после изменения одного какогото ползунка
 
     [ObservableProperty] //когда значение свойства изменилось, нужно уведомить интерфейс - тот подставит значение в внутренние созданные классы для отображения/работы визуализации
     public partial Bitmap? OriginalImage { get; set; }
@@ -27,6 +28,7 @@ public partial class MainViewModel : ViewModelBase{
         = "Изображение не выбрано";
 
     // 0 — исходная яркость без изменений
+    // авалония автоприсваивает сюда значение по изменению ползунка
     [ObservableProperty]
     public partial double BrightnessAdjustment { get; set; }= 0;
 
@@ -51,6 +53,10 @@ public partial class MainViewModel : ViewModelBase{
         originalImageData = imageData;
         // Новый файл открывается без преобразований предыдущего.
         IsGrayscaleEnabled = false;// хз по идее надо джсончике параметры сохранять
+        IsGrayscaleEnabled = false;
+        BrightnessAdjustment = 0;
+        SaturationPercentage = 100;
+        ContrastAdjustment = 0;
         
         var newImageInfo =
                 imageStatsFileService.readImageInfo(imageData, fileName);
@@ -70,16 +76,21 @@ public partial class MainViewModel : ViewModelBase{
         StatusMessage = fileName;
     }
 
-    private void updateModifiedImage() {
+    private void UpdateModifiedImage() {
         if (originalImageData is null){
             return;
         }
+        ImageTransformationSettings settings =
+            new ImageTransformationSettings {
+                IsGrayscaleEnabled = IsGrayscaleEnabled,
+                BrightnessAdjustment = BrightnessAdjustment
+            };
 
         // собираем результат заново с учетом всех настроек
         byte[] processedImageData =
             imageProcessingService.ApplyTransformations(//применяем фильтры
                 originalImageData,
-                IsGrayscaleEnabled);
+                settings);//фильтры
 
         using MemoryStream processedImageStream =
             new MemoryStream(processedImageData);
@@ -98,13 +109,40 @@ public partial class MainViewModel : ViewModelBase{
             StatusMessage = "Сначала выберите изображение";
             return;
         }
-
         // серое енаблед
         IsGrayscaleEnabled = !IsGrayscaleEnabled;
         // пересобираем
-        updateModifiedImage();
+        UpdateModifiedImage();
     }
+    
+    // автоматически вызывается после перемещения ползунка 
+    // в хамле Value="{Binding BrightnessAdjustment, Mode=TwoWay}"
+    // реализуем предусмотренную генератором точку расширения 
+    // условно это компилится в это
+    // public double BrightnessAdjustment {
+    //     get {
+    //         return brightnessAdjustment;
+    //     }
 
+    //     set {
+    //         if (brightnessAdjustment == value) {
+    //             return;
+    //         }
+
+    //         brightnessAdjustment = value;
+
+    //         OnPropertyChanged(
+    //             nameof(BrightnessAdjustment));
+
+    //         OnBrightnessAdjustmentChanged(value);
+    //     }
+    // }
+    partial void OnBrightnessAdjustmentChanged(// если ползунок изменился вызывается этот метод
+        double value
+        ) {
+
+        UpdateModifiedImage();
+    }
 
     public void ShowError(string message)
     {
