@@ -136,6 +136,15 @@ public partial class MainViewModel : ViewModelBase{
         UpdateModifiedImage();
     }
 
+    public void RotateClockwise() {//повернуть вправо на 90
+        if (originalImageData is null) {
+            StatusMessage = "Сначала выберите изображение";
+            return;
+        }
+
+        Settings.RotationDegrees =
+            (Settings.RotationDegrees + 90) % 360;
+    }
 
     private void Settings_PropertyChanged(// если ползунок изменился вызывается этот метод
         object? sender,

@@ -224,8 +224,6 @@
                         <Button Content="Перевести в градации серого"
                             HorizontalAlignment="Stretch"
                             Click="ConvertToGrayscaleButton_OnClick"/>
-                        <Button Content="Повернуть на 90°"
-                            HorizontalAlignment="Stretch" />
 
                         <Separator Margin="0,8" />
 
@@ -283,6 +281,9 @@
                         <Button Content="Сбросить контрастность"
                             HorizontalAlignment="Right"
                             Click="ResetContrastButton_OnClick" />
+                        <Button Content="Повернуть на 90°"
+                            HorizontalAlignment="Stretch"
+                            Click="RotateClockwiseButton_OnClick" />
 
                         <Separator Margin="0,8" />
 

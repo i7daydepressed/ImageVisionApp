@@ -24,10 +24,16 @@ public sealed partial class ImageTransformationSettings
     [ObservableProperty]
     public partial double ContrastAdjustment { get; set; } = 0;
 
+    // 0 — изображение не повёрнуто
+    // следующие значения: 90, 180, 270
+    [ObservableProperty]
+    public partial int RotationDegrees { get; set; } = 0;
+
     public void Reset() {
-        IsGrayscaleEnabled = false;// хз по идее надо джсончике параметры сохранять
+        IsGrayscaleEnabled = false;//еее
         BrightnessAdjustment = 0;
         SaturationPercentage = 100;
         ContrastAdjustment = 0;
+        RotationDegrees = 0;
     }
 }

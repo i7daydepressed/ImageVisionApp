@@ -31,9 +31,14 @@ public class ImageProcessingService{
                 settings.ContrastAdjustment);
         }
 
-
         if (settings.IsGrayscaleEnabled) {//серое
             ConvertToGrayscale(processedImage);
+        }
+
+        if (settings.RotationDegrees != 0) {//поворот
+            RotateImage(
+                processedImage,
+                settings.RotationDegrees);
         }
         //тут
         //тут и там
@@ -98,6 +103,23 @@ public class ImageProcessingService{
         processedImage.BrightnessContrast(
             new Percentage(0),
             new Percentage(contrastAdjustment));
+    }
+
+    private static void RotateImage(//поворот изображения
+        MagickImage processedImage,
+        int rotationDegrees
+        ){
+
+        if (rotationDegrees < 0 ||
+            rotationDegrees >= 360 ||
+            rotationDegrees % 90 != 0) {
+
+            throw new ArgumentOutOfRangeException(
+                nameof(rotationDegrees),
+                "угол поворота должен быть равен 0, 90, 180 или 270");
+        }
+
+        processedImage.Rotate(rotationDegrees);
     }
 
     [Obsolete]

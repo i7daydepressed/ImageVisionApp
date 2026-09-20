@@ -137,6 +137,25 @@ public partial class MainWindow : Window
         }
     }
 
+    private void RotateClockwiseButton_OnClick(
+        object? sender,
+        RoutedEventArgs e
+        ) {
+
+        if (DataContext is not MainViewModel viewModel) {
+            return;
+        }
+
+        try {
+            viewModel.RotateClockwise();
+        }
+        catch (Exception exception) {
+            viewModel.ShowError(
+                $"Не удалось повернуть изображение: " +
+                exception.Message);
+        }
+    }
+
     private void ResetAllTransformationsButton_OnClick(
         object? sender,
         RoutedEventArgs e
