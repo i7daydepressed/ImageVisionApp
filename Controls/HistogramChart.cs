@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
@@ -20,6 +21,20 @@ public sealed class HistogramChart : Control {
         new Pen(new SolidColorBrush(Color.FromRgb(70, 220, 70)), 1.5);
     private static readonly IPen BluePen =
         new Pen(new SolidColorBrush(Color.FromRgb(70, 130, 255)), 1.5);
+    private static readonly IBrush AxisTextBrush =
+        new SolidColorBrush(Color.FromRgb(215, 215, 215));
+    private static readonly Typeface AxisTypeface =
+        new Typeface(
+            FontFamily.Default,
+            FontStyle.Normal,
+            FontWeight.Normal,
+            FontStretch.Normal);
+
+    private const double AxisFontSize = 12;
+    private const double AxisLabelSpacing = 6;
+    private const double PlotTopPadding = 8;
+    private const double PlotRightPadding = 6;
+    private const double PlotBottomPadding = 24;
 
     private ImageHistogramData? histogramData;
     private long verticalMaximum = 1;
@@ -59,25 +74,50 @@ public sealed class HistogramChart : Control {
 
         Rect chartBounds = new Rect(Bounds.Size);
 
-        context.DrawRectangle(
-            BackgroundBrush,
-            BorderPen,
-            chartBounds);
+        context.DrawRectangle(BackgroundBrush, BorderPen, chartBounds);
 
         if (chartBounds.Width <= 2 ||
             chartBounds.Height <= 2) {
             return;
         }
 
-        Rect plotBounds = new Rect(
-            chartBounds.X + 1,
-            chartBounds.Y + 1,
-            chartBounds.Width - 2,
-            chartBounds.Height - 2);
+        IReadOnlyList<long> yAxisTicks =
+            CreateLogarithmicYAxisTicks();
+        List<FormattedText> yAxisLabels = [];
+        double maximumYAxisLabelWidth = 0;
 
-        DrawHorizontalGrid(context, plotBounds);
+        foreach (long yAxisTick in yAxisTicks) {
+            FormattedText yAxisLabel = CreateAxisLabel(yAxisTick);
+
+            yAxisLabels.Add(yAxisLabel);
+            maximumYAxisLabelWidth = Math.Max(
+                maximumYAxisLabelWidth,
+                yAxisLabel.Width);
+        }
+
+        Rect plotBounds = new Rect(
+            chartBounds.X + maximumYAxisLabelWidth +
+                AxisLabelSpacing * 2,
+            chartBounds.Y + PlotTopPadding,
+            chartBounds.Width - maximumYAxisLabelWidth -
+                AxisLabelSpacing * 3 - PlotRightPadding,
+            chartBounds.Height - PlotTopPadding -
+                PlotBottomPadding);
+
+        if (plotBounds.Width <= 1 ||
+            plotBounds.Height <= 1) {
+            return;
+        }
+
+        DrawHorizontalGridAndYAxis(
+            context,
+            plotBounds,
+            yAxisTicks,
+            yAxisLabels);
+        DrawXAxis(context, plotBounds);
 
         if (HistogramData is null) {
+            context.DrawRectangle(null, BorderPen, plotBounds);
             return;
         }
 
@@ -96,21 +136,70 @@ public sealed class HistogramChart : Control {
             HistogramData.BlueValues,
             BluePen,
             plotBounds);
+
+        context.DrawRectangle(null, BorderPen, plotBounds);
     }
 
-    private static void DrawHorizontalGrid(
+    private void DrawHorizontalGridAndYAxis(
         DrawingContext context,
-        Rect plotBounds
+        Rect plotBounds,
+        IReadOnlyList<long> yAxisTicks,
+        IReadOnlyList<FormattedText> yAxisLabels
         ) {
 
-        for (int lineIndex = 1; lineIndex < 4; lineIndex++) {
-            double y = plotBounds.Top +
-                plotBounds.Height * lineIndex / 4.0;
+        for (int tickIndex = 0;
+            tickIndex < yAxisTicks.Count;
+            tickIndex++) {
+
+            double normalizedValue = NormalizeCount(
+                yAxisTicks[tickIndex]);
+            double y = plotBounds.Bottom -
+                normalizedValue * plotBounds.Height;
+            FormattedText yAxisLabel = yAxisLabels[tickIndex];
+            double labelY = Math.Clamp(
+                y - yAxisLabel.Height / 2.0,
+                0,
+                Bounds.Height - yAxisLabel.Height);
+            bool isExactNonPowerMaximum =
+                yAxisTicks[tickIndex] == VerticalMaximum &&
+                !IsPowerOfTen(VerticalMaximum);
+            double labelX = isExactNonPowerMaximum
+                ? plotBounds.Right - yAxisLabel.Width
+                : plotBounds.Left - AxisLabelSpacing -
+                    yAxisLabel.Width;
 
             context.DrawLine(
                 GridPen,
                 new Point(plotBounds.Left, y),
                 new Point(plotBounds.Right, y));
+            context.DrawText(
+                yAxisLabel,
+                new Point(labelX, labelY));
+        }
+    }
+
+    private static void DrawXAxis(
+        DrawingContext context,
+        Rect plotBounds
+        ) {
+
+        int[] intensityTicks = [0, 64, 128, 192, 255];
+
+        foreach (int intensityTick in intensityTicks) {
+            FormattedText xAxisLabel = CreateAxisLabel(
+                intensityTick);
+            double x = plotBounds.Left +
+                intensityTick / 255.0 * plotBounds.Width;
+            double labelX = Math.Clamp(
+                x - xAxisLabel.Width / 2.0,
+                plotBounds.Left,
+                plotBounds.Right - xAxisLabel.Width);
+
+            context.DrawText(
+                xAxisLabel,
+                new Point(
+                    labelX,
+                    plotBounds.Bottom + 4));
         }
     }
 
@@ -152,12 +241,62 @@ public sealed class HistogramChart : Control {
         ) {
 
         double x = plotBounds.Left + intensity * xStep;
-        double normalizedValue =
-            Math.Min(value, VerticalMaximum) /
-            (double)VerticalMaximum;
+        double normalizedValue = NormalizeCount(value);
         double y = plotBounds.Bottom -
             normalizedValue * plotBounds.Height;
 
         return new Point(x, y);
+    }
+
+    private double NormalizeCount(long count) {
+        return Math.Log10(count + 1.0) /
+            Math.Log10(VerticalMaximum + 1.0);
+    }
+
+    private IReadOnlyList<long> CreateLogarithmicYAxisTicks() {
+        List<long> ticks = [0];
+        long powerOfTen = 1;
+
+        while (powerOfTen <= VerticalMaximum) {
+            ticks.Add(powerOfTen);
+
+            if (powerOfTen > long.MaxValue / 10) {
+                break;
+            }
+
+            powerOfTen *= 10;
+        }
+
+        if (ticks[^1] != VerticalMaximum) {
+            ticks.Add(VerticalMaximum);
+        }
+
+        return ticks;
+    }
+
+    private static FormattedText CreateAxisLabel(long value) {
+        string formattedValue = value.ToString(
+            "N0",
+            CultureInfo.CurrentCulture);
+
+        return new FormattedText(
+            formattedValue,
+            CultureInfo.CurrentCulture,
+            FlowDirection.LeftToRight,
+            AxisTypeface,
+            AxisFontSize,
+            AxisTextBrush);
+    }
+
+    private static bool IsPowerOfTen(long value) {
+        if (value < 1) {
+            return false;
+        }
+
+        while (value % 10 == 0) {
+            value /= 10;
+        }
+
+        return value == 1;
     }
 }

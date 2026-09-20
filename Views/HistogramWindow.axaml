@@ -71,15 +71,9 @@
                     <controls:HistogramChart x:Name="OriginalHistogramChart"
                         Grid.Row="1"
                         MinHeight="320" />
-                    <Grid Grid.Row="2"
-                        ColumnDefinitions="Auto,*,Auto">
-                        <TextBlock Text="0" />
-                        <TextBlock Grid.Column="1"
-                            Text="Интенсивность"
-                            HorizontalAlignment="Center" />
-                        <TextBlock Grid.Column="2"
-                            Text="255" />
-                    </Grid>
+                    <TextBlock Grid.Row="2"
+                        Text="Интенсивность"
+                        HorizontalAlignment="Center" />
                 </Grid>
             </Border>
 
@@ -97,15 +91,9 @@
                     <controls:HistogramChart x:Name="ProcessedHistogramChart"
                         Grid.Row="1"
                         MinHeight="320" />
-                    <Grid Grid.Row="2"
-                        ColumnDefinitions="Auto,*,Auto">
-                        <TextBlock Text="0" />
-                        <TextBlock Grid.Column="1"
-                            Text="Интенсивность"
-                            HorizontalAlignment="Center" />
-                        <TextBlock Grid.Column="2"
-                            Text="255" />
-                    </Grid>
+                    <TextBlock Grid.Row="2"
+                        Text="Интенсивность"
+                        HorizontalAlignment="Center" />
                 </Grid>
             </Border>
         </Grid>

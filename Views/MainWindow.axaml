@@ -233,7 +233,18 @@
                         <StackPanel Orientation="Horizontal"
                             Spacing="4">
                             <TextBlock Text="Текущее значение:" />
-                            <TextBlock Text="{Binding Settings.BrightnessAdjustment}" />
+                            <NumericUpDown Width="52"
+                                Height="24"
+                                Padding="2,0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                ShowButtonSpinner="False"
+                                Minimum="-100"
+                                Maximum="100"
+                                Increment="1"
+                                FormatString="0"
+                                ClipValueToMinMax="True"
+                                Value="{Binding Settings.BrightnessAdjustment, Mode=TwoWay}" />
                         </StackPanel>
                         <Slider Minimum="-100"
                             Maximum="100"
@@ -252,7 +263,18 @@
                         <StackPanel Orientation="Horizontal"
                             Spacing="4">
                             <TextBlock Text="Текущее значение:" />
-                            <TextBlock Text="{Binding Settings.SaturationPercentage}" />
+                            <NumericUpDown Width="52"
+                                Height="24"
+                                Padding="2,0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                ShowButtonSpinner="False"
+                                Minimum="0"
+                                Maximum="200"
+                                Increment="1"
+                                FormatString="0"
+                                ClipValueToMinMax="True"
+                                Value="{Binding Settings.SaturationPercentage, Mode=TwoWay}" />
                             <TextBlock Text="%" />
                         </StackPanel>
                         <Slider Minimum="0"
@@ -271,7 +293,18 @@
                         <StackPanel Orientation="Horizontal"
                             Spacing="4">
                             <TextBlock Text="Текущее значение:" />
-                            <TextBlock Text="{Binding Settings.ContrastAdjustment}" />
+                            <NumericUpDown Width="52"
+                                Height="24"
+                                Padding="2,0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                ShowButtonSpinner="False"
+                                Minimum="-100"
+                                Maximum="100"
+                                Increment="1"
+                                FormatString="0"
+                                ClipValueToMinMax="True"
+                                Value="{Binding Settings.ContrastAdjustment, Mode=TwoWay}" />
                         </StackPanel>
                         <Slider Minimum="-100"
                             Maximum="100"

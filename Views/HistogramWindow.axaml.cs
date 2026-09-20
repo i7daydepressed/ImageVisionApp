@@ -45,7 +45,8 @@ public partial class HistogramWindow : Window {
         processedChart.VerticalMaximum = sharedMaximum;
 
         sharedScaleText.Text =
-            $"Общая вертикальная шкала: 0–{sharedMaximum:N0} пикселей";
+            "Ось Y: логарифмическая, количество пикселей; " +
+            $"общий максимум: {sharedMaximum:N0}";
     }
 
     private static long FindMaximum(
