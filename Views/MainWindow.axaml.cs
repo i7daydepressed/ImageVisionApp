@@ -118,6 +118,25 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ResetContrastButton_OnClick(
+        object? sender,
+        RoutedEventArgs e
+        ) {
+
+        if (DataContext is not MainViewModel viewModel) {
+            return;
+        }
+
+        try {
+            viewModel.ResetContrast();
+        }
+        catch (Exception exception) {
+            viewModel.ShowError(
+                $"Не удалось сбросить контрастность: " +
+                exception.Message);
+        }
+    }
+
     private void ResetAllTransformationsButton_OnClick(
         object? sender,
         RoutedEventArgs e

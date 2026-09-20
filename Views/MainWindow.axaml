@@ -280,6 +280,9 @@
                             TickFrequency="1"
                             IsSnapToTickEnabled="True"
                             Value="{Binding Settings.ContrastAdjustment, Mode=TwoWay}" />
+                        <Button Content="Сбросить контрастность"
+                            HorizontalAlignment="Right"
+                            Click="ResetContrastButton_OnClick" />
 
                         <Separator Margin="0,8" />
 

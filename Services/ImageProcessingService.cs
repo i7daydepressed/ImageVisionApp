@@ -20,13 +20,19 @@ public class ImageProcessingService{
                 settings.BrightnessAdjustment);
         }
 
-        if (settings.SaturationPercentage != 100) {
+        if (settings.SaturationPercentage != 100) {//насыщенность
             ChangeSaturation(
                 processedImage,
                 settings.SaturationPercentage);
         }
+        if (settings.ContrastAdjustment != 0) {//контраст
+            ChangeContrast(
+                processedImage,
+                settings.ContrastAdjustment);
+        }
 
-        if (settings.IsGrayscaleEnabled) {
+
+        if (settings.IsGrayscaleEnabled) {//серое
             ConvertToGrayscale(processedImage);
         }
         //тут
@@ -74,6 +80,24 @@ public class ImageProcessingService{
         processedImage.Modulate(
             new Percentage(100),
             new Percentage(saturationPercentage));
+    }
+
+    private static void ChangeContrast(//контрастность
+        MagickImage processedImage,
+        double contrastAdjustment
+        ) {
+
+        if (contrastAdjustment < -100 ||
+            contrastAdjustment > 100) {
+
+            throw new ArgumentOutOfRangeException(
+                nameof(contrastAdjustment),
+                "контрастность должна быть от -100 до 100");
+        }
+
+        processedImage.BrightnessContrast(
+            new Percentage(0),
+            new Percentage(contrastAdjustment));
     }
 
     [Obsolete]

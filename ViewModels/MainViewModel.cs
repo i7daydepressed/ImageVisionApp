@@ -98,17 +98,27 @@ public partial class MainViewModel : ViewModelBase{
         }
 
         // изменение свойства автоматически вызовет
-        // Settings_PropertyChanged и пересоберёт изображение
+        // Settings_PropertyChanged и пересоберет изображение
         Settings.BrightnessAdjustment = 0;
     }
 
-    public void ResetSaturation() {
+    public void ResetSaturation() {// сброс насыщенности
         if (originalImageData is null) {
             StatusMessage = "Сначала выберите изображение";
             return;
         }
 
         Settings.SaturationPercentage = 100;
+    }
+
+    public void ResetContrast() {//сброс контраста
+
+        if (originalImageData is null) {
+            StatusMessage = "Сначала выберите изображение";
+            return;
+        }
+
+        Settings.ContrastAdjustment = 0;
     }
 
     public void ResetAllTransformations() {//сбросить изменения
