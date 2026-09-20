@@ -242,6 +242,9 @@
                             TickFrequency="1"
                             IsSnapToTickEnabled="True"
                             Value="{Binding Settings.BrightnessAdjustment, Mode=TwoWay}" />
+                        <Button Content="Сбросить яркость"
+                            HorizontalAlignment="Right"
+                            Click="ResetBrightnessButton_OnClick" />
 
                         <!-- 100 процентов означает исходную насыщенность;
                             0 превращает цвета в серые, больше 100 усиливает цвета -->
@@ -303,7 +306,8 @@
                             FontSize="17"
                             FontWeight="Bold" />
                         <Button Content="Сбросить изменения"
-                            HorizontalAlignment="Stretch" />
+                            HorizontalAlignment="Stretch"
+                            Click="ResetAllTransformationsButton_OnClick" />
                         <Button Content="Сохранить результат"
                             HorizontalAlignment="Stretch" />
                     </StackPanel>

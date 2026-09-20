@@ -90,7 +90,34 @@ public partial class MainViewModel : ViewModelBase{
         Settings.IsGrayscaleEnabled =
             !Settings.IsGrayscaleEnabled;
     }
-    
+
+    public void ResetBrightness() {// сбросить яркость
+        if (originalImageData is null) {
+            StatusMessage = "Сначала выберите изображение";
+            return;
+        }
+
+        // изменение свойства автоматически вызовет
+        // Settings_PropertyChanged и пересоберёт изображение
+        Settings.BrightnessAdjustment = 0;
+    }
+
+    public void ResetAllTransformations() {//сбросить изменения
+        if (originalImageData is null) {
+            StatusMessage = "Сначала выберите изображение";
+            return;
+        }
+
+        // во время группового сброса автоматические
+        // обновления временно отключаются
+        ResetTransformationSettings();
+
+        // псле изменения всех настроек
+        // пересобираем изображение
+        UpdateModifiedImage();
+    }
+
+
     private void Settings_PropertyChanged(// если ползунок изменился вызывается этот метод
         object? sender,
         PropertyChangedEventArgs e) {

@@ -79,4 +79,42 @@ public partial class MainWindow : Window
                 exception.Message);
         }
     }
+
+    private void ResetBrightnessButton_OnClick(
+        object? sender,
+        RoutedEventArgs e
+        ) {
+
+        if (DataContext is not MainViewModel viewModel) {
+            return;
+        }
+
+        try {
+            viewModel.ResetBrightness();
+        }
+        catch (Exception exception) {
+            viewModel.ShowError(
+                $"Не удалось сбросить яркость: " +
+                exception.Message);
+        }
+    }
+
+    private void ResetAllTransformationsButton_OnClick(
+        object? sender,
+        RoutedEventArgs e
+        ) {
+
+        if (DataContext is not MainViewModel viewModel) {
+            return;
+        }
+
+        try {
+            viewModel.ResetAllTransformations();
+        }
+        catch (Exception exception) {
+            viewModel.ShowError(
+                $"Не удалось сбросить изменения: " +
+                exception.Message);
+        }
+    }
 }
