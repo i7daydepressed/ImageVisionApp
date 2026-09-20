@@ -174,4 +174,60 @@ public partial class MainWindow : Window
                 exception.Message);
         }
     }
+
+    private async void SaveResultButton_OnClick(
+        object? sender,
+        RoutedEventArgs e
+        ) {
+
+        if (DataContext is not MainViewModel viewModel) {
+            return;
+        }
+
+        try {
+            byte[]? processedImageData =
+                viewModel.CreateProcessedImageData();
+
+            if (processedImageData is null) {
+                return;
+            }
+
+            string originalFileName =
+                viewModel.CurrentImageInfo?.FileName ?? "image";
+            string suggestedFileName =
+                $"{Path.GetFileNameWithoutExtension(originalFileName)}_result.png";
+            FilePickerFileType pngFileType =
+                new FilePickerFileType("PNG") {
+                    Patterns = ["*.png"]
+                };
+            FilePickerSaveOptions saveOptions =
+                new FilePickerSaveOptions {
+                    Title = "Сохранить результат",
+                    SuggestedFileName = suggestedFileName,
+                    DefaultExtension = "png",
+                    FileTypeChoices = [pngFileType],
+                    SuggestedFileType = pngFileType
+                };
+
+            IStorageFile? outputFile =
+                await StorageProvider.SaveFilePickerAsync(saveOptions);
+
+            if (outputFile is null) {
+                return;
+            }
+
+            await using Stream outputStream =
+                await outputFile.OpenWriteAsync();
+
+            await outputStream.WriteAsync(processedImageData);
+
+            viewModel.StatusMessage =
+                $"Результат сохранён: {outputFile.Name}";
+        }
+        catch (Exception exception) {
+            viewModel.ShowError(
+                $"Не удалось сохранить результат: " +
+                exception.Message);
+        }
+    }
 }

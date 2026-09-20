@@ -60,14 +60,13 @@ public partial class MainViewModel : ViewModelBase{
     }
 
     private void UpdateModifiedImage() {
-        if (originalImageData is null){
+        // собираем результат заново с учетом всех настроек
+        byte[]? processedImageData =
+            CreateProcessedImageData();
+
+        if (processedImageData is null) {
             return;
         }
-        // собираем результат заново с учетом всех настроек
-        byte[] processedImageData =
-            imageProcessingService.ApplyTransformations(//применяем фильтры
-                originalImageData,
-                Settings);//фильтры
 
         using MemoryStream processedImageStream =
             new MemoryStream(processedImageData);
@@ -119,6 +118,18 @@ public partial class MainViewModel : ViewModelBase{
         }
 
         Settings.ContrastAdjustment = 0;
+    }
+
+    public byte[]? CreateProcessedImageData() {//создать итог байты изм избрж
+
+        if (originalImageData is null) {
+            StatusMessage = "Сначала выберите изображение";
+            return null;
+        }
+
+        return imageProcessingService.ApplyTransformations(
+            originalImageData,
+            Settings);
     }
 
     public void ResetAllTransformations() {//сбросить изменения

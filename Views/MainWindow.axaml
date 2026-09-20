@@ -316,7 +316,8 @@
                             HorizontalAlignment="Stretch"
                             Click="ResetAllTransformationsButton_OnClick" />
                         <Button Content="Сохранить результат"
-                            HorizontalAlignment="Stretch" />
+                            HorizontalAlignment="Stretch"
+                            Click="SaveResultButton_OnClick" />
                     </StackPanel>
                 </ScrollViewer>
             </Border>
