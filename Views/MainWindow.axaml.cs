@@ -99,6 +99,25 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ResetSaturationButton_OnClick(
+        object? sender,
+        RoutedEventArgs e
+        ) {
+
+        if (DataContext is not MainViewModel viewModel) {
+            return;
+        }
+
+        try {
+            viewModel.ResetSaturation();
+        }
+        catch (Exception exception) {
+            viewModel.ShowError(
+                $"Не удалось сбросить насыщенность: " +
+                exception.Message);
+        }
+    }
+
     private void ResetAllTransformationsButton_OnClick(
         object? sender,
         RoutedEventArgs e

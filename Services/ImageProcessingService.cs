@@ -20,6 +20,12 @@ public class ImageProcessingService{
                 settings.BrightnessAdjustment);
         }
 
+        if (settings.SaturationPercentage != 100) {
+            ChangeSaturation(
+                processedImage,
+                settings.SaturationPercentage);
+        }
+
         if (settings.IsGrayscaleEnabled) {
             ConvertToGrayscale(processedImage);
         }
@@ -52,7 +58,23 @@ public class ImageProcessingService{
             new Percentage(0));
     }
 
+    private static void ChangeSaturation(//насыщенность
+        MagickImage processedImage,
+        double saturationPercentage
+        ){
 
+        if (saturationPercentage < 0 ||
+            saturationPercentage > 200) {
+
+            throw new ArgumentOutOfRangeException(
+                nameof(saturationPercentage),
+                "насыщенность должна быть от 0 до 200");
+        }
+
+        processedImage.Modulate(
+            new Percentage(100),
+            new Percentage(saturationPercentage));
+    }
 
     [Obsolete]
     public byte[] ConvertToGrayscale(byte[] sourceImageData){

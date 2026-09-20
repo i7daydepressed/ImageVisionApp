@@ -102,6 +102,15 @@ public partial class MainViewModel : ViewModelBase{
         Settings.BrightnessAdjustment = 0;
     }
 
+    public void ResetSaturation() {
+        if (originalImageData is null) {
+            StatusMessage = "Сначала выберите изображение";
+            return;
+        }
+
+        Settings.SaturationPercentage = 100;
+    }
+
     public void ResetAllTransformations() {//сбросить изменения
         if (originalImageData is null) {
             StatusMessage = "Сначала выберите изображение";

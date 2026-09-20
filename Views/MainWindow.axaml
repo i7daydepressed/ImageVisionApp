@@ -262,6 +262,9 @@
                             TickFrequency="1"
                             IsSnapToTickEnabled="True"
                             Value="{Binding Settings.SaturationPercentage, Mode=TwoWay}" />
+                        <Button Content="Сбросить насыщенность"
+                            HorizontalAlignment="Right"
+                            Click="ResetSaturationButton_OnClick" />
 
                         <!-- 0 означает, что контрастность пока не изменена -->
                         <TextBlock Text="Контрастность"
