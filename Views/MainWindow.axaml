@@ -304,7 +304,8 @@
                             FontSize="17"
                             FontWeight="Bold" />
                         <Button Content="Открыть гистограммы"
-                            HorizontalAlignment="Stretch" />
+                            HorizontalAlignment="Stretch"
+                            Click="OpenHistogramsButton_OnClick" />
 
                         <Separator Margin="0,8" />
 

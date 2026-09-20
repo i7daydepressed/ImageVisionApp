@@ -10,6 +10,7 @@ namespace ImageVisionApp.ViewModels;
 public partial class MainViewModel : ViewModelBase{
     private readonly ImageStatsFileService imageStatsFileService = new();
     private readonly ImageProcessingService imageProcessingService= new();
+    private readonly ImageHistogramService imageHistogramService = new ImageHistogramService();
 
     // исходник изоб
     private byte[]? originalImageData;// для magick
@@ -130,6 +131,30 @@ public partial class MainViewModel : ViewModelBase{
         return imageProcessingService.ApplyTransformations(
             originalImageData,
             Settings);
+    }
+
+    public ImageHistogramComparison? CreateHistogramComparison() {
+        if (originalImageData is null) {
+            StatusMessage = "Сначала выберите изображение";
+            return null;
+        }
+
+        byte[]? processedImageData =
+            CreateProcessedImageData();
+
+        if (processedImageData is null) {
+            return null;
+        }
+
+        ImageHistogramData originalHistogram =
+            imageHistogramService.CalculateHistogram(originalImageData);
+
+        ImageHistogramData processedHistogram =
+            imageHistogramService.CalculateHistogram(processedImageData);
+
+        return new ImageHistogramComparison(
+            originalHistogram,
+            processedHistogram);
     }
 
     public void ResetAllTransformations() {//сбросить изменения

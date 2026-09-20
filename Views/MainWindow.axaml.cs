@@ -3,6 +3,7 @@ using System.IO;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using ImageVisionApp.Models;
 using ImageVisionApp.ViewModels;
 
 namespace ImageVisionApp.Views;
@@ -227,6 +228,35 @@ public partial class MainWindow : Window
         catch (Exception exception) {
             viewModel.ShowError(
                 $"Не удалось сохранить результат: " +
+                exception.Message);
+        }
+    }
+
+    private async void OpenHistogramsButton_OnClick(
+        object? sender,
+        RoutedEventArgs e
+        ) {
+
+        if (DataContext is not MainViewModel viewModel) {
+            return;
+        }
+
+        try {
+            ImageHistogramComparison? comparison =
+                viewModel.CreateHistogramComparison();
+
+            if (comparison is null) {
+                return;
+            }
+
+            HistogramWindow histogramWindow =
+                new HistogramWindow(comparison);
+
+            await histogramWindow.ShowDialog(this);
+        }
+        catch (Exception exception) {
+            viewModel.ShowError(
+                $"Не удалось открыть гистограммы: " +
                 exception.Message);
         }
     }

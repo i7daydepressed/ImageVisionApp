@@ -1,0 +1,113 @@
+<Window xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:ImageVisionApp.Controls"
+    x:Class="ImageVisionApp.Views.HistogramWindow"
+    Title="Гистограммы изображения"
+    Width="1100"
+    Height="650"
+    MinWidth="800"
+    MinHeight="500"
+    WindowStartupLocation="CenterOwner">
+    <Grid RowDefinitions="Auto,Auto,*"
+        RowSpacing="12"
+        Margin="16">
+        <TextBlock Text="Сравнение RGB-гистограмм"
+            FontSize="22"
+            FontWeight="SemiBold" />
+
+        <Grid Grid.Row="1"
+            ColumnDefinitions="Auto,*"
+            ColumnSpacing="24">
+            <StackPanel Orientation="Horizontal"
+                Spacing="14">
+                <StackPanel Orientation="Horizontal"
+                    Spacing="6">
+                    <Border Width="24"
+                        Height="3"
+                        Background="#FF4646"
+                        VerticalAlignment="Center" />
+                    <TextBlock Text="Красный"
+                        VerticalAlignment="Center" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal"
+                    Spacing="6">
+                    <Border Width="24"
+                        Height="3"
+                        Background="#46DC46"
+                        VerticalAlignment="Center" />
+                    <TextBlock Text="Зелёный"
+                        VerticalAlignment="Center" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal"
+                    Spacing="6">
+                    <Border Width="24"
+                        Height="3"
+                        Background="#4682FF"
+                        VerticalAlignment="Center" />
+                    <TextBlock Text="Синий"
+                        VerticalAlignment="Center" />
+                </StackPanel>
+            </StackPanel>
+            <TextBlock x:Name="SharedScaleText"
+                Grid.Column="1"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Center" />
+        </Grid>
+
+        <Grid Grid.Row="2"
+            ColumnDefinitions="*,*"
+            ColumnSpacing="12">
+            <Border Grid.Column="0"
+                Padding="12"
+                BorderBrush="Gray"
+                BorderThickness="1"
+                CornerRadius="6">
+                <Grid RowDefinitions="Auto,*,Auto"
+                    RowSpacing="8">
+                    <TextBlock Text="До обработки"
+                        FontSize="18"
+                        FontWeight="SemiBold"
+                        HorizontalAlignment="Center" />
+                    <controls:HistogramChart x:Name="OriginalHistogramChart"
+                        Grid.Row="1"
+                        MinHeight="320" />
+                    <Grid Grid.Row="2"
+                        ColumnDefinitions="Auto,*,Auto">
+                        <TextBlock Text="0" />
+                        <TextBlock Grid.Column="1"
+                            Text="Интенсивность"
+                            HorizontalAlignment="Center" />
+                        <TextBlock Grid.Column="2"
+                            Text="255" />
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="1"
+                Padding="12"
+                BorderBrush="Gray"
+                BorderThickness="1"
+                CornerRadius="6">
+                <Grid RowDefinitions="Auto,*,Auto"
+                    RowSpacing="8">
+                    <TextBlock Text="После обработки"
+                        FontSize="18"
+                        FontWeight="SemiBold"
+                        HorizontalAlignment="Center" />
+                    <controls:HistogramChart x:Name="ProcessedHistogramChart"
+                        Grid.Row="1"
+                        MinHeight="320" />
+                    <Grid Grid.Row="2"
+                        ColumnDefinitions="Auto,*,Auto">
+                        <TextBlock Text="0" />
+                        <TextBlock Grid.Column="1"
+                            Text="Интенсивность"
+                            HorizontalAlignment="Center" />
+                        <TextBlock Grid.Column="2"
+                            Text="255" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>
