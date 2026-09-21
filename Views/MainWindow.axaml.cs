@@ -100,6 +100,25 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ApplyNonlinearGrayscaleCorrectionButton_OnClick(
+        object? sender,
+        RoutedEventArgs e
+        ) {
+
+        if (DataContext is not MainViewModel viewModel) {
+            return;
+        }
+
+        try {
+            viewModel.ApplyNonlinearLogGrayscaleCorrection();
+        }
+        catch (Exception exception) {
+            viewModel.ShowError(
+                $"Не удалось применить нелинейную коррекцию: " +
+                exception.Message);
+        }
+    }
+
     private void ResetBrightnessButton_OnClick(
         object? sender,
         RoutedEventArgs e

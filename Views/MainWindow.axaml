@@ -313,7 +313,8 @@
                                     Click="ApplyLinearGrayscaleCorrectionButton_OnClick" />
                                 <CheckBox Content="Нелинейная коррекция"
                                     HorizontalAlignment="Left"
-                                    IsEnabled="False" />
+                                    IsChecked="{Binding IsNonlinearCorrectionEnabled, Mode=OneWay}"
+                                    Click="ApplyNonlinearGrayscaleCorrectionButton_OnClick" />
 
                                 <Separator Margin="0,8" />
 

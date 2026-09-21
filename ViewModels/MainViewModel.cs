@@ -19,9 +19,13 @@ public partial class MainViewModel : ViewModelBase{
     public ImageTransformationSettings Settings { get; } =
         new ImageTransformationSettings();//настройки изменения изображения
 
-    public bool IsLinearCorrectionEnabled =>//буд вид для галочки
+    public bool IsLinearCorrectionEnabled =>//буд вид для галочки // нелин корекц
         Settings.CorrectionMode ==
         GrayscaleCorrectionMode.Linear; //енеблет ли лин коррекция? CorrectionMode сейчас Linear?
+
+    public bool IsNonlinearCorrectionEnabled =>// лин лог корекц
+        Settings.CorrectionMode ==
+        GrayscaleCorrectionMode.Nonlinear;
 
     public MainViewModel() {
         Settings.PropertyChanged += Settings_PropertyChanged;
@@ -148,6 +152,37 @@ public partial class MainViewModel : ViewModelBase{
             : "Линейная коррекция отключена";
     }
 
+    public void ApplyNonlinearLogGrayscaleCorrection() {
+        if (originalImageData is null) {
+            StatusMessage = "Сначала выберите изображение";
+            return;
+        }
+
+        bool shouldEnableCorrection = !IsNonlinearCorrectionEnabled;
+
+        suppressTransformationUpdates = true;
+
+        try {
+            if (shouldEnableCorrection) {// тоже ток к серому
+                Settings.IsGrayscaleEnabled = true;
+                Settings.CorrectionMode =
+                    GrayscaleCorrectionMode.Nonlinear;
+            }
+            else {
+                Settings.CorrectionMode = GrayscaleCorrectionMode.None;
+            }
+        }
+        finally {
+            suppressTransformationUpdates = false;
+        }
+
+        UpdateModifiedImage();
+
+        StatusMessage = shouldEnableCorrection
+            ? "Применена нелинейная логарифмическая коррекция изображения"
+            : "Нелинейная коррекция отключена";
+    }
+
     public void ResetBrightness() {// сбросить яркость
         if (originalImageData is null) {
             StatusMessage = "Сначала выберите изображение";
@@ -241,10 +276,11 @@ public partial class MainViewModel : ViewModelBase{
 
     private void Settings_PropertyChanged(// если ползунок изменился вызывается этот метод
         object? sender,
-        PropertyChangedEventArgs e) {
+        PropertyChangedEventArgs e) {//вцелом измениения е типа проперте чангед евентс арг
 
         if (e.PropertyName == nameof(ImageTransformationSettings.CorrectionMode)) {
             OnPropertyChanged(nameof(IsLinearCorrectionEnabled));// единств точка обновления IsLinearCorrectionEnabled
+            OnPropertyChanged(nameof(IsNonlinearCorrectionEnabled));//такж
         }
 
         if (suppressTransformationUpdates) {

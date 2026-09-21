@@ -34,9 +34,15 @@ public class ImageProcessingService{
         if (settings.IsGrayscaleEnabled) {//серое
             ConvertToGrayscale(processedImage);
 
-            // линейная чб коррекция
-            if (settings.CorrectionMode == GrayscaleCorrectionMode.Linear) {
-                ApplyLinearCorrection(processedImage);
+            // линейная и нелинчб коррекция
+            switch (settings.CorrectionMode) {
+                case GrayscaleCorrectionMode.Linear:
+                    ApplyLinearCorrection(processedImage);
+                    break;
+
+                case GrayscaleCorrectionMode.Nonlinear:
+                    ApplyLogarithmicCorrection(processedImage);
+                    break;
             }
         }
 
@@ -115,6 +121,16 @@ public class ImageProcessingService{
         ){
 
         processedImage.AutoLevel();
+    }
+
+    private static void ApplyLogarithmicCorrection(// нелин логариф чб коррекц
+        MagickImage processedImage
+        ) {
+        const double logarithmicScale = 255.0;
+        processedImage.Evaluate(
+            Channels.Gray,
+            EvaluateOperator.Log,
+            logarithmicScale);
     }
 
     private static void RotateImage(//поворот изображения
