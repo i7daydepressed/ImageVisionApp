@@ -33,18 +33,26 @@
 
         <!-- осн обл -->
         <Grid Grid.Row="1"
-            ColumnDefinitions="250,*,260"
+            ColumnDefinitions="310,*"
             ColumnSpacing="12"
             Margin="12">
             <!-- инф изб -->
-            <Border Grid.Column="0"
-                Padding="14"
-                BorderBrush="Gray"
-                BorderThickness="1"
-                CornerRadius="6">
-                <ScrollViewer VerticalScrollBarVisibility="Auto"
-                    HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel Spacing="8">
+            <TabControl Grid.Column="0"
+                SelectedIndex="0">
+                <TabControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </TabControl.ItemsPanel>
+                <TabItem Header="Информация"
+                    FontSize="14">
+                    <Border Padding="14"
+                        BorderBrush="Gray"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                            HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel Spacing="8">
                         <!-- осн блок прокрутки данных-->
                         <!-- раздел инфы -->
                         <TextBlock Text="Информация"
@@ -169,10 +177,168 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                         <!-- раздел о ехифе -->
-                    </StackPanel>
-                </ScrollViewer>
-            </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Border>
+                </TabItem>
             <!-- /инф изб -->
+
+                <!-- правая панель изменения изб -->
+                <TabItem Header="Преобразования"
+                    FontSize="14">
+                    <Border Padding="14"
+                        BorderBrush="Gray"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                        <!-- пркртк-->
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                            HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel Spacing="10">
+                                <TextBlock Text="Преобразования"
+                                    FontSize="20"
+                                    FontWeight="SemiBold" />
+
+                                <!-- нопк и ползунк-->
+                                <TextBlock Text="Основные действия"
+                                    Margin="0,10,0,2"
+                                    FontSize="17"
+                                    FontWeight="Bold" />
+                                <Button Content="Перевести в градации серого"
+                                    HorizontalAlignment="Stretch"
+                                    Click="ConvertToGrayscaleButton_OnClick"/>
+
+                                <Separator Margin="0,8" />
+
+                                <!-- 0 означает, что яркость пока не изменена -->
+                                <TextBlock Text="Яркость"
+                                    FontWeight="SemiBold" />
+                                <StackPanel Orientation="Horizontal"
+                                    Spacing="4">
+                                    <TextBlock Text="Текущее значение:" />
+                                    <NumericUpDown Width="52"
+                                        Height="24"
+                                        Padding="2,0"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        ShowButtonSpinner="False"
+                                        Minimum="-100"
+                                        Maximum="100"
+                                        Increment="1"
+                                        FormatString="0"
+                                        ClipValueToMinMax="True"
+                                        Value="{Binding Settings.BrightnessAdjustment, Mode=TwoWay}" />
+                                </StackPanel>
+                                <Slider Minimum="-100"
+                                    Maximum="100"
+                                    TickFrequency="1"
+                                    IsSnapToTickEnabled="True"
+                                    Value="{Binding Settings.BrightnessAdjustment, Mode=TwoWay}" />
+                                <Button Content="Сбросить яркость"
+                                    HorizontalAlignment="Right"
+                                    Click="ResetBrightnessButton_OnClick" />
+
+                                <!-- 100 процентов означает исходную насыщенность;
+                                    0 превращает цвета в серые, больше 100 усиливает цвета -->
+                                <TextBlock Text="Насыщенность"
+                                    Margin="0,6,0,0"
+                                    FontWeight="SemiBold" />
+                                <StackPanel Orientation="Horizontal"
+                                    Spacing="4">
+                                    <TextBlock Text="Текущее значение:" />
+                                    <NumericUpDown Width="52"
+                                        Height="24"
+                                        Padding="2,0"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        ShowButtonSpinner="False"
+                                        Minimum="0"
+                                        Maximum="200"
+                                        Increment="1"
+                                        FormatString="0"
+                                        ClipValueToMinMax="True"
+                                        Value="{Binding Settings.SaturationPercentage, Mode=TwoWay}" />
+                                    <TextBlock Text="%" />
+                                </StackPanel>
+                                <Slider Minimum="0"
+                                    Maximum="200"
+                                    TickFrequency="1"
+                                    IsSnapToTickEnabled="True"
+                                    Value="{Binding Settings.SaturationPercentage, Mode=TwoWay}" />
+                                <Button Content="Сбросить насыщенность"
+                                    HorizontalAlignment="Right"
+                                    Click="ResetSaturationButton_OnClick" />
+
+                                <!-- 0 означает, что контрастность пока не изменена -->
+                                <TextBlock Text="Контрастность"
+                                    Margin="0,6,0,0"
+                                    FontWeight="SemiBold" />
+                                <StackPanel Orientation="Horizontal"
+                                    Spacing="4">
+                                    <TextBlock Text="Текущее значение:" />
+                                    <NumericUpDown Width="52"
+                                        Height="24"
+                                        Padding="2,0"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        ShowButtonSpinner="False"
+                                        Minimum="-100"
+                                        Maximum="100"
+                                        Increment="1"
+                                        FormatString="0"
+                                        ClipValueToMinMax="True"
+                                        Value="{Binding Settings.ContrastAdjustment, Mode=TwoWay}" />
+                                </StackPanel>
+                                <Slider Minimum="-100"
+                                    Maximum="100"
+                                    TickFrequency="1"
+                                    IsSnapToTickEnabled="True"
+                                    Value="{Binding Settings.ContrastAdjustment, Mode=TwoWay}" />
+                                <Button Content="Сбросить контрастность"
+                                    HorizontalAlignment="Right"
+                                    Click="ResetContrastButton_OnClick" />
+                                <Button Content="Повернуть на 90°"
+                                    HorizontalAlignment="Stretch"
+                                    Click="RotateClockwiseButton_OnClick" />
+
+                                <Separator Margin="0,8" />
+
+                                <!-- отдельный раздел из задания для чёрно-белого изображения -->
+                                <TextBlock Text="Коррекция ЧБ"
+                                    FontSize="17"
+                                    FontWeight="Bold" />
+                                <Button Content="Линейная коррекция"
+                                    HorizontalAlignment="Stretch" />
+                                <Button Content="Нелинейная коррекция"
+                                    HorizontalAlignment="Stretch" />
+
+                                <Separator Margin="0,8" />
+
+                                <!-- сами графики сюда пихать тесно;
+                                    позже кнопка будет открывать нормальную область гистограмм -->
+                                <TextBlock Text="Гистограммы"
+                                    FontSize="17"
+                                    FontWeight="Bold" />
+                                <Button Content="Открыть гистограммы"
+                                    HorizontalAlignment="Stretch"
+                                    Click="OpenHistogramsButton_OnClick" />
+
+                                <Separator Margin="0,8" />
+
+                                <!-- действия уже не над отдельным параметром, а над всем результатом -->
+                                <TextBlock Text="Результат"
+                                    FontSize="17"
+                                    FontWeight="Bold" />
+                                <Button Content="Сбросить изменения"
+                                    HorizontalAlignment="Stretch"
+                                    Click="ResetAllTransformationsButton_OnClick" />
+                                <Button Content="Сохранить результат"
+                                    HorizontalAlignment="Stretch"
+                                    Click="SaveResultButton_OnClick" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Border>
+                </TabItem>
+            </TabControl>
 
             <!-- поле изображения -->
             <TabControl Grid.Column="1">
@@ -202,159 +368,6 @@
             </TabControl>
             <!-- /поле изображения -->
 
-            <!-- правая панель изменения изб -->
-            <Border Grid.Column="2"
-                Padding="14"
-                BorderBrush="Gray"
-                BorderThickness="1"
-                CornerRadius="6">
-                <!-- пркртк-->
-                <ScrollViewer VerticalScrollBarVisibility="Auto"
-                    HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="Преобразования"
-                            FontSize="20"
-                            FontWeight="SemiBold" />
-
-                        <!-- нопк и ползунк-->
-                        <TextBlock Text="Основные действия"
-                            Margin="0,10,0,2"
-                            FontSize="17"
-                            FontWeight="Bold" />
-                        <Button Content="Перевести в градации серого"
-                            HorizontalAlignment="Stretch"
-                            Click="ConvertToGrayscaleButton_OnClick"/>
-
-                        <Separator Margin="0,8" />
-
-                        <!-- 0 означает, что яркость пока не изменена -->
-                        <TextBlock Text="Яркость"
-                            FontWeight="SemiBold" />
-                        <StackPanel Orientation="Horizontal"
-                            Spacing="4">
-                            <TextBlock Text="Текущее значение:" />
-                            <NumericUpDown Width="52"
-                                Height="24"
-                                Padding="2,0"
-                                Background="Transparent"
-                                BorderThickness="0"
-                                ShowButtonSpinner="False"
-                                Minimum="-100"
-                                Maximum="100"
-                                Increment="1"
-                                FormatString="0"
-                                ClipValueToMinMax="True"
-                                Value="{Binding Settings.BrightnessAdjustment, Mode=TwoWay}" />
-                        </StackPanel>
-                        <Slider Minimum="-100"
-                            Maximum="100"
-                            TickFrequency="1"
-                            IsSnapToTickEnabled="True"
-                            Value="{Binding Settings.BrightnessAdjustment, Mode=TwoWay}" />
-                        <Button Content="Сбросить яркость"
-                            HorizontalAlignment="Right"
-                            Click="ResetBrightnessButton_OnClick" />
-
-                        <!-- 100 процентов означает исходную насыщенность;
-                            0 превращает цвета в серые, больше 100 усиливает цвета -->
-                        <TextBlock Text="Насыщенность"
-                            Margin="0,6,0,0"
-                            FontWeight="SemiBold" />
-                        <StackPanel Orientation="Horizontal"
-                            Spacing="4">
-                            <TextBlock Text="Текущее значение:" />
-                            <NumericUpDown Width="52"
-                                Height="24"
-                                Padding="2,0"
-                                Background="Transparent"
-                                BorderThickness="0"
-                                ShowButtonSpinner="False"
-                                Minimum="0"
-                                Maximum="200"
-                                Increment="1"
-                                FormatString="0"
-                                ClipValueToMinMax="True"
-                                Value="{Binding Settings.SaturationPercentage, Mode=TwoWay}" />
-                            <TextBlock Text="%" />
-                        </StackPanel>
-                        <Slider Minimum="0"
-                            Maximum="200"
-                            TickFrequency="1"
-                            IsSnapToTickEnabled="True"
-                            Value="{Binding Settings.SaturationPercentage, Mode=TwoWay}" />
-                        <Button Content="Сбросить насыщенность"
-                            HorizontalAlignment="Right"
-                            Click="ResetSaturationButton_OnClick" />
-
-                        <!-- 0 означает, что контрастность пока не изменена -->
-                        <TextBlock Text="Контрастность"
-                            Margin="0,6,0,0"
-                            FontWeight="SemiBold" />
-                        <StackPanel Orientation="Horizontal"
-                            Spacing="4">
-                            <TextBlock Text="Текущее значение:" />
-                            <NumericUpDown Width="52"
-                                Height="24"
-                                Padding="2,0"
-                                Background="Transparent"
-                                BorderThickness="0"
-                                ShowButtonSpinner="False"
-                                Minimum="-100"
-                                Maximum="100"
-                                Increment="1"
-                                FormatString="0"
-                                ClipValueToMinMax="True"
-                                Value="{Binding Settings.ContrastAdjustment, Mode=TwoWay}" />
-                        </StackPanel>
-                        <Slider Minimum="-100"
-                            Maximum="100"
-                            TickFrequency="1"
-                            IsSnapToTickEnabled="True"
-                            Value="{Binding Settings.ContrastAdjustment, Mode=TwoWay}" />
-                        <Button Content="Сбросить контрастность"
-                            HorizontalAlignment="Right"
-                            Click="ResetContrastButton_OnClick" />
-                        <Button Content="Повернуть на 90°"
-                            HorizontalAlignment="Stretch"
-                            Click="RotateClockwiseButton_OnClick" />
-
-                        <Separator Margin="0,8" />
-
-                        <!-- отдельный раздел из задания для чёрно-белого изображения -->
-                        <TextBlock Text="Коррекция ЧБ"
-                            FontSize="17"
-                            FontWeight="Bold" />
-                        <Button Content="Линейная коррекция"
-                            HorizontalAlignment="Stretch" />
-                        <Button Content="Нелинейная коррекция"
-                            HorizontalAlignment="Stretch" />
-
-                        <Separator Margin="0,8" />
-
-                        <!-- сами графики сюда пихать тесно;
-                            позже кнопка будет открывать нормальную область гистограмм -->
-                        <TextBlock Text="Гистограммы"
-                            FontSize="17"
-                            FontWeight="Bold" />
-                        <Button Content="Открыть гистограммы"
-                            HorizontalAlignment="Stretch"
-                            Click="OpenHistogramsButton_OnClick" />
-
-                        <Separator Margin="0,8" />
-
-                        <!-- действия уже не над отдельным параметром, а над всем результатом -->
-                        <TextBlock Text="Результат"
-                            FontSize="17"
-                            FontWeight="Bold" />
-                        <Button Content="Сбросить изменения"
-                            HorizontalAlignment="Stretch"
-                            Click="ResetAllTransformationsButton_OnClick" />
-                        <Button Content="Сохранить результат"
-                            HorizontalAlignment="Stretch"
-                            Click="SaveResultButton_OnClick" />
-                    </StackPanel>
-                </ScrollViewer>
-            </Border>
         </Grid>
     </Grid>
 </Window>
