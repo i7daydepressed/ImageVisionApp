@@ -203,9 +203,10 @@
                                     Margin="0,10,0,2"
                                     FontSize="17"
                                     FontWeight="Bold" />
-                                <Button Content="Перевести в градации серого"
-                                    HorizontalAlignment="Stretch"
-                                    Click="ConvertToGrayscaleButton_OnClick"/>
+                                <CheckBox Content="Градации серого"
+                                    HorizontalAlignment="Left"
+                                    IsChecked="{Binding Settings.IsGrayscaleEnabled, Mode=OneWay}"
+                                    Click="ConvertToGrayscaleButton_OnClick" />
 
                                 <Separator Margin="0,8" />
 
@@ -306,11 +307,13 @@
                                 <TextBlock Text="Коррекция ЧБ"
                                     FontSize="17"
                                     FontWeight="Bold" />
-                                <Button Content="Линейная коррекция"
-                                    HorizontalAlignment="Stretch"
+                                <CheckBox Content="Линейная коррекция"
+                                    HorizontalAlignment="Left"
+                                    IsChecked="{Binding IsLinearCorrectionEnabled, Mode=OneWay}"
                                     Click="ApplyLinearGrayscaleCorrectionButton_OnClick" />
-                                <Button Content="Нелинейная коррекция"
-                                    HorizontalAlignment="Stretch" />
+                                <CheckBox Content="Нелинейная коррекция"
+                                    HorizontalAlignment="Left"
+                                    IsEnabled="False" />
 
                                 <Separator Margin="0,8" />
 

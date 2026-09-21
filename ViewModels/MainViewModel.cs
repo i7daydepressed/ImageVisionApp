@@ -19,6 +19,10 @@ public partial class MainViewModel : ViewModelBase{
     public ImageTransformationSettings Settings { get; } =
         new ImageTransformationSettings();//настройки изменения изображения
 
+    public bool IsLinearCorrectionEnabled =>//буд вид для галочки
+        Settings.CorrectionMode ==
+        GrayscaleCorrectionMode.Linear; //енеблет ли лин коррекция? CorrectionMode сейчас Linear?
+
     public MainViewModel() {
         Settings.PropertyChanged += Settings_PropertyChanged;
     }
@@ -119,10 +123,19 @@ public partial class MainViewModel : ViewModelBase{
         // коррекция применяется только к серому изображению,
         // поэтому включаем оба параметра одним изменением
         suppressTransformationUpdates = true;
+        bool shouldEnableCorrection = !IsLinearCorrectionEnabled;
 
         try {//вкл градацию
-            Settings.IsGrayscaleEnabled = true;
-            Settings.CorrectionMode = GrayscaleCorrectionMode.Linear;
+            if (shouldEnableCorrection) {
+                Settings.IsGrayscaleEnabled = true;
+                Settings.CorrectionMode = GrayscaleCorrectionMode.Linear;
+            }
+            else {
+                // отключаем только коррекцию,
+                // изображение оставляем серым
+                Settings.CorrectionMode =
+                    GrayscaleCorrectionMode.None;
+            }
         }
         finally {
             suppressTransformationUpdates = false;
@@ -130,8 +143,9 @@ public partial class MainViewModel : ViewModelBase{
 
         UpdateModifiedImage();
 
-        StatusMessage =
-            "Применена линейная коррекция изображения";
+        StatusMessage = shouldEnableCorrection
+            ? "Применена линейная коррекция изображения"
+            : "Линейная коррекция отключена";
     }
 
     public void ResetBrightness() {// сбросить яркость
@@ -228,6 +242,10 @@ public partial class MainViewModel : ViewModelBase{
     private void Settings_PropertyChanged(// если ползунок изменился вызывается этот метод
         object? sender,
         PropertyChangedEventArgs e) {
+
+        if (e.PropertyName == nameof(ImageTransformationSettings.CorrectionMode)) {
+            OnPropertyChanged(nameof(IsLinearCorrectionEnabled));// единств точка обновления IsLinearCorrectionEnabled
+        }
 
         if (suppressTransformationUpdates) {
             return;
