@@ -28,12 +28,17 @@ public sealed partial class ImageTransformationSettings
     // следующие значения: 90, 180, 270
     [ObservableProperty]
     public partial int RotationDegrees { get; set; } = 0;
+    // Выбранный способ коррекции изображения в градациях серого
+    [ObservableProperty]
+    public partial GrayscaleCorrectionMode CorrectionMode { get; set; }
+        = GrayscaleCorrectionMode.None;
 
     public void Reset() {
-        IsGrayscaleEnabled = false;//еее
+        IsGrayscaleEnabled = false;
         BrightnessAdjustment = 0;
         SaturationPercentage = 100;
         ContrastAdjustment = 0;
         RotationDegrees = 0;
+        CorrectionMode = GrayscaleCorrectionMode.None;
     }
 }

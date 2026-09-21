@@ -81,6 +81,25 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ApplyLinearGrayscaleCorrectionButton_OnClick(
+        object? sender,
+        RoutedEventArgs e
+        ) {
+
+        if (DataContext is not MainViewModel viewModel) {
+            return;
+        }
+
+        try {
+            viewModel.ApplyLinearGrayscaleCorrection();
+        }
+        catch (Exception exception) {
+            viewModel.ShowError(
+                $"Не удалось применить линейную коррекцию: " +
+                exception.Message);
+        }
+    }
+
     private void ResetBrightnessButton_OnClick(
         object? sender,
         RoutedEventArgs e

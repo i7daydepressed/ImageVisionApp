@@ -33,6 +33,11 @@ public class ImageProcessingService{
 
         if (settings.IsGrayscaleEnabled) {//серое
             ConvertToGrayscale(processedImage);
+
+            // линейная чб коррекция
+            if (settings.CorrectionMode == GrayscaleCorrectionMode.Linear) {
+                ApplyLinearCorrection(processedImage);
+            }
         }
 
         if (settings.RotationDegrees != 0) {//поворот
@@ -103,6 +108,13 @@ public class ImageProcessingService{
         processedImage.BrightnessContrast(
             new Percentage(0),
             new Percentage(contrastAdjustment));
+    }
+
+    private static void ApplyLinearCorrection(//линейная чб коррекция
+        MagickImage processedImage
+        ){
+
+        processedImage.AutoLevel();
     }
 
     private static void RotateImage(//поворот изображения

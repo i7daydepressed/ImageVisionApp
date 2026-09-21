@@ -307,7 +307,8 @@
                                     FontSize="17"
                                     FontWeight="Bold" />
                                 <Button Content="Линейная коррекция"
-                                    HorizontalAlignment="Stretch" />
+                                    HorizontalAlignment="Stretch"
+                                    Click="ApplyLinearGrayscaleCorrectionButton_OnClick" />
                                 <Button Content="Нелинейная коррекция"
                                     HorizontalAlignment="Stretch" />
 

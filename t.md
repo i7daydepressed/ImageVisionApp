@@ -17,3 +17,6 @@ Restored .../ImageVisionApp.csproj (in 2.71 min).
 dotnet build --no-restore --tl:off    -без востановы зависимостей и с вкл обыч посторонним выводом
 
 dotnet run --no-restore
+
+
+- галочки у градации к примеру

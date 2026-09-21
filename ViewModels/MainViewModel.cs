@@ -86,9 +86,52 @@ public partial class MainViewModel : ViewModelBase{
             StatusMessage = "Сначала выберите изображение";
             return;
         }
-        // серое енаблед
-        Settings.IsGrayscaleEnabled =
+
+        bool newGrayscaleState =
             !Settings.IsGrayscaleEnabled;
+
+        // меняем связанные настройки вместе,
+        // чтобы изображение не пересобиралось между изменениями
+        suppressTransformationUpdates = true;
+
+        try {//выключаем коррекцию если у нас нет градации
+            Settings.IsGrayscaleEnabled = newGrayscaleState;
+
+            if (!newGrayscaleState) {
+                Settings.CorrectionMode = GrayscaleCorrectionMode.None;
+            }
+        }
+        finally {
+            suppressTransformationUpdates = false;
+        }
+
+        // после изменения всех связанных настроек
+        // пересобираем изображение только один раз
+        UpdateModifiedImage();
+    }
+
+    public void ApplyLinearGrayscaleCorrection() {
+        if (originalImageData is null) {
+            StatusMessage = "Сначала выберите изображение";
+            return;
+        }
+
+        // коррекция применяется только к серому изображению,
+        // поэтому включаем оба параметра одним изменением
+        suppressTransformationUpdates = true;
+
+        try {//вкл градацию
+            Settings.IsGrayscaleEnabled = true;
+            Settings.CorrectionMode = GrayscaleCorrectionMode.Linear;
+        }
+        finally {
+            suppressTransformationUpdates = false;
+        }
+
+        UpdateModifiedImage();
+
+        StatusMessage =
+            "Применена линейная коррекция изображения";
     }
 
     public void ResetBrightness() {// сбросить яркость
