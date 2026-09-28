@@ -6,7 +6,7 @@ namespace ImageVisionApp.Services;
 
 public class ImageProcessingService{
 
-    public byte[] ApplyTransformations(
+    public byte[] ApplyTransformations(// просто оперирует с байтами и настройками к этим байтам
         byte[] originalImageData,
         ImageTransformationSettings settings
         ){

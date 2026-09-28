@@ -14,6 +14,7 @@ public partial class MainViewModel : ViewModelBase{
 
     // исходник изоб
     private byte[]? originalImageData;// для magick
+    private ImageHistogramData? originalHistogram;//отрисовка гистограм
     private bool suppressTransformationUpdates;//флаг запрещающий автообновляться редактируемой картинки сразу после изменения одного какогото ползунка
 
     public ImageTransformationSettings Settings { get; } =
@@ -38,6 +39,9 @@ public partial class MainViewModel : ViewModelBase{
     public partial Bitmap? ModifiedImage { get; set; }
 
     [ObservableProperty]
+    public partial ImageHistogramComparison? HistogramComparison { get; set; }// гистограммы исходника и текущего результата в одном объекте
+
+    [ObservableProperty]
     public partial ImageInfo? CurrentImageInfo { get; set; }
 
     [ObservableProperty]
@@ -45,7 +49,6 @@ public partial class MainViewModel : ViewModelBase{
         = "Изображение не выбрано";
 
     public void LoadImage(byte[] imageData, string fileName){//реактим на событие загрузки збр
-
         // сохр исхд байты
         originalImageData = imageData;
         ResetTransformationSettings();
@@ -65,13 +68,18 @@ public partial class MainViewModel : ViewModelBase{
         OriginalImage = newOriginalImage;
         ModifiedImage = newModifiedImage;
         CurrentImageInfo = newImageInfo;
+        // создание гистограмы
+        originalHistogram = imageHistogramService.CalculateHistogram(imageData);
+        HistogramComparison = new ImageHistogramComparison(
+            originalHistogram,
+            originalHistogram);
         StatusMessage = fileName;
     }
 
     private void UpdateModifiedImage() {
         // собираем результат заново с учетом всех настроек
         byte[]? processedImageData =
-            CreateProcessedImageData();
+            CreateProcessedImageData();//изменяем тут
 
         if (processedImageData is null) {
             return;
@@ -87,6 +95,15 @@ public partial class MainViewModel : ViewModelBase{
         ModifiedImage?.Dispose();
 
         ModifiedImage = newModifiedImage;
+        // // считаем гистограмму по тем же байтам, из которых сделали измененное изображение
+        if (originalHistogram is not null) {//обновляем гистограмму
+            ImageHistogramData processedHistogram =
+                imageHistogramService.CalculateHistogram(processedImageData);
+
+            HistogramComparison = new ImageHistogramComparison(
+                originalHistogram,
+                processedHistogram);
+        }
     }
 
     public void ConvertImageToGrayscale() {
@@ -220,7 +237,7 @@ public partial class MainViewModel : ViewModelBase{
             return null;
         }
 
-        return imageProcessingService.ApplyTransformations(
+        return imageProcessingService.ApplyTransformations(//ИЗМЕНЯЕМ ТУТ
             originalImageData,
             Settings);
     }
