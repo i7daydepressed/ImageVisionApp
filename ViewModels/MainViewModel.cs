@@ -4,6 +4,7 @@ using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using ImageVisionApp.Models;
 using ImageVisionApp.Services;
+using System.Collections.ObjectModel;
 
 namespace ImageVisionApp.ViewModels;
 
@@ -14,6 +15,15 @@ public partial class MainViewModel : ViewModelBase{
 
     // исходник изоб
     private byte[]? originalImageData;// для magick
+
+    //если очередь изменили вручную, PrepareAdvancedQueue() не пересобирает ее из настроек простого режима
+    //пока ручное редактирование выкл это false
+    private bool advancedQueueCustomized;
+
+    //действия в левой панели расширенного режима: ListBox видит добавление и удаление шагов
+    public ObservableCollection<ImageEditStep> AdvancedSteps { get; } = new();
+    //эт коллекция похожая на список, которая сообщает подписчикам об изменении своего состава: добавили элемент, удалили, очистили или переместили. Для этого она выдаёт событие CollectionChanged.
+
     private ImageHistogramData? originalHistogram;//отрисовка гистограм
     private bool suppressTransformationUpdates;//флаг запрещающий автообновляться редактируемой картинки сразу после изменения одного какогото ползунка
 
@@ -52,6 +62,9 @@ public partial class MainViewModel : ViewModelBase{
         // сохр исхд байты
         originalImageData = imageData;
         ResetTransformationSettings();
+        // новое изображение начинает новую очередь: снимаем признак ручного редактирования и удаляем старые шаги
+        advancedQueueCustomized = false;
+        AdvancedSteps.Clear();
         
         var newImageInfo =
                 imageStatsFileService.readImageInfo(imageData, fileName);
@@ -228,6 +241,56 @@ public partial class MainViewModel : ViewModelBase{
         }
 
         Settings.ContrastAdjustment = 0;
+    }
+
+    // вызывается при нажатии расширенного редактирования
+    public void PrepareAdvancedQueue() {//просто добавляем в очередь(AdvancedSteps.Add) продвинутого режима редактирование из первого
+        // без исходника очередь составить нельзя; вручную изменённую очередь настройками простого режима не перезаписываем
+        if (originalImageData is null || advancedQueueCustomized) {
+            return;
+        }//за очередью следит ListBox в CreateToolbar()
+
+        // при повторном входе собираем очередь заново из настроек простого режима
+        // Clear убирает прежние строки, чтобы одни и те же действия не появились дважды
+        AdvancedSteps.Clear();
+
+        // нейтральные настройки пропускаем: яркость и контраст 0, насыщенность 100% не меняют изображение
+        if (Settings.BrightnessAdjustment != 0) {//яркость
+            AdvancedSteps.Add(new ImageEditStep(
+                ImageOperationType.Brightness,
+                Settings.BrightnessAdjustment));
+        }
+
+        if (Settings.SaturationPercentage != 100) {//насыщенность
+            AdvancedSteps.Add(new ImageEditStep(
+                ImageOperationType.Saturation,
+                Settings.SaturationPercentage));
+        }
+
+        if (Settings.ContrastAdjustment != 0) {//контраст
+            AdvancedSteps.Add(new ImageEditStep(
+                ImageOperationType.Contrast,
+                Settings.ContrastAdjustment));
+        }
+
+        if (Settings.IsGrayscaleEnabled) {//коррекцию чб добавляем только после перевода в серый, поэтому она находится внутри этой ветки
+            AdvancedSteps.Add(new ImageEditStep(ImageOperationType.Grayscale));
+
+            if (Settings.CorrectionMode == GrayscaleCorrectionMode.Linear) {//лин кор
+                AdvancedSteps.Add(new ImageEditStep(
+                    ImageOperationType.LinearGrayscaleCorrection));
+            }
+            else if (Settings.CorrectionMode == GrayscaleCorrectionMode.Nonlinear) {//нелин кор
+                AdvancedSteps.Add(new ImageEditStep(
+                    ImageOperationType.NonlinearGrayscaleCorrection));
+            }
+        }
+
+        if (Settings.RotationDegrees != 0) {//ротейт
+            AdvancedSteps.Add(new ImageEditStep(
+                ImageOperationType.Rotation,
+                Settings.RotationDegrees));
+        }
     }
 
     public byte[]? CreateProcessedImageData() {//создать итог байты изм избрж

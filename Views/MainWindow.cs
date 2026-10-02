@@ -10,6 +10,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using ImageVisionApp.ViewModels;
+using ImageVisionApp.Models;
 
 namespace ImageVisionApp.Views;
 
@@ -18,26 +19,6 @@ public partial class MainWindow : Window {
     private readonly ContentControl pageHost = new ContentControl();
     private ScrollViewer? simplePage;
 
-    private readonly Button openButton = new Button {
-        Content = "Открыть изображение"
-    };
-
-    private readonly Button advancedButton = new Button {
-        Content = "Расширенное редактирование →"
-    };
-
-    private readonly Button backButton = new Button {
-        Content = "← К простому виду",
-        IsVisible = false
-    };
-
-    private readonly Border advancedPage = new Border {
-        Padding = new Thickness(20),
-        Child = new TextBlock {
-            Text = "Расширенное редактирование — здесь разместим предпросмотр и очередь действий",
-            FontSize = 18
-        }
-    };
     private readonly HistogramPanel histogramPanel = new HistogramPanel();
     private MainViewModel? histogramViewModel;
 
@@ -139,16 +120,65 @@ public partial class MainWindow : Window {
             IsVisible = false
         };
 
-        Border advancedPage = new Border {
-            Padding = new Thickness(20),
-            Child = new TextBlock {
-                Text = "Расширенное редактирование: здесь будут предпросмотр и очередь действий",
-                FontSize = 18
-            }
+        Grid advancedWorkspace = new Grid {
+            ColumnDefinitions = new ColumnDefinitions("260,*"),
+            ColumnSpacing = 12,
+            Margin = new Thickness(12),
+            Height = 620
+        };
+
+        Grid queueContent = new Grid {
+            RowDefinitions = new RowDefinitions("Auto,*"),
+            RowSpacing = 8
+        };
+
+        queueContent.Children.Add(new TextBlock {
+            Text = "Очередь действий",
+            FontSize = 17
+        });
+
+        ListBox queueList = new ListBox {// для каждого действия показываем DisplayName: пример яркость+20
+            DisplayMemberBinding = new Avalonia.Data.Binding("DisplayName")
+        };
+        queueList.Bind(// берем действия из AdvancedSteps во ViewModel: при добавлении или удалении шага список обновится
+            ItemsControl.ItemsSourceProperty,
+            new Avalonia.Data.Binding("AdvancedSteps"));
+
+        Grid.SetRow(queueList, 1);// заголовок остается в строке 0, а список ставим в строку 1 под ним
+        queueContent.Children.Add(queueList);
+
+        Border queuePlaceholder = new Border {//левая панель очереди
+            Padding = new Thickness(12),
+            BorderBrush = Brushes.Gray,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Child = queueContent
+        };
+
+
+        advancedWorkspace.Children.Add(queuePlaceholder);
+
+        //здесь свои вкладки, но обе картинки берутся из общей MainViewModel
+        TabControl advancedImageTabs = CreateImageTabs();
+        advancedImageTabs.SelectedIndex = 1;
+
+        Grid.SetColumn(advancedImageTabs, 1);
+        advancedWorkspace.Children.Add(advancedImageTabs);
+
+        StackPanel advancedContent = new StackPanel();
+        advancedContent.Children.Add(advancedWorkspace);
+
+        ScrollViewer advancedPage = new ScrollViewer {
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Content = advancedContent
         };
 
         advancedButton.Click += (_, _) => {
-            // меняем страницу внутри окна; обычную страницу оставляем в simplePage
+            if (DataContext is MainViewModel viewModel) {
+                viewModel.PrepareAdvancedQueue();//перед открытием расширенного вида переносим текущие настройки в очередь действий
+            }
+
             pageHost.Content = advancedPage;
             openButton.IsVisible = false;
             advancedButton.IsVisible = false;
