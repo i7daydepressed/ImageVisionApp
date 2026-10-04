@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using ImageMagick;
 using ImageVisionApp.Models;
 
@@ -51,14 +52,59 @@ public class ImageProcessingService{
                 processedImage,
                 settings.RotationDegrees);
         }
-        //тут
-        //тут и там
-        //и тут ещо
 
         // возвращаем резулт
         byte[] processedImageData = processedImage.ToByteArray(MagickFormat.Png);
 
         return processedImageData;
+    }
+
+    //берет исходное изображение и последовательно применяет к нему действия из очереди
+    // в том порядке, в котором они переданы, возвращает итоговое изображение в байтах пнг
+    public byte[] ApplySteps(//
+        byte[] originalImageData,
+        IEnumerable<ImageEditStep> steps) {//итерабле
+
+        // каждый пересчет начинаем с исходных байтов, чтобы предыдущая обработка не накопилась повторно
+        using MagickImage processedImage = new MagickImage(originalImageData);
+
+
+        // идем по шагам в переданном порядке: каждый меняет то же изображение
+        // поэтому следующий шаг получает результат предыдущего
+        foreach (ImageEditStep step in steps) {
+            // Type определяет операцию, Parameter — ее значение, если оно нужно
+            switch (step.Type) {
+                case ImageOperationType.Brightness:
+                    ChangeBrightness(processedImage, step.Parameter);
+                    break;
+
+                case ImageOperationType.Saturation:
+                    ChangeSaturation(processedImage, step.Parameter);
+                    break;
+
+                case ImageOperationType.Contrast:
+                    ChangeContrast(processedImage, step.Parameter);
+                    break;
+
+                case ImageOperationType.Grayscale:
+                    ConvertToGrayscale(processedImage);
+                    break;
+
+                case ImageOperationType.LinearGrayscaleCorrection:
+                    ApplyLinearCorrection(processedImage);
+                    break;
+
+                case ImageOperationType.NonlinearGrayscaleCorrection:
+                    ApplyLogarithmicCorrection(processedImage);
+                    break;
+
+                case ImageOperationType.Rotation:
+                    RotateImage(processedImage, (int)step.Parameter);
+                    break;
+            }
+        }
+        //после всех шагов возвращаем готовое изображение в виде байтов пнг
+        return processedImage.ToByteArray(MagickFormat.Png);
     }
 
 

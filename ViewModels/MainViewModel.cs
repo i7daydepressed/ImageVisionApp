@@ -89,10 +89,10 @@ public partial class MainViewModel : ViewModelBase{
         StatusMessage = fileName;
     }
 
-    private void UpdateModifiedImage() {
-        // собираем результат заново с учетом всех настроек
-        byte[]? processedImageData =
-            CreateProcessedImageData();//изменяем тут
+    private void UpdateModifiedImage(byte[]? processedImageData = null) {
+        // если ApplyAdvancedQueue() передал готовые байты используем их
+        // иначе CreateProcessedImageData() пересчитает изображение по Settings
+        processedImageData ??= CreateProcessedImageData();
 
         if (processedImageData is null) {
             return;
@@ -291,6 +291,29 @@ public partial class MainViewModel : ViewModelBase{
                 ImageOperationType.Rotation,
                 Settings.RotationDegrees));
         }
+    }
+
+    //пересчитывает изображение по действиям из очереди и обновляет его гистограмму
+    public void ApplyAdvancedQueue() {
+        if (originalImageData is null) {
+            StatusMessage = "Сначала выберите изображение";
+            return;
+        }
+
+        byte[] processedImageData =
+            imageProcessingService.ApplySteps(originalImageData, AdvancedSteps);
+
+        UpdateModifiedImage(processedImageData);
+    }
+
+    //удаляет выбранное действие и пересчитывает изображение по оставшимся шагам
+    public void RemoveAdvancedStep(ImageEditStep? step) {
+        if (step is null || !AdvancedSteps.Remove(step)) {
+            return;
+        }
+
+        advancedQueueCustomized = true;
+        ApplyAdvancedQueue();
     }
 
     public byte[]? CreateProcessedImageData() {//создать итог байты изм избрж

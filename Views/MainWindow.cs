@@ -137,9 +137,39 @@ public partial class MainWindow : Window {
             FontSize = 17
         });
 
-        ListBox queueList = new ListBox {// для каждого действия показываем DisplayName: пример яркость+20
-            DisplayMemberBinding = new Avalonia.Data.Binding("DisplayName")
+        
+        ListBox queueList = new ListBox {//внешеий вид элемента в очереди
+            ItemTemplate = new FuncDataTemplate<ImageEditStep>((step, _) => {//получает один элемент из AdvancedSteps к примеру step может быть действием яркость +50
+                Grid row = new Grid {
+                    ColumnDefinitions = new ColumnDefinitions("*,Auto"),//делим строку
+                    ColumnSpacing = 6
+                };
+
+                TextBlock name = new TextBlock {//текст блок шага
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                name.Bind(
+                    TextBlock.TextProperty,
+                    new Avalonia.Data.Binding("DisplayName"));//название шага
+                row.Children.Add(name);
+
+                Button removeButton = new Button {//минусик для удаления
+                    Content = "−",
+                    MinWidth = 28
+                };
+                removeButton.Click += (_, _) => {// подписываем минусик
+                    if (DataContext is MainViewModel viewModel) {
+                        viewModel.RemoveAdvancedStep(step);
+                    }
+                    // запоминает step, для которого создали кнопку при нажатии вызывает MainViewModel.RemoveAdvancedStep(step), то есть удаляет именно это действие
+                };
+
+                Grid.SetColumn(removeButton, 1);//ставит минус справа
+                row.Children.Add(removeButton);
+                return row;
+            })
         };
+
         queueList.Bind(// берем действия из AdvancedSteps во ViewModel: при добавлении или удалении шага список обновится
             ItemsControl.ItemsSourceProperty,
             new Avalonia.Data.Binding("AdvancedSteps"));
@@ -177,6 +207,7 @@ public partial class MainWindow : Window {
         advancedButton.Click += (_, _) => {
             if (DataContext is MainViewModel viewModel) {
                 viewModel.PrepareAdvancedQueue();//перед открытием расширенного вида переносим текущие настройки в очередь действий
+                viewModel.ApplyAdvancedQueue();//применяем собранные шаги к исходнику и обновляем картинку с гистограммой
             }
 
             pageHost.Content = advancedPage;
