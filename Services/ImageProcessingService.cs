@@ -91,10 +91,14 @@ public class ImageProcessingService{
                     break;
 
                 case ImageOperationType.LinearGrayscaleCorrection:
+                    // коррекция сначала переводит текущий результат в серый
+                    ConvertToGrayscale(processedImage);
                     ApplyLinearCorrection(processedImage);
                     break;
 
                 case ImageOperationType.NonlinearGrayscaleCorrection:
+                    // шаг работает и без отдельного действия градаций серого в очереди
+                    ConvertToGrayscale(processedImage);
                     ApplyLogarithmicCorrection(processedImage);
                     break;
 

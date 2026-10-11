@@ -20,6 +20,7 @@ public partial class MainWindow : Window {
     private ScrollViewer? simplePage;
 
     private readonly HistogramPanel histogramPanel = new HistogramPanel();
+    private readonly HistogramPanel advancedHistogramPanel = new HistogramPanel();
     private MainViewModel? histogramViewModel;
 
     public MainWindow() {// создаем окно
@@ -30,7 +31,6 @@ public partial class MainWindow : Window {
         MinHeight = 600;
         Content = CreateLayout();
         DataContextChanged += MainWindow_OnDataContextChanged;
-        InitializeNumericInputs();
     }
 
     private Grid CreateLayout() {
@@ -90,6 +90,7 @@ public partial class MainWindow : Window {
         }
 
         histogramPanel.ShowComparison(histogramViewModel?.HistogramComparison);
+        advancedHistogramPanel.ShowComparison(histogramViewModel?.HistogramComparison);
     }
 
     // реагирует только на новую пару гистограмм и передает ее панели
@@ -101,6 +102,7 @@ public partial class MainWindow : Window {
             sender is MainViewModel viewModel) {
 
             histogramPanel.ShowComparison(viewModel.HistogramComparison);
+            advancedHistogramPanel.ShowComparison(viewModel.HistogramComparison);
         }
     }
 
@@ -141,7 +143,7 @@ public partial class MainWindow : Window {
         ListBox queueList = new ListBox {//внешеий вид элемента в очереди
             ItemTemplate = new FuncDataTemplate<ImageEditStep>((step, _) => {//получает один элемент из AdvancedSteps к примеру step может быть действием яркость +50
                 Grid row = new Grid {
-                    ColumnDefinitions = new ColumnDefinitions("*,Auto"),//делим строку
+                    ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"),//делим строку
                     ColumnSpacing = 6
                 };
 
@@ -152,6 +154,30 @@ public partial class MainWindow : Window {
                     TextBlock.TextProperty,
                     new Avalonia.Data.Binding("DisplayName"));//название шага
                 row.Children.Add(name);
+
+                Button moveUpButton = new Button {
+                    Content = "↑",
+                    MinWidth = 28
+                };
+                moveUpButton.Click += (_, _) => {
+                    if (DataContext is MainViewModel viewModel) {
+                        viewModel.MoveAdvancedStep(step, -1);
+                    }
+                };
+                Grid.SetColumn(moveUpButton, 1);
+                row.Children.Add(moveUpButton);
+
+                Button moveDownButton = new Button {
+                    Content = "↓",
+                    MinWidth = 28
+                };
+                moveDownButton.Click += (_, _) => {
+                    if (DataContext is MainViewModel viewModel) {
+                        viewModel.MoveAdvancedStep(step, 1);
+                    }
+                };
+                Grid.SetColumn(moveDownButton, 2);
+                row.Children.Add(moveDownButton);
 
                 Button removeButton = new Button {//минусик для удаления
                     Content = "−",
@@ -164,7 +190,7 @@ public partial class MainWindow : Window {
                     // запоминает step, для которого создали кнопку при нажатии вызывает MainViewModel.RemoveAdvancedStep(step), то есть удаляет именно это действие
                 };
 
-                Grid.SetColumn(removeButton, 1);//ставит минус справа
+                Grid.SetColumn(removeButton, 3);//ставит минус справа
                 row.Children.Add(removeButton);
                 return row;
             })
@@ -231,6 +257,28 @@ public partial class MainWindow : Window {
             }
         };
         toolsContent.Children.Add(addGrayscaleButton);
+        // линейная коррекция добавляется как отдельный шаг после уже выбранных действий
+        Button addLinearCorrectionButton = new Button {
+            Content = "Добавить линейную коррекцию ЧБ",
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        addLinearCorrectionButton.Click += (_, _) => {
+            if (DataContext is MainViewModel viewModel) {
+                viewModel.AddAdvancedStep(ImageOperationType.LinearGrayscaleCorrection);
+            }
+        };
+        toolsContent.Children.Add(addLinearCorrectionButton);
+        // нелинейная коррекция тоже становится отдельным шагом очереди
+        Button addNonlinearCorrectionButton = new Button {
+            Content = "Добавить нелинейную коррекцию ЧБ",
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        addNonlinearCorrectionButton.Click += (_, _) => {
+            if (DataContext is MainViewModel viewModel) {
+                viewModel.AddAdvancedStep(ImageOperationType.NonlinearGrayscaleCorrection);
+            }
+        };
+        toolsContent.Children.Add(addNonlinearCorrectionButton);
         // сохраняем результат текущей очереди через обработчик расширенного режима
         Button saveAdvancedButton = new Button {
             Content = "Сохранить результат",
@@ -372,6 +420,58 @@ public partial class MainWindow : Window {
         adjustmentCards.Children.Add(saturationCard);
         //}
 
+        // карточка контрастности выбирает значение для нового шага очереди
+        StackPanel contrastControls = new StackPanel {
+            Spacing = 8
+        };
+        contrastControls.Children.Add(new TextBlock {
+            Text = "Контрастность",
+            FontWeight = FontWeight.SemiBold
+        });
+
+        Slider contrastSlider = new Slider {
+            Width = 260,
+            Minimum = -100,
+            Maximum = 100,
+            Value = 20,
+            TickFrequency = 1,
+            IsSnapToTickEnabled = true
+        };
+
+        TextBlock contrastValueText = new TextBlock();
+        contrastValueText.Bind(
+            TextBlock.TextProperty,
+            new Binding("Value") {
+                Source = contrastSlider,
+                StringFormat = "Текущее значение: {0:0}"
+            });
+        contrastControls.Children.Add(contrastValueText);
+        contrastControls.Children.Add(contrastSlider);
+
+        Button addContrastButton = new Button {
+            Content = "Добавить контрастность",
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        addContrastButton.Click += (_, _) => {
+            if (DataContext is MainViewModel viewModel) {
+                // берем значение ползунка при нажатии и добавляем его в конец очереди
+                viewModel.AddAdvancedStep(
+                    ImageOperationType.Contrast,
+                    contrastSlider.Value);
+            }
+        };
+        contrastControls.Children.Add(addContrastButton);
+
+        Border contrastCard = new Border {
+            Padding = new Thickness(12),
+            BorderBrush = Brushes.Gray,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Child = contrastControls
+        };
+        adjustmentCards.Children.Add(contrastCard);
+
         // в правом столбце теперь находится контейнер карточек, а не одна карточка
         Grid.SetColumn(adjustmentCards, 1);
         toolsLayout.Children.Add(adjustmentCards);
@@ -387,6 +487,8 @@ public partial class MainWindow : Window {
             Child = toolsLayout
         };
         advancedContent.Children.Add(advancedToolsPanel);
+        // вторая панель показывает ту же пару гистограмм под инструментами
+        advancedContent.Children.Add(advancedHistogramPanel);
 
         ScrollViewer advancedPage = new ScrollViewer {//скрол
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -440,26 +542,9 @@ public partial class MainWindow : Window {
         };
     }
 
-    private TabControl CreateSidebar() {
-        return new TabControl {
-            SelectedIndex = 0,
-            // это раскладка заголовков вкладок, само содержимое задаем в Content
-            ItemsPanel = new FuncTemplate<Panel?>(() => new StackPanel {
-                Orientation = Orientation.Horizontal
-            }),
-            Items = {
-                new TabItem {
-                    Header = "Информация",
-                    FontSize = 14,
-                    Content = CreateScrollablePanel(CreateInformationPanel())
-                },
-                new TabItem {
-                    Header = "Преобразования",
-                    FontSize = 14,
-                    Content = CreateScrollablePanel(CreateTransformationsPanel())
-                }
-            }
-        };
+    private Border CreateSidebar() {
+        // первая страница показывает сведения об изображении без инструментов обработки
+        return CreateScrollablePanel(CreateInformationPanel());
     }
 
     private static Border CreateScrollablePanel(Control content) {
