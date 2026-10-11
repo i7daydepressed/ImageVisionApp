@@ -178,6 +178,7 @@ public partial class MainWindow : Window {
         advancedContent.Children.Add(CreateAdvancedToolsPanel());
         // вторая панель показывает ту же пару гистограмм под инструментами
         advancedContent.Children.Add(advancedHistogramPanel);
+        advancedContent.Children.Add(CreateStructuralElementCard());
 
         return new ScrollViewer {//скрол
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -416,171 +417,43 @@ public partial class MainWindow : Window {
     private Border CreateBrightnessCard() {
         // Поле и кнопка стоят рядом: сначала выбираем значение яркости, затем добавляем его в очередь.
         // Карточка яркости: выбранное значение, ползунок и добавление шага в очередь.
-        StackPanel brightnessControls = new StackPanel {
-            Spacing = 8
-        };
-        brightnessControls.Children.Add(new TextBlock {
-            Text = "Яркость",
-            FontWeight = FontWeight.SemiBold
-        });
-
-        Slider brightnessSlider = new Slider {
-            Width = 260,
-            Minimum = -100,
-            Maximum = 100,
-            Value = 20,
-            TickFrequency = 1,
-            IsSnapToTickEnabled = true
-        };
-
-        // показываем текущее положение ползунка, не меняя само изображение
-        TextBlock brightnessValueText = new TextBlock();
-        brightnessValueText.Bind(
-            TextBlock.TextProperty,
-            new Binding("Value") {
-                Source = brightnessSlider,
-                StringFormat = "Текущее значение: {0:0}"
-            });
-        brightnessControls.Children.Add(brightnessValueText);
-        brightnessControls.Children.Add(brightnessSlider);
-
-        Button addBrightnessButton = new Button {
-            Content = "Добавить яркость",
-            HorizontalAlignment = HorizontalAlignment.Right
-        };
-        addBrightnessButton.Click += (_, _) => {
-            if (DataContext is MainViewModel viewModel) {
-                // только при нажатии создаем шаг со значением ползунка на этот момент
-                viewModel.AddAdvancedStep(
-                    ImageOperationType.Brightness,
-                    brightnessSlider.Value);
-            }
-        };
-        brightnessControls.Children.Add(addBrightnessButton);
-
-        Border brightnessCard = new Border {
-            Padding = new Thickness(12),
-            BorderBrush = Brushes.Gray,
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Child = brightnessControls
-        };
-
-        return brightnessCard;
+        return CreateAdjustmentCard(
+            title: "Яркость",
+            operationType: ImageOperationType.Brightness,
+            sliderMinimum: -100,
+            sliderMaximum: 100,
+            initialValue: 20,
+            inputMinimum: -100,
+            inputMaximum: 100,
+            buttonText: "Добавить яркость");
     }
 
     private Border CreateSaturationCard() {
         // карточка насыщенности у продвинутого режима{
-        StackPanel saturationControls = new StackPanel {
-            Spacing = 8
-        };
-        saturationControls.Children.Add(new TextBlock {
-            Text = "Насыщенность",
-            FontWeight = FontWeight.SemiBold
-        });
-
         // 100% сохраняет исходные цвета, меньше 100 ослабляет их, больше 100 усиливает
-        Slider saturationSlider = new Slider {
-            Width = 260,
-            Minimum = 0,
-            Maximum = 200,
-            Value = 120,
-            TickFrequency = 1,
-            IsSnapToTickEnabled = true
-        };
-
-        // движение ползунка меняет только выбранное число, а не изображение
-        TextBlock saturationValueText = new TextBlock();
-        saturationValueText.Bind(
-            TextBlock.TextProperty,
-            new Binding("Value") {
-                Source = saturationSlider,
-                StringFormat = "Текущее значение: {0:0}%"
-            });
-        saturationControls.Children.Add(saturationValueText);
-        saturationControls.Children.Add(saturationSlider);
-
-        Button addSaturationButton = new Button {
-            Content = "Добавить насыщенность",
-            HorizontalAlignment = HorizontalAlignment.Right
-        };
-        addSaturationButton.Click += (_, _) => {
-            if (DataContext is MainViewModel viewModel) {
-                // каждый новый шаг получает значение ползунка на момент нажатия
-                viewModel.AddAdvancedStep(
-                    ImageOperationType.Saturation,
-                    saturationSlider.Value);
-            }
-        };
-        saturationControls.Children.Add(addSaturationButton);
-
-        Border saturationCard = new Border {
-            Padding = new Thickness(12),
-            BorderBrush = Brushes.Gray,
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Child = saturationControls
-        };
+        return CreateAdjustmentCard(
+            title: "Насыщенность",
+            operationType: ImageOperationType.Saturation,
+            sliderMinimum: 0,
+            sliderMaximum: 200,
+            initialValue: 120,
+            inputMinimum: 0,
+            inputMaximum: null,
+            buttonText: "Добавить насыщенность");
         //}
-
-        return saturationCard;
     }
 
     private Border CreateContrastCard() {
         // карточка контрастности выбирает значение для нового шага очереди
-        StackPanel contrastControls = new StackPanel {
-            Spacing = 8
-        };
-        contrastControls.Children.Add(new TextBlock {
-            Text = "Контрастность",
-            FontWeight = FontWeight.SemiBold
-        });
-
-        Slider contrastSlider = new Slider {
-            Width = 260,
-            Minimum = -100,
-            Maximum = 100,
-            Value = 20,
-            TickFrequency = 1,
-            IsSnapToTickEnabled = true
-        };
-
-        TextBlock contrastValueText = new TextBlock();
-        contrastValueText.Bind(
-            TextBlock.TextProperty,
-            new Binding("Value") {
-                Source = contrastSlider,
-                StringFormat = "Текущее значение: {0:0}"
-            });
-        contrastControls.Children.Add(contrastValueText);
-        contrastControls.Children.Add(contrastSlider);
-
-        Button addContrastButton = new Button {
-            Content = "Добавить контрастность",
-            HorizontalAlignment = HorizontalAlignment.Right
-        };
-        addContrastButton.Click += (_, _) => {
-            if (DataContext is MainViewModel viewModel) {
-                // берем значение ползунка при нажатии и добавляем его в конец очереди
-                viewModel.AddAdvancedStep(
-                    ImageOperationType.Contrast,
-                    contrastSlider.Value);
-            }
-        };
-        contrastControls.Children.Add(addContrastButton);
-
-        Border contrastCard = new Border {
-            Padding = new Thickness(12),
-            BorderBrush = Brushes.Gray,
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Child = contrastControls
-        };
-
-        return contrastCard;
+        return CreateAdjustmentCard(
+            title: "Контрастность",
+            operationType: ImageOperationType.Contrast,
+            sliderMinimum: -100,
+            sliderMaximum: 100,
+            initialValue: 20,
+            inputMinimum: -100,
+            inputMaximum: 100,
+            buttonText: "Добавить контрастность");
     }
 
     private Border CreateSidebar() {

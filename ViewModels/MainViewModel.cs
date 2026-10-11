@@ -21,6 +21,16 @@ public partial class MainViewModel : ViewModelBase{
 
     private ImageHistogramData? originalHistogram;//отрисовка гистограм
 
+    // матрица для следующего морфологического шага, отдельно от уже добавленной очереди
+    public StructuralElement SelectedStructuralElement { get; private set; } =
+        StructuralElement.CreateCross();
+
+    public string StructuralElementDescription =>
+        $"{SelectedStructuralElement.Rows}×{SelectedStructuralElement.Columns}, " +
+        $"активных ячеек: {SelectedStructuralElement.ActiveCellCount}, " +
+        $"опора: ({SelectedStructuralElement.AnchorRow + 1}, " +
+        $"{SelectedStructuralElement.AnchorColumn + 1})";
+
     [ObservableProperty] //когда значение свойства изменилось, нужно уведомить интерфейс - тот подставит значение в внутренние созданные классы для отображения/работы визуализации
     public partial Bitmap? OriginalImage { get; set; }
 
@@ -172,6 +182,13 @@ public partial class MainViewModel : ViewModelBase{
 
         // берем ту же пару, которую уже рассчитали для текущего предпросмотра
         return HistogramComparison;
+    }
+
+    public void SetStructuralElement(StructuralElement structuralElement) {
+        SelectedStructuralElement = structuralElement;
+        // карточка обновит сведения о выбранной матрице, очередь и предпросмотр не меняем
+        OnPropertyChanged(nameof(SelectedStructuralElement));
+        OnPropertyChanged(nameof(StructuralElementDescription));
     }
 
     public void ShowError(string message)

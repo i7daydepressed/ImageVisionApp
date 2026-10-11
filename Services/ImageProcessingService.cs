@@ -65,12 +65,12 @@ public class ImageProcessingService{
         double brightnessAdjustment
         ){
 
-        if (brightnessAdjustment < -100 ||
-            brightnessAdjustment > 100) {
+        if (!double.IsFinite(brightnessAdjustment) ||
+            brightnessAdjustment < -100 || brightnessAdjustment > 100) {
 
             throw new ArgumentOutOfRangeException(
                 nameof(brightnessAdjustment),
-                "яркость должна быть от -100 до 100");
+                "яркость должна быть конечным числом от -100 до 100");
         }
 
         processedImage.BrightnessContrast(//https://github.com/ImageMagick/ImageMagick/blob/7.1.2-31/MagickCore/enhance.c#L225-L252
@@ -137,12 +137,11 @@ public class ImageProcessingService{
         // G = 125 + (100 - 125) × 1,5 = 87,5
         // B = 125 + (50 - 125) × 1,5 = 12,5
         
-        if (saturationPercentage < 0 ||
-            saturationPercentage > 200) {//https://github.com/dlemstra/Magick.NET/blob/0491ab4a43cac00f0326319a6daa8a59136b0901/src/Magick.NET/MagickImage.cs#L4180-L4211
+        if (!double.IsFinite(saturationPercentage) || saturationPercentage < 0) {//https://github.com/dlemstra/Magick.NET/blob/0491ab4a43cac00f0326319a6daa8a59136b0901/src/Magick.NET/MagickImage.cs#L4180-L4211
                                         //https://github.com/dlemstra/Magick.Native/blob/f36d33b6028f7799e2db39a4ae6e9c6de2aa3c0d/src/Magick.Native/MagickImage.c#L1813-L1818
             throw new ArgumentOutOfRangeException(//https://github.com/ImageMagick/ImageMagick/blob/d956bba0bacd70dc1fbe0d8dc3b87dca14086496/MagickCore/enhance.c#L3550-L3567
                 nameof(saturationPercentage),
-                "насыщенность должна быть от 0 до 200");
+                "насыщенность должна быть конечным числом не меньше 0");
         }
 
         processedImage.Modulate(
@@ -155,12 +154,12 @@ public class ImageProcessingService{
         double contrastAdjustment
         ) {
 
-        if (contrastAdjustment < -100 ||
-            contrastAdjustment > 100) {
+        if (!double.IsFinite(contrastAdjustment) ||
+            contrastAdjustment < -100 || contrastAdjustment > 100) {
 
             throw new ArgumentOutOfRangeException(
                 nameof(contrastAdjustment),
-                "контрастность должна быть от -100 до 100");
+                "контрастность должна быть конечным числом от -100 до 100");
         }
 
         processedImage.BrightnessContrast(//https://github.com/dlemstra/Magick.NET/blob/0491ab4a43cac00f0326319a6daa8a59136b0901/src/Magick.NET/MagickImage.cs#L1415-L1436
