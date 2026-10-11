@@ -40,7 +40,7 @@ public partial class MainWindow : Window {
         layout.Children.Add(CreateToolbar());
 
         // осн обл
-        // боковой панели оставляем 310, остальное место отдаём картинке
+        // боковой панели оставляем 310, остальное место отдаем картинке
         Grid workspace = new Grid {
             ColumnDefinitions = new ColumnDefinitions("310,*"),
             ColumnSpacing = 12,
@@ -66,8 +66,8 @@ public partial class MainWindow : Window {
 
         // pageScroll уже содержит весь обычный экран: настройки, изображение и гистограммы
         // Сохраняем ссылку на эту страницу, а в окно ставим pageHost — место для текущего экрана
-        // При переходе сюда подставим расширенный экран, а при возврате вернём тот же pageScroll
-        // Так обычный экран не придётся создавать заново
+        // При переходе сюда подставим расширенный экран, а при возврате вернем тот же pageScroll
+        // Так обычный экран не придется создавать заново
         simplePage = pageScroll;
         pageHost.Content = simplePage;
         // simplePage хранит страницу, а pageHost.Content определяет, какая страница сейчас показана
@@ -92,7 +92,7 @@ public partial class MainWindow : Window {
         histogramPanel.ShowComparison(histogramViewModel?.HistogramComparison);
     }
 
-    // реагирует только на новую пару гистограмм и передаёт ее панели
+    // реагирует только на новую пару гистограмм и передает ее панели
     private void HistogramViewModel_OnPropertyChanged(
         object? sender,
         PropertyChangedEventArgs e) {
@@ -104,7 +104,7 @@ public partial class MainWindow : Window {
         }
     }
 
-    private Border CreateToolbar() {
+    private Border CreateToolbar() {//покачто весь этот метод собирает всю вторую страницу
         // верх панель выбора картинки
         Button openButton = new Button {
             Content = "Открыть изображение"
@@ -196,9 +196,199 @@ public partial class MainWindow : Window {
         advancedWorkspace.Children.Add(advancedImageTabs);
 
         StackPanel advancedContent = new StackPanel();
+
+        Button addRotationButton = new Button {//ротейшен батен
+            Content = "Добавить поворот 90°",
+            Margin = new Thickness(12),
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        addRotationButton.Click += (_, _) => {//подписываем на ад
+            if (DataContext is MainViewModel viewModel) {
+                viewModel.AddAdvancedStep(ImageOperationType.Rotation, 90);
+            }
+        };
+
+        // Сначала показываем очередь действий и предпросмотр изображения.
         advancedContent.Children.Add(advancedWorkspace);
 
-        ScrollViewer advancedPage = new ScrollViewer {
+        //собираем содержимое НИЖНЕЙ панели страницы: заголовок и кнопку добавления поворота
+        StackPanel toolsContent = new StackPanel {
+            Spacing = 8 // расстояние между заголовком и кнопкой
+        };
+        toolsContent.Children.Add(new TextBlock {
+            Text = "Инструменты",
+            FontSize = 17
+        });
+        toolsContent.Children.Add(addRotationButton);
+
+        Button addGrayscaleButton = new Button {//кнопградации
+            Content = "Добавить градации серого",
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        addGrayscaleButton.Click += (_, _) => {//подписываем кнопк
+            if (DataContext is MainViewModel viewModel) {
+                viewModel.AddAdvancedStep(ImageOperationType.Grayscale);
+            }
+        };
+        toolsContent.Children.Add(addGrayscaleButton);
+        // сохраняем результат текущей очереди через обработчик расширенного режима
+        Button saveAdvancedButton = new Button {
+            Content = "Сохранить результат",
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        saveAdvancedButton.Click += SaveAdvancedResultButton_OnClick;
+        // сбрасываем всю очередь; результат снова строится из исходного изображения
+        Button resetAdvancedButton = new Button {
+            Content = "Сбросить изменения",
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        resetAdvancedButton.Click += (_, _) => {
+            if (DataContext is MainViewModel viewModel) {
+                viewModel.ResetAdvancedQueue();
+            }
+        };
+        toolsContent.Children.Add(resetAdvancedButton);
+        toolsContent.Children.Add(saveAdvancedButton);
+
+        // Поле и кнопка стоят рядом: сначала выбираем значение яркости, затем добавляем его в очередь.
+        // Карточка яркости: выбранное значение, ползунок и добавление шага в очередь.
+        StackPanel brightnessControls = new StackPanel {
+            Spacing = 8
+        };
+        brightnessControls.Children.Add(new TextBlock {
+            Text = "Яркость",
+            FontWeight = FontWeight.SemiBold
+        });
+
+        Slider brightnessSlider = new Slider {
+            Width = 260,
+            Minimum = -100,
+            Maximum = 100,
+            Value = 20,
+            TickFrequency = 1,
+            IsSnapToTickEnabled = true
+        };
+
+        // показываем текущее положение ползунка, не меняя само изображение
+        TextBlock brightnessValueText = new TextBlock();
+        brightnessValueText.Bind(
+            TextBlock.TextProperty,
+            new Binding("Value") {
+                Source = brightnessSlider,
+                StringFormat = "Текущее значение: {0:0}"
+            });
+        brightnessControls.Children.Add(brightnessValueText);
+        brightnessControls.Children.Add(brightnessSlider);
+
+        Button addBrightnessButton = new Button {
+            Content = "Добавить яркость",
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        addBrightnessButton.Click += (_, _) => {
+            if (DataContext is MainViewModel viewModel) {
+                // только при нажатии создаем шаг со значением ползунка на этот момент
+                viewModel.AddAdvancedStep(
+                    ImageOperationType.Brightness,
+                    brightnessSlider.Value);
+            }
+        };
+        brightnessControls.Children.Add(addBrightnessButton);
+
+        Border brightnessCard = new Border {
+            Padding = new Thickness(12),
+            BorderBrush = Brushes.Gray,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Child = brightnessControls
+        };
+
+        // Внизу две области: слева быстрые действия, справа карточки с параметрами.
+        Grid toolsLayout = new Grid {
+            ColumnDefinitions = new ColumnDefinitions("260,*"),
+            ColumnSpacing = 12
+        };
+        toolsLayout.Children.Add(toolsContent);
+
+        // карточки действий идут слева направо; если ширины не хватит, следующая перейдет ниже
+        WrapPanel adjustmentCards = new WrapPanel {
+            ItemSpacing = 12,
+            LineSpacing = 12
+        };
+        adjustmentCards.Children.Add(brightnessCard);
+
+        // карточка насыщенности у продвинутого режима{
+        StackPanel saturationControls = new StackPanel {
+            Spacing = 8
+        };
+        saturationControls.Children.Add(new TextBlock {
+            Text = "Насыщенность",
+            FontWeight = FontWeight.SemiBold
+        });
+
+        // 100% сохраняет исходные цвета, меньше 100 ослабляет их, больше 100 усиливает
+        Slider saturationSlider = new Slider {
+            Width = 260,
+            Minimum = 0,
+            Maximum = 200,
+            Value = 120,
+            TickFrequency = 1,
+            IsSnapToTickEnabled = true
+        };
+
+        // движение ползунка меняет только выбранное число, а не изображение
+        TextBlock saturationValueText = new TextBlock();
+        saturationValueText.Bind(
+            TextBlock.TextProperty,
+            new Binding("Value") {
+                Source = saturationSlider,
+                StringFormat = "Текущее значение: {0:0}%"
+            });
+        saturationControls.Children.Add(saturationValueText);
+        saturationControls.Children.Add(saturationSlider);
+
+        Button addSaturationButton = new Button {
+            Content = "Добавить насыщенность",
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        addSaturationButton.Click += (_, _) => {
+            if (DataContext is MainViewModel viewModel) {
+                // каждый новый шаг получает значение ползунка на момент нажатия
+                viewModel.AddAdvancedStep(
+                    ImageOperationType.Saturation,
+                    saturationSlider.Value);
+            }
+        };
+        saturationControls.Children.Add(addSaturationButton);
+
+        Border saturationCard = new Border {
+            Padding = new Thickness(12),
+            BorderBrush = Brushes.Gray,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Child = saturationControls
+        };
+        adjustmentCards.Children.Add(saturationCard);
+        //}
+
+        // в правом столбце теперь находится контейнер карточек, а не одна карточка
+        Grid.SetColumn(adjustmentCards, 1);
+        toolsLayout.Children.Add(adjustmentCards);
+
+        // общая рамка нижней панели охватывает обе области
+        Border advancedToolsPanel = new Border {
+            Margin = new Thickness(12),
+            Padding = new Thickness(12),
+            MinHeight = 180,
+            BorderBrush = Brushes.Gray,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Child = toolsLayout
+        };
+        advancedContent.Children.Add(advancedToolsPanel);
+
+        ScrollViewer advancedPage = new ScrollViewer {//скрол
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Content = advancedContent
@@ -253,7 +443,7 @@ public partial class MainWindow : Window {
     private TabControl CreateSidebar() {
         return new TabControl {
             SelectedIndex = 0,
-            // это раскладка заголовков вкладок, само содержимое задаём в Content
+            // это раскладка заголовков вкладок, само содержимое задаем в Content
             ItemsPanel = new FuncTemplate<Panel?>(() => new StackPanel {
                 Orientation = Orientation.Horizontal
             }),
@@ -308,7 +498,7 @@ public partial class MainWindow : Window {
             }),
             Items = {
                 CreateImageTab("Оригинал", originalImage),
-                CreateImageTab("Изменённое", modifiedImage)
+                CreateImageTab("Измененное", modifiedImage)
             }
         };
     }
@@ -328,7 +518,7 @@ public partial class MainWindow : Window {
         Expression<Func<MainViewModel, TValue>> expression) {
 
         TextBlock textBlock = new TextBlock();
-        // берём значение из DataContext, дальше обновления ловит сама привязка
+        // берем значение из DataContext, дальше обновления ловит сама привязка
         textBlock.Bind(TextBlock.TextProperty, CompiledBinding.Create(expression));
         return textBlock;
     }

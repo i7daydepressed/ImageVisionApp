@@ -212,14 +212,29 @@ public partial class MainWindow {
         object? sender,
         RoutedEventArgs e
         ) {
+        await SaveResultAsync(useAdvancedQueue: false);
+    }
+    
+    // кнопка расширенного режима сохраняет результат очереди AdvancedSteps
+    private async void SaveAdvancedResultButton_OnClick(
+        object? sender,
+        RoutedEventArgs e
+        ) {
+        await SaveResultAsync(useAdvancedQueue: true);
+    }
+
+    // выбирает байты нужного режима, затем показывает диалог и записывает пнг в файл
+    private async System.Threading.Tasks.Task SaveResultAsync(bool useAdvancedQueue) {
 
         if (DataContext is not MainViewModel viewModel) {
             return;
         }
 
         try {
-            byte[]? processedImageData =
-                viewModel.CreateProcessedImageData();
+            // в простом режиме результат строится из Settings, в расширенном очеред
+            byte[]? processedImageData = useAdvancedQueue
+                ? viewModel.CreateAdvancedProcessedImageData()
+                : viewModel.CreateProcessedImageData();
 
             if (processedImageData is null) {
                 return;

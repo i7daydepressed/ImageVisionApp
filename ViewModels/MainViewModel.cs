@@ -316,6 +316,44 @@ public partial class MainViewModel : ViewModelBase{
         ApplyAdvancedQueue();
     }
 
+    // добавляет действие в конец очереди и пересчитывает изображение по всем шагам
+    public void AddAdvancedStep(ImageOperationType type, double parameter = 0) {
+        if (originalImageData is null) {
+            StatusMessage = "Сначала выберите изображение";
+            return;
+        }
+
+        AdvancedSteps.Add(new ImageEditStep(type, parameter));
+        advancedQueueCustomized = true;
+        ApplyAdvancedQueue();
+        // цепочка здесь такая создаем ImageEditStep → добавляем в AdvancedSteps → ListBox получает новую строку → ApplyAdvancedQueue() пересчитывает картинку и гистограмму
+    }
+
+    // убирает все действия расширенного режима и пересчитывает результат из исходного изображения
+    // помечаем очередь изменённой, чтобы при повторном входе настройки простого режима не добавились обратно
+    public void ResetAdvancedQueue() {
+        if (originalImageData is null) {
+            StatusMessage = "Сначала выберите изображение";
+            return;
+        }
+
+        AdvancedSteps.Clear();
+        advancedQueueCustomized = true;
+        ApplyAdvancedQueue();
+    }
+
+    // готовит результат расширенного редактора для сохранения
+    public byte[]? CreateAdvancedProcessedImageData() {
+        if (originalImageData is null) {
+            StatusMessage = "Сначала выберите изображение";
+            return null;
+        }
+
+        return imageProcessingService.ApplySteps(// берет исходное изображение и заново применяет к нему действия из AdvancedSteps по порядку
+            originalImageData,
+            AdvancedSteps);
+    }
+
     public byte[]? CreateProcessedImageData() {//создать итог байты изм избрж
 
         if (originalImageData is null) {
