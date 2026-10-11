@@ -143,16 +143,21 @@ public partial class MainWindow : Window {
         ListBox queueList = new ListBox {//внешеий вид элемента в очереди
             ItemTemplate = new FuncDataTemplate<ImageEditStep>((step, _) => {//получает один элемент из AdvancedSteps к примеру step может быть действием яркость +50
                 Grid row = new Grid {
-                    ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"),//делим строку
-                    ColumnSpacing = 6
+                    ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"),
+                    RowDefinitions = new RowDefinitions("Auto,Auto"),
+                    ColumnSpacing = 6,
+                    RowSpacing = 8,
+                    MinHeight = 60
                 };
 
                 TextBlock name = new TextBlock {//текст блок шага
-                    VerticalAlignment = VerticalAlignment.Center
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextWrapping = TextWrapping.Wrap
                 };
                 name.Bind(
                     TextBlock.TextProperty,
                     new Avalonia.Data.Binding("DisplayName"));//название шага
+                Grid.SetColumnSpan(name, 4);
                 row.Children.Add(name);
 
                 Button moveUpButton = new Button {
@@ -164,6 +169,7 @@ public partial class MainWindow : Window {
                         viewModel.MoveAdvancedStep(step, -1);
                     }
                 };
+                Grid.SetRow(moveUpButton, 1);
                 Grid.SetColumn(moveUpButton, 1);
                 row.Children.Add(moveUpButton);
 
@@ -176,6 +182,7 @@ public partial class MainWindow : Window {
                         viewModel.MoveAdvancedStep(step, 1);
                     }
                 };
+                Grid.SetRow(moveDownButton, 1);
                 Grid.SetColumn(moveDownButton, 2);
                 row.Children.Add(moveDownButton);
 
@@ -190,7 +197,8 @@ public partial class MainWindow : Window {
                     // запоминает step, для которого создали кнопку при нажатии вызывает MainViewModel.RemoveAdvancedStep(step), то есть удаляет именно это действие
                 };
 
-                Grid.SetColumn(removeButton, 3);//ставит минус справа
+                Grid.SetRow(removeButton, 1);
+                Grid.SetColumn(removeButton, 3);// ставит минус справа
                 row.Children.Add(removeButton);
                 return row;
             })
