@@ -127,8 +127,8 @@ public partial class MainWindow : Window {
 
         advancedButton.Click += (_, _) => {
             if (DataContext is MainViewModel viewModel) {
-                viewModel.PrepareAdvancedQueue();//перед открытием расширенного вида переносим текущие настройки в очередь действий
-                viewModel.ApplyAdvancedQueue();//применяем собранные шаги к исходнику и обновляем картинку с гистограммой
+                // применяем текущую очередь к исходнику и обновляем картинку с гистограммой
+                viewModel.ApplyAdvancedQueue();
             }
 
             pageHost.Content = advancedPage;
