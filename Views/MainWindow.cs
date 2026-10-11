@@ -106,7 +106,7 @@ public partial class MainWindow : Window {
         }
     }
 
-    private Border CreateToolbar() {//покачто весь этот метод собирает всю вторую страницу
+    private Border CreateToolbar() {
         // верх панель выбора картинки
         Button openButton = new Button {
             Content = "Открыть изображение"
@@ -122,6 +122,71 @@ public partial class MainWindow : Window {
             IsVisible = false
         };
 
+        // страницу создаем один раз, при переходах меняем только содержимое pageHost
+        ScrollViewer advancedPage = CreateAdvancedPage();
+
+        advancedButton.Click += (_, _) => {
+            if (DataContext is MainViewModel viewModel) {
+                viewModel.PrepareAdvancedQueue();//перед открытием расширенного вида переносим текущие настройки в очередь действий
+                viewModel.ApplyAdvancedQueue();//применяем собранные шаги к исходнику и обновляем картинку с гистограммой
+            }
+
+            pageHost.Content = advancedPage;
+            openButton.IsVisible = false;
+            advancedButton.IsVisible = false;
+            backButton.IsVisible = true;
+        };
+
+        backButton.Click += (_, _) => {
+            pageHost.Content = simplePage;//симл пейдж
+            backButton.IsVisible = false;
+            openButton.IsVisible = true;
+            advancedButton.IsVisible = true;
+        };
+
+        TextBlock statusText =
+            CreateBoundText(viewModel => viewModel.StatusMessage);
+        statusText.VerticalAlignment = VerticalAlignment.Center;
+
+        Grid toolbarContent = new Grid {
+            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
+            ColumnSpacing = 12
+        };
+
+        // слева видна кнопка открытия или стрелка назад
+        toolbarContent.Children.Add(openButton);
+        toolbarContent.Children.Add(backButton);
+
+        Grid.SetColumn(statusText, 1);
+        toolbarContent.Children.Add(statusText);
+
+        Grid.SetColumn(advancedButton, 2);
+        toolbarContent.Children.Add(advancedButton);
+
+        return new Border {
+            Padding = new Thickness(12),
+            BorderBrush = Brushes.Gray,
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            Child = toolbarContent
+        };
+    }
+
+    private ScrollViewer CreateAdvancedPage() {
+        StackPanel advancedContent = new StackPanel();
+        // сначала показываем очередь действий и предпросмотр изображения
+        advancedContent.Children.Add(CreateAdvancedWorkspace());
+        advancedContent.Children.Add(CreateAdvancedToolsPanel());
+        // вторая панель показывает ту же пару гистограмм под инструментами
+        advancedContent.Children.Add(advancedHistogramPanel);
+
+        return new ScrollViewer {//скрол
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Content = advancedContent
+        };
+    }
+
+    private Grid CreateAdvancedWorkspace() {
         Grid advancedWorkspace = new Grid {
             ColumnDefinitions = new ColumnDefinitions("260,*"),
             ColumnSpacing = 12,
@@ -129,6 +194,19 @@ public partial class MainWindow : Window {
             Height = 620
         };
 
+        advancedWorkspace.Children.Add(CreateAdvancedQueuePanel());
+
+        //здесь свои вкладки, но обе картинки берутся из общей MainViewModel
+        TabControl advancedImageTabs = CreateImageTabs();
+        advancedImageTabs.SelectedIndex = 1;
+
+        Grid.SetColumn(advancedImageTabs, 1);
+        advancedWorkspace.Children.Add(advancedImageTabs);
+
+        return advancedWorkspace;
+    }
+
+    private Border CreateAdvancedQueuePanel() {
         Grid queueContent = new Grid {
             RowDefinitions = new RowDefinitions("Auto,*"),
             RowSpacing = 8
@@ -141,67 +219,7 @@ public partial class MainWindow : Window {
 
         
         ListBox queueList = new ListBox {//внешеий вид элемента в очереди
-            ItemTemplate = new FuncDataTemplate<ImageEditStep>((step, _) => {//получает один элемент из AdvancedSteps к примеру step может быть действием яркость +50
-                Grid row = new Grid {
-                    ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"),
-                    RowDefinitions = new RowDefinitions("Auto,Auto"),
-                    ColumnSpacing = 6,
-                    RowSpacing = 8,
-                    MinHeight = 60
-                };
-
-                TextBlock name = new TextBlock {//текст блок шага
-                    VerticalAlignment = VerticalAlignment.Center,
-                    TextWrapping = TextWrapping.Wrap
-                };
-                name.Bind(
-                    TextBlock.TextProperty,
-                    new Avalonia.Data.Binding("DisplayName"));//название шага
-                Grid.SetColumnSpan(name, 4);
-                row.Children.Add(name);
-
-                Button moveUpButton = new Button {
-                    Content = "↑",
-                    MinWidth = 28
-                };
-                moveUpButton.Click += (_, _) => {
-                    if (DataContext is MainViewModel viewModel) {
-                        viewModel.MoveAdvancedStep(step, -1);
-                    }
-                };
-                Grid.SetRow(moveUpButton, 1);
-                Grid.SetColumn(moveUpButton, 1);
-                row.Children.Add(moveUpButton);
-
-                Button moveDownButton = new Button {
-                    Content = "↓",
-                    MinWidth = 28
-                };
-                moveDownButton.Click += (_, _) => {
-                    if (DataContext is MainViewModel viewModel) {
-                        viewModel.MoveAdvancedStep(step, 1);
-                    }
-                };
-                Grid.SetRow(moveDownButton, 1);
-                Grid.SetColumn(moveDownButton, 2);
-                row.Children.Add(moveDownButton);
-
-                Button removeButton = new Button {//минусик для удаления
-                    Content = "−",
-                    MinWidth = 28
-                };
-                removeButton.Click += (_, _) => {// подписываем минусик
-                    if (DataContext is MainViewModel viewModel) {
-                        viewModel.RemoveAdvancedStep(step);
-                    }
-                    // запоминает step, для которого создали кнопку при нажатии вызывает MainViewModel.RemoveAdvancedStep(step), то есть удаляет именно это действие
-                };
-
-                Grid.SetRow(removeButton, 1);
-                Grid.SetColumn(removeButton, 3);// ставит минус справа
-                row.Children.Add(removeButton);
-                return row;
-            })
+            ItemTemplate = new FuncDataTemplate<ImageEditStep>((step, _) => CreateAdvancedQueueRow(step))
         };
 
         queueList.Bind(// берем действия из AdvancedSteps во ViewModel: при добавлении или удалении шага список обновится
@@ -219,18 +237,107 @@ public partial class MainWindow : Window {
             Child = queueContent
         };
 
+        return queuePlaceholder;
+    }
 
-        advancedWorkspace.Children.Add(queuePlaceholder);
+    //получает один элемент из AdvancedSteps к примеру step может быть действием яркость +50
+    private Grid CreateAdvancedQueueRow(ImageEditStep? step) {
+        Grid row = new Grid {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"),
+            RowDefinitions = new RowDefinitions("Auto,Auto"),
+            ColumnSpacing = 6,
+            RowSpacing = 8,
+            MinHeight = 60
+        };
 
-        //здесь свои вкладки, но обе картинки берутся из общей MainViewModel
-        TabControl advancedImageTabs = CreateImageTabs();
-        advancedImageTabs.SelectedIndex = 1;
+        TextBlock name = new TextBlock {//текст блок шага
+            VerticalAlignment = VerticalAlignment.Center,
+            TextWrapping = TextWrapping.Wrap
+        };
+        name.Bind(
+            TextBlock.TextProperty,
+            new Avalonia.Data.Binding("DisplayName"));//название шага
+        Grid.SetColumnSpan(name, 4);
+        row.Children.Add(name);
 
-        Grid.SetColumn(advancedImageTabs, 1);
-        advancedWorkspace.Children.Add(advancedImageTabs);
+        Button moveUpButton = new Button {
+            Content = "↑",
+            MinWidth = 28
+        };
+        moveUpButton.Click += (_, _) => {
+            if (DataContext is MainViewModel viewModel) {
+                viewModel.MoveAdvancedStep(step, -1);
+            }
+        };
+        Grid.SetRow(moveUpButton, 1);
+        Grid.SetColumn(moveUpButton, 1);
+        row.Children.Add(moveUpButton);
 
-        StackPanel advancedContent = new StackPanel();
+        Button moveDownButton = new Button {
+            Content = "↓",
+            MinWidth = 28
+        };
+        moveDownButton.Click += (_, _) => {
+            if (DataContext is MainViewModel viewModel) {
+                viewModel.MoveAdvancedStep(step, 1);
+            }
+        };
+        Grid.SetRow(moveDownButton, 1);
+        Grid.SetColumn(moveDownButton, 2);
+        row.Children.Add(moveDownButton);
 
+        Button removeButton = new Button {//минусик для удаления
+            Content = "−",
+            MinWidth = 28
+        };
+        removeButton.Click += (_, _) => {// подписываем минусик
+            if (DataContext is MainViewModel viewModel) {
+                viewModel.RemoveAdvancedStep(step);
+            }
+            // запоминает step, для которого создали кнопку при нажатии вызывает MainViewModel.RemoveAdvancedStep(step), то есть удаляет именно это действие
+        };
+
+        Grid.SetRow(removeButton, 1);
+        Grid.SetColumn(removeButton, 3);// ставит минус справа
+        row.Children.Add(removeButton);
+        return row;
+    }
+
+    private Border CreateAdvancedToolsPanel() {
+        // Внизу две области: слева быстрые действия, справа карточки с параметрами.
+        Grid toolsLayout = new Grid {
+            ColumnDefinitions = new ColumnDefinitions("260,*"),
+            ColumnSpacing = 12
+        };
+        toolsLayout.Children.Add(CreateQuickActionsPanel());
+
+        // карточки действий идут слева направо; если ширины не хватит, следующая перейдет ниже
+        WrapPanel adjustmentCards = new WrapPanel {
+            ItemSpacing = 12,
+            LineSpacing = 12
+        };
+        adjustmentCards.Children.Add(CreateBrightnessCard());
+        adjustmentCards.Children.Add(CreateSaturationCard());
+        adjustmentCards.Children.Add(CreateContrastCard());
+
+        // карточки с параметрами ставим в правый столбец
+        Grid.SetColumn(adjustmentCards, 1);
+        toolsLayout.Children.Add(adjustmentCards);
+
+        // общая рамка нижней панели охватывает обе области
+        Border advancedToolsPanel = new Border {
+            Margin = new Thickness(12),
+            Padding = new Thickness(12),
+            MinHeight = 180,
+            BorderBrush = Brushes.Gray,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Child = toolsLayout
+        };
+        return advancedToolsPanel;
+    }
+
+    private StackPanel CreateQuickActionsPanel() {
         Button addRotationButton = new Button {//ротейшен батен
             Content = "Добавить поворот 90°",
             Margin = new Thickness(12),
@@ -242,10 +349,7 @@ public partial class MainWindow : Window {
             }
         };
 
-        // Сначала показываем очередь действий и предпросмотр изображения.
-        advancedContent.Children.Add(advancedWorkspace);
-
-        //собираем содержимое НИЖНЕЙ панели страницы: заголовок и кнопку добавления поворота
+        // собираем быстрые действия в прежнем порядке, затем сброс и сохранение
         StackPanel toolsContent = new StackPanel {
             Spacing = 8 // расстояние между заголовком и кнопкой
         };
@@ -306,6 +410,10 @@ public partial class MainWindow : Window {
         toolsContent.Children.Add(resetAdvancedButton);
         toolsContent.Children.Add(saveAdvancedButton);
 
+        return toolsContent;
+    }
+
+    private Border CreateBrightnessCard() {
         // Поле и кнопка стоят рядом: сначала выбираем значение яркости, затем добавляем его в очередь.
         // Карточка яркости: выбранное значение, ползунок и добавление шага в очередь.
         StackPanel brightnessControls = new StackPanel {
@@ -359,20 +467,10 @@ public partial class MainWindow : Window {
             Child = brightnessControls
         };
 
-        // Внизу две области: слева быстрые действия, справа карточки с параметрами.
-        Grid toolsLayout = new Grid {
-            ColumnDefinitions = new ColumnDefinitions("260,*"),
-            ColumnSpacing = 12
-        };
-        toolsLayout.Children.Add(toolsContent);
+        return brightnessCard;
+    }
 
-        // карточки действий идут слева направо; если ширины не хватит, следующая перейдет ниже
-        WrapPanel adjustmentCards = new WrapPanel {
-            ItemSpacing = 12,
-            LineSpacing = 12
-        };
-        adjustmentCards.Children.Add(brightnessCard);
-
+    private Border CreateSaturationCard() {
         // карточка насыщенности у продвинутого режима{
         StackPanel saturationControls = new StackPanel {
             Spacing = 8
@@ -425,9 +523,12 @@ public partial class MainWindow : Window {
             HorizontalAlignment = HorizontalAlignment.Left,
             Child = saturationControls
         };
-        adjustmentCards.Children.Add(saturationCard);
         //}
 
+        return saturationCard;
+    }
+
+    private Border CreateContrastCard() {
         // карточка контрастности выбирает значение для нового шага очереди
         StackPanel contrastControls = new StackPanel {
             Spacing = 8
@@ -478,76 +579,8 @@ public partial class MainWindow : Window {
             HorizontalAlignment = HorizontalAlignment.Left,
             Child = contrastControls
         };
-        adjustmentCards.Children.Add(contrastCard);
 
-        // в правом столбце теперь находится контейнер карточек, а не одна карточка
-        Grid.SetColumn(adjustmentCards, 1);
-        toolsLayout.Children.Add(adjustmentCards);
-
-        // общая рамка нижней панели охватывает обе области
-        Border advancedToolsPanel = new Border {
-            Margin = new Thickness(12),
-            Padding = new Thickness(12),
-            MinHeight = 180,
-            BorderBrush = Brushes.Gray,
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
-            Child = toolsLayout
-        };
-        advancedContent.Children.Add(advancedToolsPanel);
-        // вторая панель показывает ту же пару гистограмм под инструментами
-        advancedContent.Children.Add(advancedHistogramPanel);
-
-        ScrollViewer advancedPage = new ScrollViewer {//скрол
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Content = advancedContent
-        };
-
-        advancedButton.Click += (_, _) => {
-            if (DataContext is MainViewModel viewModel) {
-                viewModel.PrepareAdvancedQueue();//перед открытием расширенного вида переносим текущие настройки в очередь действий
-                viewModel.ApplyAdvancedQueue();//применяем собранные шаги к исходнику и обновляем картинку с гистограммой
-            }
-
-            pageHost.Content = advancedPage;
-            openButton.IsVisible = false;
-            advancedButton.IsVisible = false;
-            backButton.IsVisible = true;
-        };
-
-        backButton.Click += (_, _) => {
-            pageHost.Content = simplePage;//симл пейдж
-            backButton.IsVisible = false;
-            openButton.IsVisible = true;
-            advancedButton.IsVisible = true;
-        };
-
-        TextBlock statusText =
-            CreateBoundText(viewModel => viewModel.StatusMessage);
-        statusText.VerticalAlignment = VerticalAlignment.Center;
-
-        Grid toolbarContent = new Grid {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
-            ColumnSpacing = 12
-        };
-
-        // Слева видна кнопка открытия или стрелка назад
-        toolbarContent.Children.Add(openButton);
-        toolbarContent.Children.Add(backButton);
-
-        Grid.SetColumn(statusText, 1);
-        toolbarContent.Children.Add(statusText);
-
-        Grid.SetColumn(advancedButton, 2);
-        toolbarContent.Children.Add(advancedButton);
-
-        return new Border {
-            Padding = new Thickness(12),
-            BorderBrush = Brushes.Gray,
-            BorderThickness = new Thickness(0, 0, 0, 1),
-            Child = toolbarContent
-        };
+        return contrastCard;
     }
 
     private Border CreateSidebar() {
