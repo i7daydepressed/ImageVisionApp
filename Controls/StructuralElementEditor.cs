@@ -13,6 +13,50 @@ using ImageVisionApp.Models;
 namespace ImageVisionApp.Controls;
 
 public sealed class StructuralElementEditor : UserControl {
+    // режим задает одно действие по щелчку, значение, выделение и опору храним независимо
+    private enum CellEditMode {
+        ToggleValue,
+        SelectCells,
+        SetAnchor
+    }
+
+    private CellEditMode editMode = CellEditMode.ToggleValue;
+    // здесь только временные отметки с индексами от 0, в сохраняемую матрицу они не попадают
+    private readonly HashSet<(int Row, int Column)> selectedCells =
+        new HashSet<(int Row, int Column)>();
+    // по координатам получаем уже созданную кнопку, чтобы группа не пересоздавала всю сетку
+    private readonly Dictionary<(int Row, int Column), Button> cellButtons =
+        new Dictionary<(int Row, int Column), Button>();
+    private readonly ComboBox editModeInput = new ComboBox {
+        ItemsSource = new string[] {
+            "Изменять 0/1",
+            "Выделять клетки",
+            "Назначать опору"
+        },
+        SelectedIndex = 0,
+        HorizontalAlignment = HorizontalAlignment.Stretch
+    };
+    private readonly TextBlock editModeHint = new TextBlock {
+        TextWrapping = TextWrapping.Wrap,
+        FontSize = 12
+    };
+    private readonly TextBlock selectionCountText = new TextBlock {
+        Text = "Выделено клеток: 0"
+    };
+    private readonly Button selectedZeroButton = new Button {
+        Content = "Установить 0",
+        IsEnabled = false
+    };
+    private readonly Button selectedOneButton = new Button {
+        Content = "Установить 1",
+        IsEnabled = false
+    };
+    private readonly Button clearSelectionButton = new Button {
+        Content = "Снять выделение",
+        IsEnabled = false,
+        HorizontalAlignment = HorizontalAlignment.Stretch
+    };
+
     private const double CellSide = 36;
     private const double CellGap = 4;
     private const double RulerWidth = 44;
@@ -123,6 +167,8 @@ public sealed class StructuralElementEditor : UserControl {
         hoveredColumn = null;
         inspectedRow = null;
         inspectedColumn = null;
+        // у нового снимка нет старых отметок, выбранный режим щелчка при этом сохраняем
+        selectedCells.Clear();
         CancelPendingScrollOffset();
         RenderCells();
         if (fitToViewport) {
@@ -190,8 +236,9 @@ public sealed class StructuralElementEditor : UserControl {
                 description,
                 inputs,
                 applySizeButton,
+                CreateEditControls(),
                 new TextBlock {
-                    Text = "0 — сосед исключен, 1 — включен.\nКрасная рамка — опорная точка.\nX — столбец, Y — строка; счет с 1.",
+                    Text = "0 — сосед исключен, 1 — включен.\nКрасная рамка — выделение.\nГолубая внутренняя рамка — опора.\nЖелтые номера — наведение.\nX — столбец, Y — строка; счет с 1.",
                     TextWrapping = TextWrapping.Wrap
                 },
                 CreateCellInfoPanel(),
@@ -207,6 +254,48 @@ public sealed class StructuralElementEditor : UserControl {
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Top,
             Child = settings
+        };
+    }
+
+    private Border CreateEditControls() { // собираем выбор режима и группу для работы с черновиком из одной панели
+        // карточку собираем один раз, поэтому подписки не добавляются при обновлении матрицы
+        editModeInput.SelectionChanged += (_, _) => {
+            editMode = editModeInput.SelectedIndex switch {
+                1 => CellEditMode.SelectCells,
+                2 => CellEditMode.SetAnchor,
+                _ => CellEditMode.ToggleValue
+            };
+            // меняем только действие следующего щелчка, текущие значения и отметки не трогаем
+            UpdateSelectionControls();
+            UpdateCellInfo();
+        };
+        selectedZeroButton.Click += (_, _) => SetSelectedCells(false);
+        selectedOneButton.Click += (_, _) => SetSelectedCells(true);
+        clearSelectionButton.Click += (_, _) => ClearCellSelection();
+        UpdateSelectionControls();
+        return new Border {
+            Padding = new Thickness(10),
+            BorderBrush = Brushes.Gray,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Child = new StackPanel {
+                Spacing = 8,
+                Children = {
+                    new TextBlock {
+                        Text = "Действие по щелчку",
+                        FontWeight = FontWeight.SemiBold
+                    },
+                    editModeInput,
+                    editModeHint,
+                    selectionCountText,
+                    new WrapPanel {
+                        ItemSpacing = 8,
+                        LineSpacing = 6,
+                        Children = { selectedZeroButton, selectedOneButton }
+                    },
+                    clearSelectionButton
+                }
+            }
         };
     }
 
@@ -372,6 +461,48 @@ public sealed class StructuralElementEditor : UserControl {
         };
     }
 
+    private void UpdateSelectionControls() { // согласуем счетчик, доступность кнопок и подсказку с отметками и режимом
+        selectionCountText.Text = $"Выделено клеток: {selectedCells.Count}";
+        // группа доступна в любом режиме, ее ограничивает только наличие отметок
+        bool hasSelection = selectedCells.Count > 0;
+        selectedZeroButton.IsEnabled = hasSelection;
+        selectedOneButton.IsEnabled = hasSelection;
+        clearSelectionButton.IsEnabled = hasSelection;
+        editModeHint.Text = editMode switch {
+            CellEditMode.SelectCells => "Щелчок добавляет или снимает выделение, значение 0/1 сохраняется",
+            CellEditMode.SetAnchor => "Щелчок назначает единственную опору, значение 0/1 сохраняется",
+            _ => "Щелчок переключает значение клетки между 0 и 1"
+        };
+    }
+
+    private void SetSelectedCells(bool value) { // задаем одно 0/1 всем отметкам, чтобы менять разрозненный набор вместе
+        if (selectedCells.Count == 0) {
+            return;
+        }
+        // меняем только отмеченные позиции черновика, выделение и опора остаются прежними
+        foreach ((int Row, int Column) coordinate in selectedCells) {
+            cells[coordinate.Row, coordinate.Column] = value;
+            RefreshCellVisual(coordinate.Row, coordinate.Column);
+        }
+        // сведения должны показать новое 0/1 у клетки под указателем или последнего щелчка
+        UpdateSelectionControls();
+        UpdateCellInfo();
+        statusText.Text = $"Выделенным клеткам установлено {(value ? 1 : 0)}";
+    }
+
+    private void ClearCellSelection() { // снимаем отметки и рамки, сохраняя значения и единственную опору
+        // берем копию координат до очистки, иначе не найдем кнопки со старой красной рамкой
+        List<(int Row, int Column)> previousSelection =
+            new List<(int Row, int Column)>(selectedCells);
+        selectedCells.Clear();
+        foreach ((int Row, int Column) coordinate in previousSelection) {
+            RefreshCellVisual(coordinate.Row, coordinate.Column);
+        }
+        UpdateSelectionControls();
+        UpdateCellInfo();
+        statusText.Text = "";
+    }
+
     private void BuildRulers() {
         rowRuler.Children.Clear();
         columnRuler.Children.Clear();
@@ -504,7 +635,7 @@ public sealed class StructuralElementEditor : UserControl {
         if (!infoRow.HasValue || !infoColumn.HasValue ||
             infoRow.Value < 0 || infoRow.Value >= cells.GetLength(0) ||
             infoColumn.Value < 0 || infoColumn.Value >= cells.GetLength(1)) {
-            cellInfoText.Text = "Наведите указатель на клетку\nЩелчок переключает 0/1 и запоминает ее координаты";
+            cellInfoText.Text = $"Наведите указатель на клетку\n{editModeHint.Text}";
             return;
         }
         int row = infoRow.Value;
@@ -516,12 +647,14 @@ public sealed class StructuralElementEditor : UserControl {
             ? "1 — позиция входит в соседство"
             : "0 — позиция исключена из соседства";
         string anchor = isAnchor ? "да" : "нет";
+        string selected = selectedCells.Contains((row, column)) ? "да" : "нет";
         // смещение относительно опоры станет адресом соседнего пикселя при морфологии
         int offsetX = column - anchorColumn;
         int offsetY = row - anchorRow;
         cellInfoText.Text =
             $"{source}: X = {column + 1}, Y = {row + 1}\n" +
             $"{meaning}\n" +
+            $"Выделена: {selected}\n" +
             $"Опорная точка: {anchor}\n" +
             $"От опоры: ΔX = {offsetX:+0;-0;0}, ΔY = {offsetY:+0;-0;0}\n" +
             "X — столбец, вправо; Y — строка, вниз";
@@ -729,7 +862,7 @@ public sealed class StructuralElementEditor : UserControl {
             return;
         }
         // macOS передает приращение magnification, например 0.1 означает увеличение на 10%
-        // https://github.com/AvaloniaUI/Avalonia/blob/12.1.2/native/Avalonia.Native/src/OSX/AvnView.mm#L271-L274
+        // https://github.com/AvaloniaUI/Avalonia/blob/12.1.2/native/Avalonia.Native/src/OSX/AvnView.mm#L288-L291
         SetZoom(zoomSlider.Value * factor, GetViewportPoint(e));
         e.Handled = true;
     }
@@ -742,6 +875,7 @@ public sealed class StructuralElementEditor : UserControl {
     }
 
     private bool TryApplyDimensions() {
+        // сначала проверяем все четыре поля, ошибка не должна менять массив или выделение
         if (!int.TryParse(rowsInput.Text, out int rows) || rows <= 0 ||
             !int.TryParse(columnsInput.Text, out int columns) || columns <= 0) {
             statusText.Text = "Число строк и столбцов должно быть целым и больше 0";
@@ -767,10 +901,15 @@ public sealed class StructuralElementEditor : UserControl {
                 }
             }
             cells = resizedCells;
+            // оставляем отметки только в сохранившемся верхнем левом пересечении
+            selectedCells.RemoveWhere(coordinate =>
+                coordinate.Row < 0 || coordinate.Row >= rows ||
+                coordinate.Column < 0 || coordinate.Column >= columns);
         }
 
         anchorRow = selectedRow - 1;
         anchorColumn = selectedColumn - 1;
+        // пересоздаем кнопки после принятого размера и опоры, режим и оставшиеся отметки сохраняем
         RenderCells();
         if (dimensionsChanged) {
             FitMatrix();
@@ -779,7 +918,51 @@ public sealed class StructuralElementEditor : UserControl {
         return true;
     }
 
+    private void HandleCellClick(int row, int column) { // выполняем только выбранное действие, чтобы щелчок не менял разные состояния сразу
+        // координаты относятся к отображаемой клетке, даже если в полях уже введен другой размер
+        // запоминаем ее для сведений и выполняем только выбранное действие над черновиком
+        inspectedRow = row;
+        inspectedColumn = column;
+        switch (editMode) {
+            case CellEditMode.ToggleValue:
+                cells[row, column] = !cells[row, column];
+                RefreshCellVisual(row, column);
+                break;
+            case CellEditMode.SelectCells:
+                // для уже отмеченной клетки HashSet.Add вернет false, повторный щелчок снимет отметку
+                if (!selectedCells.Add((row, column))) {
+                    selectedCells.Remove((row, column));
+                }
+                RefreshCellVisual(row, column);
+                break;
+            case CellEditMode.SetAnchor:
+                // обновляем старую и новую опору, чтобы голубая рамка осталась только у одной клетки
+                int previousRow = anchorRow;
+                int previousColumn = anchorColumn;
+                anchorRow = row;
+                anchorColumn = column;
+                // поля опоры показывают фактический выбор, непримененные размеры оставляем как были
+                anchorRowInput.Text = (row + 1).ToString();
+                anchorColumnInput.Text = (column + 1).ToString();
+                RefreshCellVisual(previousRow, previousColumn);
+                RefreshCellVisual(row, column);
+                break;
+        }
+        UpdateSelectionControls();
+        UpdateCellInfo();
+        statusText.Text = "";
+    }
+
+    private void RefreshCellVisual(int row, int column) { // обновляем одну кнопку по координатам без пересоздания сетки
+        // после resize индекс содержит только текущие кнопки, контролы прежней сетки сюда не попадут
+        if (cellButtons.TryGetValue((row, column), out Button? button)) {
+            UpdateCellButton(button, row, column);
+        }
+    }
+
     private void RenderCells() {
+        // старые кнопки уходят из дерева, вместе с ними убираем ссылки из словаря
+        cellButtons.Clear();
         matrixGrid.Children.Clear();
         matrixGrid.RowDefinitions.Clear();
         matrixGrid.ColumnDefinitions.Clear();
@@ -816,14 +999,8 @@ public sealed class StructuralElementEditor : UserControl {
                     VerticalContentAlignment = VerticalAlignment.Stretch
                 };
                 UpdateCellButton(cellButton, cellRow, cellColumn);
-                cellButton.Click += (_, _) => {
-                    cells[cellRow, cellColumn] = !cells[cellRow, cellColumn];
-                    inspectedRow = cellRow;
-                    inspectedColumn = cellColumn;
-                    UpdateCellButton(cellButton, cellRow, cellColumn);
-                    UpdateCellInfo();
-                    statusText.Text = "";
-                };
+                cellButtons.Add((cellRow, cellColumn), cellButton);
+                cellButton.Click += (_, _) => HandleCellClick(cellRow, cellColumn);
                 Grid.SetRow(cellButton, row);
                 Grid.SetColumn(cellButton, column);
                 matrixGrid.Children.Add(cellButton);
@@ -834,6 +1011,7 @@ public sealed class StructuralElementEditor : UserControl {
             inspectedRow = null;
             inspectedColumn = null;
         }
+        UpdateSelectionControls();
         BuildRulers();
         UpdateCoordinateView();
     }
@@ -841,11 +1019,17 @@ public sealed class StructuralElementEditor : UserControl {
     private void UpdateCellButton(Button button, int row, int column) {
         bool isActive = cells[row, column];
         bool isAnchor = row == anchorRow && column == anchorColumn;
+        bool isSelected = selectedCells.Contains((row, column));
         double scale = zoomSlider.Value / 100;
         double cellSize = CellSide * scale;
+        Border selectionFrame;
         Border visual;
         TextBlock number;
-        if (button.Content is Border existingVisual && existingVisual.Child is TextBlock existingNumber) {
+        // при zoom и группе сохраняем вложенные рамки и текст, меняем только их оформление
+        if (button.Content is Border existingFrame &&
+            existingFrame.Child is Border existingVisual &&
+            existingVisual.Child is TextBlock existingNumber) {
+            selectionFrame = existingFrame;
             visual = existingVisual;
             number = existingNumber;
         }
@@ -857,11 +1041,18 @@ public sealed class StructuralElementEditor : UserControl {
             };
             // собственная заливка внутри кнопки сохраняет цвет ячейки при наведении и нажатии
             visual = new Border { Child = number, CornerRadius = new CornerRadius(0) };
-            button.Content = visual;
+            // внешняя рамка выделения и внутренняя рамка опоры показываются независимо
+            selectionFrame = new Border { Child = visual, CornerRadius = new CornerRadius(0) };
+            button.Content = selectionFrame;
         }
 
+        selectionFrame.Background = Brushes.Transparent;
+        selectionFrame.BorderBrush = Brushes.Red;
+        // на мелком масштабе ограничиваем рамки долей клетки, чтобы они не закрыли всю заливку
+        selectionFrame.BorderThickness = new Thickness(
+            isSelected ? Math.Min(2, cellSize / 6) : 0);
         visual.Background = isActive ? Brushes.Black : Brushes.White;
-        visual.BorderBrush = isAnchor ? Brushes.Red : Brushes.Gray;
+        visual.BorderBrush = isAnchor ? Brushes.DeepSkyBlue : Brushes.Gray;
         visual.BorderThickness = new Thickness(
             isAnchor ? Math.Min(2, cellSize / 4) : Math.Min(1, cellSize / 8));
         number.Text = isActive ? "1" : "0";
@@ -877,6 +1068,7 @@ public sealed class StructuralElementEditor : UserControl {
             return;
         }
         try {
+            // сохраняем весь черновик с одной опорой, временное выделение остается только в редакторе
             StructuralElement selectedElement =
                 new StructuralElement(cells, anchorRow, anchorColumn);
             SelectionApplied?.Invoke(selectedElement);
