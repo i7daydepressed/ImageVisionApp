@@ -26,10 +26,11 @@ public partial class MainViewModel : ViewModelBase{
         StructuralElement.CreateCross();
 
     public string StructuralElementDescription =>
-        $"{SelectedStructuralElement.Rows}×{SelectedStructuralElement.Columns}, " +
+        $"строк (Y): {SelectedStructuralElement.Rows}, " +
+        $"столбцов (X): {SelectedStructuralElement.Columns}, " +
         $"активных ячеек: {SelectedStructuralElement.ActiveCellCount}, " +
-        $"опора: ({SelectedStructuralElement.AnchorRow + 1}, " +
-        $"{SelectedStructuralElement.AnchorColumn + 1})";
+        $"опора: X = {SelectedStructuralElement.AnchorColumn + 1}, " +
+        $"Y = {SelectedStructuralElement.AnchorRow + 1}";
 
     [ObservableProperty] //когда значение свойства изменилось, нужно уведомить интерфейс - тот подставит значение в внутренние созданные классы для отображения/работы визуализации
     public partial Bitmap? OriginalImage { get; set; }
