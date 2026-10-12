@@ -20,6 +20,16 @@ public sealed class StructuralElementEditor : UserControl {
         SetAnchor
     }
 
+    private IPointer? brushPointer;
+    private Point? previousBrushPoint;
+    private readonly HashSet<(int Row, int Column)> invertedDuringStroke =
+        new HashSet<(int Row, int Column)>();
+    private readonly Button invertSelectedButton = new Button {
+        Content = "Инвертировать выделенные",
+        IsEnabled = false,
+        HorizontalAlignment = HorizontalAlignment.Stretch
+    };
+
     private CellEditMode editMode = CellEditMode.ToggleValue;
     // здесь только временные отметки с индексами от 0, в сохраняемую матрицу они не попадают
     private readonly HashSet<(int Row, int Column)> selectedCells =
@@ -151,6 +161,7 @@ public sealed class StructuralElementEditor : UserControl {
     }
 
     public void SetElement(StructuralElement element) {
+        EndBrushStroke();
         savedElement = element;
         // меняем только черновик, поэтому сброс оставит прежний элемент
         cells = element.CopyCells();
@@ -181,7 +192,7 @@ public sealed class StructuralElementEditor : UserControl {
 
     private Grid CreateLayout(TextBlock description) {
         Border settingsCard = CreateSettingsCard(description);
-        Border matrixCard = CreateMatrixCard();
+        Border matrixCard = CreateMatrixCard(settingsCard);
         Grid layout = new Grid {
             ColumnDefinitions = new ColumnDefinitions("300,*"),
             ColumnSpacing = 16,
@@ -238,7 +249,7 @@ public sealed class StructuralElementEditor : UserControl {
                 applySizeButton,
                 CreateEditControls(),
                 new TextBlock {
-                    Text = "0 — сосед исключен, 1 — включен.\nКрасная рамка — выделение.\nГолубая внутренняя рамка — опора.\nЖелтые номера — наведение.\nX — столбец, Y — строка; счет с 1.",
+                    Text = "X — столбец вправо, Y — строка вниз; счет с 1.",
                     TextWrapping = TextWrapping.Wrap
                 },
                 CreateCellInfoPanel(),
@@ -271,6 +282,7 @@ public sealed class StructuralElementEditor : UserControl {
         };
         selectedZeroButton.Click += (_, _) => SetSelectedCells(false);
         selectedOneButton.Click += (_, _) => SetSelectedCells(true);
+        invertSelectedButton.Click += (_, _) => InvertSelectedCells();
         clearSelectionButton.Click += (_, _) => ClearCellSelection();
         UpdateSelectionControls();
         return new Border {
@@ -293,6 +305,7 @@ public sealed class StructuralElementEditor : UserControl {
                         LineSpacing = 6,
                         Children = { selectedZeroButton, selectedOneButton }
                     },
+                    invertSelectedButton,
                     clearSelectionButton
                 }
             }
@@ -353,7 +366,52 @@ public sealed class StructuralElementEditor : UserControl {
         };
     }
 
-    private Border CreateMatrixCard() {
+    private static StackPanel CreateMatrixLegend() { // ставим пояснения рядом с сеткой, чтобы различать опору, отметки и жест ПКМ
+        return new StackPanel {
+            Spacing = 4,
+            Children = {
+                CreateLegendRow(Brushes.DeepSkyBlue,
+                    "Опора — единственная точка совмещения элемента с обрабатываемым пикселем"),
+                CreateLegendRow(Brushes.Red,
+                    "Выделение — клетки для групповых 0/1 и инверсии; оно не меняет опору"),
+                new TextBlock {
+                    Text = "1 включает позицию в соседство, 0 исключает. Желтые номера X/Y показывают наведение.",
+                    FontSize = 12,
+                    TextWrapping = TextWrapping.Wrap
+                },
+                new TextBlock {
+                    Text = "ПКМ + ведение — инверсия 0/1; каждая клетка один раз за зажатие",
+                    FontSize = 12,
+                    TextWrapping = TextWrapping.Wrap
+                }
+            }
+        };
+    }
+
+    private static Grid CreateLegendRow(IBrush color, string text) { // связываем цвет рамки с пояснением, текст переносится в оставшейся ширине
+        Grid row = new Grid {
+            ColumnDefinitions = new ColumnDefinitions("18,*"),
+            ColumnSpacing = 6
+        };
+        row.Children.Add(new Border {
+            Width = 14,
+            Height = 14,
+            BorderBrush = color,
+            BorderThickness = new Thickness(2),
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        TextBlock label = new TextBlock {
+            Text = text,
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(label, 1);
+        row.Children.Add(label);
+        return row;
+    }
+
+    private Border CreateMatrixCard(Border settingsCard) {
         WrapPanel zoomControls = CreateZoomControls();
         matrixScroll.Content = matrixGrid;
         // перехватываем сочетание до обычной прокрутки, колесо без модификатора оставляем ScrollViewer
@@ -366,6 +424,21 @@ public sealed class StructuralElementEditor : UserControl {
             MatrixScroll_OnTouchPadMagnify,
             RoutingStrategies.Bubble);
         matrixScroll.AddHandler(
+            InputElement.PointerPressedEvent,
+            MatrixScroll_OnBrushPressed,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        matrixScroll.AddHandler(
+            InputElement.PointerReleasedEvent,
+            MatrixScroll_OnBrushReleased,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        matrixScroll.PointerCaptureLost += (_, e) => {
+            if (brushPointer == e.Pointer) {
+                EndBrushStroke();
+            }
+        };
+        matrixScroll.AddHandler(
             InputElement.PointerMovedEvent,
             MatrixScroll_OnPointerMoved,
             RoutingStrategies.Tunnel,
@@ -376,10 +449,12 @@ public sealed class StructuralElementEditor : UserControl {
         };
         matrixScroll.PropertyChanged += (_, e) => {
             if (e.Property == ScrollViewer.ViewportProperty) {
+                previousBrushPoint = null;
                 UpdateCoordinateView();
                 ScheduleFit();
             }
             else if (e.Property == ScrollViewer.OffsetProperty) {
+                previousBrushPoint = null;
                 UpdateCoordinateView();
             }
         };
@@ -388,6 +463,7 @@ public sealed class StructuralElementEditor : UserControl {
             ScheduleFit();
         };
         matrixScroll.DetachedFromVisualTree += (_, _) => {
+            EndBrushStroke();
             CancelPendingScrollOffset();
             hoverViewportPoint = null;
             UpdateCoordinateView();
@@ -441,16 +517,19 @@ public sealed class StructuralElementEditor : UserControl {
             CornerRadius = new CornerRadius(4),
             Child = coordinateArea
         };
-        TrackMatrixViewportHeight(matrixFrame);
+        StackPanel matrixHeader = new StackPanel {
+            Spacing = 10,
+            Children = { CreateMatrixLegend(), zoomControls }
+        };
 
         Grid matrixArea = new Grid {
             RowDefinitions = new RowDefinitions("Auto,Auto"),
             RowSpacing = 10
         };
-        matrixArea.Children.Add(zoomControls);
+        matrixArea.Children.Add(matrixHeader);
         Grid.SetRow(matrixFrame, 1);
         matrixArea.Children.Add(matrixFrame);
-        return new Border {
+        Border matrixCard = new Border {
             Padding = new Thickness(12),
             BorderBrush = Brushes.Gray,
             BorderThickness = new Thickness(1),
@@ -459,6 +538,8 @@ public sealed class StructuralElementEditor : UserControl {
             VerticalAlignment = VerticalAlignment.Top,
             Child = matrixArea
         };
+        TrackMatrixViewportHeight(matrixFrame, settingsCard, matrixHeader, matrixCard);
+        return matrixCard;
     }
 
     private void UpdateSelectionControls() { // согласуем счетчик, доступность кнопок и подсказку с отметками и режимом
@@ -467,6 +548,7 @@ public sealed class StructuralElementEditor : UserControl {
         bool hasSelection = selectedCells.Count > 0;
         selectedZeroButton.IsEnabled = hasSelection;
         selectedOneButton.IsEnabled = hasSelection;
+        invertSelectedButton.IsEnabled = hasSelection;
         clearSelectionButton.IsEnabled = hasSelection;
         editModeHint.Text = editMode switch {
             CellEditMode.SelectCells => "Щелчок добавляет или снимает выделение, значение 0/1 сохраняется",
@@ -488,6 +570,19 @@ public sealed class StructuralElementEditor : UserControl {
         UpdateSelectionControls();
         UpdateCellInfo();
         statusText.Text = $"Выделенным клеткам установлено {(value ? 1 : 0)}";
+    }
+
+    private void InvertSelectedCells() { // меняем 0/1 только у красных отметок, сохраняя набор и одну опору
+        if (selectedCells.Count == 0) {
+            return;
+        }
+        foreach ((int Row, int Column) coordinate in selectedCells) {
+            cells[coordinate.Row, coordinate.Column] = !cells[coordinate.Row, coordinate.Column];
+            RefreshCellVisual(coordinate.Row, coordinate.Column);
+        }
+        UpdateSelectionControls();
+        UpdateCellInfo();
+        statusText.Text = "Значения выделенных клеток инвертированы";
     }
 
     private void ClearCellSelection() { // снимаем отметки и рамки, сохраняя значения и единственную опору
@@ -590,8 +685,181 @@ public sealed class StructuralElementEditor : UserControl {
         }
     }
 
+    private void MatrixScroll_OnBrushPressed(object? sender, PointerPressedEventArgs e) { // начинаем проход только от ПКМ на видимой клетке и захватываем указатель
+        if (e.GetCurrentPoint(matrixScroll).Properties.PointerUpdateKind != PointerUpdateKind.RightButtonPressed) {
+            return;
+        }
+        Point viewportPoint = GetViewportPoint(e);
+        Point matrixPoint = e.GetPosition(matrixGrid);
+        if (viewportPoint.X < 0 || viewportPoint.Y < 0 ||
+            viewportPoint.X >= matrixScroll.Viewport.Width ||
+            viewportPoint.Y >= matrixScroll.Viewport.Height ||
+            !TryGetCellAt(matrixPoint, out _, out _)) {
+            return;
+        }
+        EndBrushStroke();
+        brushPointer = e.Pointer;
+        brushPointer.Capture(matrixScroll);
+        previousBrushPoint = matrixPoint;
+        hoverViewportPoint = viewportPoint;
+        PaintBrushSegment(matrixPoint, matrixPoint);
+        UpdateCoordinateView();
+        e.Handled = true;
+    }
+
+    private void MatrixScroll_OnBrushReleased(object? sender, PointerReleasedEventArgs e) { // дорисовываем последний участок и завершаем проход при отпускании ПКМ
+        if (brushPointer != e.Pointer || e.GetCurrentPoint(matrixScroll).Properties.IsRightButtonPressed) {
+            return;
+        }
+        Point matrixPoint = e.GetPosition(matrixGrid);
+        PaintBrushSegment(previousBrushPoint ?? matrixPoint, matrixPoint);
+        EndBrushStroke();
+        hoverViewportPoint = GetViewportPoint(e);
+        UpdateCoordinateView();
+        e.Handled = true;
+    }
+
+    private void EndBrushStroke() { // очищаем проход и освобождаем только собственный захват указателя
+        IPointer? pointer = brushPointer;
+        // сначала сбрасываем состояние, чтобы PointerCaptureLost не завершал проход повторно
+        brushPointer = null;
+        previousBrushPoint = null;
+        invertedDuringStroke.Clear();
+        if (pointer is not null && pointer.Captured == matrixScroll) {
+            pointer.Capture(null);
+        }
+    }
+
+    private void PaintBrushSegment(Point from, Point to) { // инвертируем пересеченные клетки видимой части пути без пропусков между событиями
+        // вход — две точки в координатах матрицы, сначала обрезаем путь по видимой области
+        // шаг содержит квадрат 36s и промежуток 4s, DDA переходит по границам шагов вдоль отрезка
+        // каждый кандидат проверяем по квадрату, набор прохода защищает от повторной инверсии
+        Size matrixSize = GetMatrixSize(zoomSlider.Value);
+        Rect viewport = new Rect(matrixScroll.Offset.X, matrixScroll.Offset.Y,
+            matrixScroll.Viewport.Width, matrixScroll.Viewport.Height);
+        Rect visibleMatrix = viewport.Intersect(new Rect(0, 0, matrixSize.Width, matrixSize.Height));
+        if (!TryClipBrushSegment(from, to, visibleMatrix, out Point start, out Point end)) {
+            return;
+        }
+        double scale = zoomSlider.Value / 100;
+        double stride = (CellSide + CellGap) * scale;
+        int rows = cells.GetLength(0);
+        int columns = cells.GetLength(1);
+        int column = Math.Clamp((int)Math.Floor(start.X / stride), 0, columns - 1);
+        int row = Math.Clamp((int)Math.Floor(start.Y / stride), 0, rows - 1);
+        int endColumn = Math.Clamp((int)Math.Floor(end.X / stride), 0, columns - 1);
+        int endRow = Math.Clamp((int)Math.Floor(end.Y / stride), 0, rows - 1);
+        double dx = end.X - start.X;
+        double dy = end.Y - start.Y;
+        int stepX = Math.Sign(dx);
+        int stepY = Math.Sign(dy);
+        double deltaX = stepX == 0 ? double.PositiveInfinity : stride / Math.Abs(dx);
+        double deltaY = stepY == 0 ? double.PositiveInfinity : stride / Math.Abs(dy);
+        double boundaryX = (column + (stepX > 0 ? 1 : 0)) * stride;
+        double boundaryY = (row + (stepY > 0 ? 1 : 0)) * stride;
+        double nextX = stepX == 0 ? double.PositiveInfinity : (boundaryX - start.X) / dx;
+        double nextY = stepY == 0 ? double.PositiveInfinity : (boundaryY - start.Y) / dy;
+        // идем по пересечениям отрезка с шагами сетки, а не только по точкам событий мыши
+        while (row >= 0 && row < rows && column >= 0 && column < columns) {
+            TryInvertStrokeCell(row, column, start, end, visibleMatrix, stride, CellSide * scale);
+            if (row == endRow && column == endColumn) {
+                break;
+            }
+            if (nextX < nextY) {
+                column += stepX;
+                nextX += deltaX;
+            }
+            else if (nextY < nextX) {
+                row += stepY;
+                nextY += deltaY;
+            }
+            else {
+                column += stepX;
+                row += stepY;
+                nextX += deltaX;
+                nextY += deltaY;
+            }
+        }
+    }
+
+    private void TryInvertStrokeCell(int row, int column, Point from, Point to, Rect visibleMatrix, double stride, double cellSize) { // проверяем пересечение квадрата и допускаем одну инверсию за проход
+        Rect cellBounds = new Rect(column * stride, row * stride, cellSize, cellSize);
+        if (!TryClipBrushSegment(from, to, cellBounds, out Point start, out Point end)) {
+            return;
+        }
+        Point middle = new Point((start.X + end.X) / 2, (start.Y + end.Y) / 2);
+        // проверка середины пересечения исключает линии вдоль правой/нижней границы квадрата
+        if (middle.X < visibleMatrix.X || middle.X >= visibleMatrix.Right ||
+            middle.Y < visibleMatrix.Y || middle.Y >= visibleMatrix.Bottom ||
+            !TryGetCellAt(middle, out int hitRow, out int hitColumn) ||
+            hitRow != row || hitColumn != column || !invertedDuringStroke.Add((row, column))) {
+            return;
+        }
+        cells[row, column] = !cells[row, column];
+        inspectedRow = row;
+        inspectedColumn = column;
+        RefreshCellVisual(row, column);
+        statusText.Text = "";
+    }
+
+    private static bool TryClipBrushSegment(Point from, Point to, Rect bounds, out Point start, out Point end) { // оставляем часть отрезка внутри прямоугольника для точного обхода клеток
+        start = from;
+        end = to;
+        if (bounds.Width <= 0 || bounds.Height <= 0 ||
+            !double.IsFinite(from.X) || !double.IsFinite(from.Y) ||
+            !double.IsFinite(to.X) || !double.IsFinite(to.Y)) {
+            return false;
+        }
+        double dx = to.X - from.X;
+        double dy = to.Y - from.Y;
+        // параметр t идет от 0 до 1, enter и leave ограничивают видимую часть from + t * (to - from)
+        double enter = 0;
+        double leave = 1;
+        if (!ClipBrushEdge(-dx, from.X - bounds.X, ref enter, ref leave) ||
+            !ClipBrushEdge(dx, bounds.Right - from.X, ref enter, ref leave) ||
+            !ClipBrushEdge(-dy, from.Y - bounds.Y, ref enter, ref leave) ||
+            !ClipBrushEdge(dy, bounds.Bottom - from.Y, ref enter, ref leave)) {
+            return false;
+        }
+        start = new Point(from.X + enter * dx, from.Y + enter * dy);
+        end = new Point(from.X + leave * dx, from.Y + leave * dy);
+        return true;
+    }
+
+    private static bool ClipBrushEdge(double direction, double distance, ref double enter, ref double leave) { // сужаем интервал параметра отрезка по одной стороне прямоугольника
+        // параллельный отрезок проходит проверку только с внутренней стороны границы
+        if (direction == 0) {
+            return distance >= 0;
+        }
+        double position = distance / direction;
+        if (direction < 0) {
+            if (position > leave) {
+                return false;
+            }
+            enter = Math.Max(enter, position);
+        }
+        else {
+            if (position < enter) {
+                return false;
+            }
+            leave = Math.Min(leave, position);
+        }
+        return true;
+    }
+
     private void MatrixScroll_OnPointerMoved(object? sender, PointerEventArgs e) {
         hoverViewportPoint = GetViewportPoint(e);
+        if (brushPointer == e.Pointer) {
+            if (e.GetCurrentPoint(matrixScroll).Properties.IsRightButtonPressed) {
+                Point matrixPoint = e.GetPosition(matrixGrid);
+                PaintBrushSegment(previousBrushPoint ?? matrixPoint, matrixPoint);
+                previousBrushPoint = matrixPoint;
+                e.Handled = true;
+            }
+            else {
+                EndBrushStroke();
+            }
+        }
         UpdateCoordinateView();
     }
 
@@ -610,23 +878,37 @@ public sealed class StructuralElementEditor : UserControl {
             viewportPoint.Y >= matrixScroll.Viewport.Height) {
             return;
         }
+        Point matrixPoint = new Point(
+            viewportPoint.X + matrixScroll.Offset.X,
+            viewportPoint.Y + matrixScroll.Offset.Y);
+        if (TryGetCellAt(matrixPoint, out int row, out int column)) {
+            hoveredRow = row;
+            hoveredColumn = column;
+        }
+    }
+
+    private bool TryGetCellAt(Point matrixPoint, out int row, out int column) { // получаем индексы квадрата из координат матрицы, исключая промежутки
+        row = -1;
+        column = -1;
+        Size size = GetMatrixSize(zoomSlider.Value);
+        if (!double.IsFinite(matrixPoint.X) || !double.IsFinite(matrixPoint.Y) ||
+            matrixPoint.X < 0 || matrixPoint.Y < 0 ||
+            matrixPoint.X >= size.Width || matrixPoint.Y >= size.Height) {
+            return false;
+        }
         double scale = zoomSlider.Value / 100;
         double cellSize = CellSide * scale;
         double stride = (CellSide + CellGap) * scale;
-        double x = viewportPoint.X + matrixScroll.Offset.X;
-        double y = viewportPoint.Y + matrixScroll.Offset.Y;
-        Size matrixSize = GetMatrixSize(zoomSlider.Value);
-        if (x < 0 || y < 0 || x >= matrixSize.Width || y >= matrixSize.Height) {
-            return;
-        }
-        int column = (int)Math.Floor(x / stride);
-        int row = (int)Math.Floor(y / stride);
+        int candidateColumn = (int)Math.Floor(matrixPoint.X / stride);
+        int candidateRow = (int)Math.Floor(matrixPoint.Y / stride);
         // хвост шага принадлежит промежутку между квадратами, а не соседней клетке
-        if (x - column * stride >= cellSize || y - row * stride >= cellSize) {
-            return;
+        if (matrixPoint.X - candidateColumn * stride >= cellSize ||
+            matrixPoint.Y - candidateRow * stride >= cellSize) {
+            return false;
         }
-        hoveredRow = row;
-        hoveredColumn = column;
+        row = candidateRow;
+        column = candidateColumn;
+        return true;
     }
 
     private void UpdateCellInfo() {
@@ -660,14 +942,28 @@ public sealed class StructuralElementEditor : UserControl {
             "X — столбец, вправо; Y — строка, вниз";
     }
 
-    private void TrackMatrixViewportHeight(Border matrixFrame) {
+    private void TrackMatrixViewportHeight(
+        Border matrixFrame,
+        Border settingsCard,
+        Control matrixHeader,
+        Border matrixCard) {
         TopLevel? host = null;
-        EventHandler<SizeChangedEventArgs> hostSizeChanged = (_, _) => {
-            if (host is not null) {
-                UpdateMatrixViewportHeight(matrixFrame, host);
+        bool heightQueued = false;
+        void ScheduleHeight() { // объединяем изменения размеров и считаем высоту после layout
+            if (heightQueued) {
+                return;
             }
-        };
-
+            heightQueued = true;
+            Dispatcher.UIThread.Post(() => {
+                heightQueued = false;
+                if (host is not null) {
+                    UpdateMatrixViewportHeight(matrixFrame, settingsCard, matrixHeader, matrixCard, host);
+                }
+            }, DispatcherPriority.Loaded);
+        }
+        EventHandler<SizeChangedEventArgs> hostSizeChanged = (_, _) => ScheduleHeight();
+        settingsCard.SizeChanged += (_, _) => ScheduleHeight();
+        matrixHeader.SizeChanged += (_, _) => ScheduleHeight();
         AttachedToVisualTree += (_, _) => {
             if (host is not null) {
                 host.SizeChanged -= hostSizeChanged;
@@ -675,7 +971,7 @@ public sealed class StructuralElementEditor : UserControl {
             host = TopLevel.GetTopLevel(this);
             if (host is not null) {
                 host.SizeChanged += hostSizeChanged;
-                UpdateMatrixViewportHeight(matrixFrame, host);
+                ScheduleHeight();
             }
         };
         DetachedFromVisualTree += (_, _) => {
@@ -687,14 +983,26 @@ public sealed class StructuralElementEditor : UserControl {
         };
     }
 
-    private static void UpdateMatrixViewportHeight(Border matrixFrame, TopLevel host) {
+    private static void UpdateMatrixViewportHeight(
+        Border matrixFrame,
+        Border settingsCard,
+        Control matrixHeader,
+        Border matrixCard,
+        TopLevel host) {
         double windowHeight = host.ClientSize.Height;
         if (!double.IsFinite(windowHeight) || windowHeight <= 0) {
             return;
         }
+        double minimumHeight = Math.Clamp(windowHeight * 0.55, 320, 640);
+        Thickness padding = matrixCard.Padding;
+        Thickness border = matrixCard.BorderThickness;
+        double spacing = matrixCard.Child is Grid area ? area.RowSpacing : 0;
+        double outsideFrame = padding.Top + padding.Bottom + border.Top + border.Bottom +
+            matrixHeader.Bounds.Height + spacing;
         // меняем размер области просмотра, а не масштаб или содержимое матрицы
-        double frameHeight = Math.Clamp(windowHeight * 0.55, 320, 640);
-        if (Math.Abs(matrixFrame.Height - frameHeight) > 0.5) {
+        // заполняем высоту настроек за вычетом легенды, масштаба, рамок и отступов
+        double frameHeight = Math.Max(minimumHeight, settingsCard.Bounds.Height - outsideFrame);
+        if (double.IsFinite(frameHeight) && Math.Abs(matrixFrame.Height - frameHeight) > 0.5) {
             matrixFrame.Height = frameHeight;
         }
     }
@@ -788,6 +1096,7 @@ public sealed class StructuralElementEditor : UserControl {
     }
 
     private void ApplyZoom() {
+        EndBrushStroke();
         double scale = zoomSlider.Value / 100;
         double cellSize = CellSide * scale;
         Size matrixSize = GetMatrixSize(zoomSlider.Value);
@@ -961,6 +1270,7 @@ public sealed class StructuralElementEditor : UserControl {
     }
 
     private void RenderCells() {
+        EndBrushStroke();
         // старые кнопки уходят из дерева, вместе с ними убираем ссылки из словаря
         cellButtons.Clear();
         matrixGrid.Children.Clear();
