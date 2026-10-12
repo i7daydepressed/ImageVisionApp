@@ -35,6 +35,7 @@ public partial class MainWindow {
         };
         Slider slider = new Slider {
             Width = 260,
+            Height = 52,
             Minimum = sliderMinimum,
             Maximum = sliderMaximum,
             Value = initialValue,
@@ -43,7 +44,8 @@ public partial class MainWindow {
         };
         TextBlock errorText = new TextBlock {
             TextWrapping = TextWrapping.Wrap,
-            Foreground = Brushes.OrangeRed
+            Foreground = Brushes.OrangeRed,
+            IsVisible = false
         };
         Button addButton = new Button {
             Content = buttonText,
@@ -56,6 +58,7 @@ public partial class MainWindow {
                 valueInput.Text, inputMinimum, inputMaximum,
                 out double value, out string error);
             errorText.Text = error;
+            errorText.IsVisible = !isValid;
             addButton.IsEnabled = isValid;
             if (!isValid) {
                 return;
@@ -81,6 +84,7 @@ public partial class MainWindow {
                 valueInput.Text, inputMinimum, inputMaximum,
                 out double value, out string error)) {
                 errorText.Text = error;
+                errorText.IsVisible = true;
                 return;
             }
             if (DataContext is MainViewModel viewModel) {
@@ -90,7 +94,7 @@ public partial class MainWindow {
         };
 
         StackPanel controls = new StackPanel {
-            Spacing = 8,
+            Spacing = 6,
             Children = {
                 new TextBlock { Text = title, FontWeight = FontWeight.SemiBold },
                 valueRow,
@@ -101,11 +105,13 @@ public partial class MainWindow {
         };
         return new Border {
             Width = 286,
+            MinHeight = 160, // высота карточки
             Padding = new Thickness(12),
             BorderBrush = Brushes.Gray,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(6),
             HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
             Child = controls
         };
     }
