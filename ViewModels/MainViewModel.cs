@@ -80,6 +80,17 @@ public partial class MainViewModel : ViewModelBase{
     private void UpdateModifiedImage(byte[] processedImageData) {
         // получаем готовые байты текущей очереди, сами настройки здесь не применяем
 
+        ImageHistogramComparison? nextComparison = null;
+        // // считаем гистограмму по тем же байтам, из которых сделали измененное изображение
+        if (originalHistogram is not null) {//обновляем гистограмму
+            ImageHistogramData processedHistogram =
+                imageHistogramService.CalculateHistogram(processedImageData);
+
+            nextComparison = new ImageHistogramComparison(
+                originalHistogram,
+                processedHistogram);
+        }
+
         using MemoryStream processedImageStream =
             new MemoryStream(processedImageData);
 
@@ -87,18 +98,13 @@ public partial class MainViewModel : ViewModelBase{
         Bitmap newModifiedImage =
             new Bitmap(processedImageStream);
 
-        ModifiedImage?.Dispose();
-
+        // сначала подготовили обе части результата, теперь заменяем показанное состояние
+        Bitmap? previousImage = ModifiedImage;
         ModifiedImage = newModifiedImage;
-        // // считаем гистограмму по тем же байтам, из которых сделали измененное изображение
-        if (originalHistogram is not null) {//обновляем гистограмму
-            ImageHistogramData processedHistogram =
-                imageHistogramService.CalculateHistogram(processedImageData);
-
-            HistogramComparison = new ImageHistogramComparison(
-                originalHistogram,
-                processedHistogram);
+        if (nextComparison is not null) {
+            HistogramComparison = nextComparison;
         }
+        previousImage?.Dispose();
     }
 
     //пересчитывает изображение по действиям из очереди и обновляет его гистограмму

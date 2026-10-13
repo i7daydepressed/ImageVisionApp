@@ -124,19 +124,6 @@ public partial class MainWindow {
         out string error) {
 
         // точку и запятую принимаем как десятичный разделитель, разделители тысяч не используем
-        string normalizedText = (text ?? "").Trim().Replace(',', '.');
-        if (!double.TryParse(normalizedText, NumberStyles.Float, CultureInfo.InvariantCulture, out value) ||
-            !double.IsFinite(value)) {
-            error = "Введите конечное число, например 12,5 или 12.5";
-            return false;
-        }
-        if (value < minimum || (maximum.HasValue && value > maximum.Value)) {
-            error = maximum.HasValue
-                ? $"Допустимое значение: от {minimum} до {maximum.Value}"
-                : $"Допустимое значение: не меньше {minimum}";
-            return false;
-        }
-        error = "";
-        return true;
+        return ImageStepParameterRules.TryReadValue(text, minimum, maximum, out value, out error);
     }
 }
