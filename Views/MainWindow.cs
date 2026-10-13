@@ -227,6 +227,7 @@ public partial class MainWindow : Window {
         adjustmentCards.Children.Add(CreateBrightnessCard());
         adjustmentCards.Children.Add(CreateSaturationCard());
         adjustmentCards.Children.Add(CreateContrastCard());
+        adjustmentCards.Children.Add(CreateMorphologyCard());
 
         // карточки с параметрами ставим в правый столбец
         Grid.SetColumn(adjustmentCards, 1);

@@ -29,6 +29,10 @@ public sealed partial class ImageEditStep : ObservableObject {
             "Нелинейная коррекция ЧБ",
         ImageOperationType.Rotation =>
             $"Поворот {Parameter:0}°",
+        ImageOperationType.Erosion => ElementSnapshot is StructuralElement element
+            ? $"Эрозия {element.Rows}×{element.Columns} (Y×X), " +
+              $"опора X={element.AnchorColumn + 1}, Y={element.AnchorRow + 1}"
+            : "Эрозия: матрица отсутствует",
         _ => Type.ToString()
     };
 

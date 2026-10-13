@@ -8,5 +8,6 @@ public enum ImageOperationType {
     Grayscale,
     LinearGrayscaleCorrection,
     NonlinearGrayscaleCorrection,
-    Rotation
+    Rotation,
+    Erosion
 }

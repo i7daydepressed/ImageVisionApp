@@ -53,8 +53,18 @@ public class ImageProcessingService{
                 case ImageOperationType.Rotation:
                     RotateImage(processedImage, (int)step.Parameter);
                     break;
+
+                case ImageOperationType.Erosion:
+                    // читаем снимок именно этого шага, текущий выбор редактора здесь недоступен
+                    StructuralElement element = step.ElementSnapshot
+                        ?? throw new ArgumentException("Для шага эрозии отсутствует матрица");
+                    MorphologyService.Erode(processedImage, element);
+                    break;
             }
         }
+        // сохраняем глубину каналов Q8: палитровый PNG иначе может вернуться с 4-битным RGBA
+        processedImage.Depth = 8;
+        processedImage.Settings.SetDefine(MagickFormat.Png, "bit-depth", "8");
         //после всех шагов возвращаем готовое изображение в виде байтов пнг
         return processedImage.ToByteArray(MagickFormat.Png);
     }
