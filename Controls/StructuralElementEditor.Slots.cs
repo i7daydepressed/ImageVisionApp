@@ -1,3 +1,4 @@
+using System;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -7,6 +8,34 @@ using ImageVisionApp.Models;
 namespace ImageVisionApp.Controls;
 
 public sealed partial class StructuralElementEditor {
+    private void RestoreSavedSlots() { // восстанавливаем снимки после создания кнопок, не загружаем их в черновик
+        if (!slotStorage.TryLoad(out StructuralElement?[] restored, out string error)) {
+            SetSlotsStatus(error, true);
+            return;
+        }
+        Array.Copy(restored, savedSlots, SavedSlotCount);
+        UpdateSavedSlots();
+        int occupied = 0;
+        foreach (StructuralElement? element in savedSlots) {
+            if (element is not null) {
+                occupied++;
+            }
+        }
+        SetSlotsStatus(occupied > 0 ? $"Восстановлено сохраненных матриц: {occupied}" : "");
+    }
+
+    private bool TryStoreSlot(int index, StructuralElement? element) { // меняем слот в памяти только после успешной записи полного документа
+        StructuralElement?[] proposed = (StructuralElement?[])savedSlots.Clone();
+        proposed[index] = element;
+        if (!slotStorage.TrySave(proposed, out string error)) {
+            SetSlotsStatus(error, true);
+            return false;
+        }
+        Array.Copy(proposed, savedSlots, SavedSlotCount);
+        UpdateSavedSlots();
+        return true;
+    }
+
     private Border CreateSavedElementsCard() { // собираем четыре слота отдельно от настроек, чтобы они не увеличивали поле матрицы
         StackPanel content = new StackPanel {
             Spacing = 10,
@@ -16,7 +45,7 @@ public sealed partial class StructuralElementEditor {
                     FontWeight = FontWeight.SemiBold
                 },
                 new TextBlock {
-                    Text = "В этом сеансе приложения. Загрузка меняет черновик; применение выполняется отдельно.",
+                    Text = "Сохраняются на этом компьютере. Загрузка меняет черновик; применение выполняется отдельно.",
                     FontSize = 12,
                     TextWrapping = TextWrapping.Wrap
                 }
@@ -110,8 +139,9 @@ public sealed partial class StructuralElementEditor {
             SetSlotsStatus(statusText.Text ?? "Не удалось сохранить матрицу", true);
             return;
         }
-        savedSlots[index] = snapshot;
-        UpdateSavedSlots();
+        if (!TryStoreSlot(index, snapshot)) {
+            return;
+        }
         SetSlotsStatus($"Черновик сохранен в ячейку {index + 1}");
     }
 
@@ -132,8 +162,9 @@ public sealed partial class StructuralElementEditor {
     }
 
     private void ClearSavedSlot(int index) { // очищаем один слот, черновик и примененный элемент не трогаем
-        savedSlots[index] = null;
-        UpdateSavedSlots();
+        if (!TryStoreSlot(index, null)) {
+            return;
+        }
         SetSlotsStatus($"Ячейка {index + 1} очищена");
     }
 }

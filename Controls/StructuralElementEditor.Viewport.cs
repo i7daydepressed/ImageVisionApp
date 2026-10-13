@@ -233,7 +233,7 @@ public sealed partial class StructuralElementEditor {
         };
     }
 
-    private static void UpdateMatrixViewportHeight(
+    private void UpdateMatrixViewportHeight(
         Border matrixFrame,
         Border settingsCard,
         Control matrixHeader,
@@ -249,9 +249,12 @@ public sealed partial class StructuralElementEditor {
         double spacing = matrixCard.Child is Grid area ? area.RowSpacing : 0;
         double outsideFrame = padding.Top + padding.Bottom + border.Top + border.Bottom +
             matrixHeader.Bounds.Height + spacing;
+        // перенос сведений при наведении не должен менять viewport и снова запускать вписывание
+        double informationGrowth = Math.Max(0, cellInfoText.Bounds.Height - cellInfoText.MinHeight);
         // меняем размер области просмотра, а не масштаб или содержимое матрицы
         // заполняем высоту настроек за вычетом легенды, масштаба, рамок и отступов
-        double frameHeight = Math.Max(minimumHeight, settingsCard.Bounds.Height - outsideFrame);
+        double frameHeight = Math.Max(minimumHeight,
+            settingsCard.Bounds.Height - informationGrowth - outsideFrame);
         if (double.IsFinite(frameHeight) && Math.Abs(matrixFrame.Height - frameHeight) > 0.5) {
             matrixFrame.Height = frameHeight;
         }

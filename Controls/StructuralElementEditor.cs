@@ -9,6 +9,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using ImageVisionApp.Models;
+using ImageVisionApp.Services;
 
 namespace ImageVisionApp.Controls;
 
@@ -68,6 +69,8 @@ public sealed partial class StructuralElementEditor : UserControl {
     };
 
     private const int SavedSlotCount = 4;
+    private readonly StructuralElementSlotStorage slotStorage =
+        new StructuralElementSlotStorage(SavedSlotCount);
     private readonly StructuralElement?[] savedSlots = new StructuralElement?[SavedSlotCount];
     private readonly TextBlock[] slotDescriptions = new TextBlock[SavedSlotCount];
     private readonly Button[] slotSaveButtons = new Button[SavedSlotCount];
@@ -169,6 +172,7 @@ public sealed partial class StructuralElementEditor : UserControl {
         savedElement = initialElement;
         Content = CreateLayout(description);
         SetElement(initialElement);
+        RestoreSavedSlots();
     }
 
     public void SetElement(StructuralElement element) {
