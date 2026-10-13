@@ -23,7 +23,12 @@ public sealed partial class StructuralElementEditor : UserControl {
 
     private IPointer? brushPointer;
     private Point? previousBrushPoint;
-    private readonly HashSet<(int Row, int Column)> invertedDuringStroke =
+    // кнопку и действие фиксируем в начале прохода, смена режима завершает жест
+    private bool brushUsesRightButton;
+    private CellEditMode brushMode;
+    // в выделении весь проход добавляет или снимает отметки по состоянию начальной клетки
+    private bool brushSelectCells;
+    private readonly HashSet<(int Row, int Column)> visitedDuringStroke =
         new HashSet<(int Row, int Column)>();
     private readonly Button invertSelectedButton = new Button {
         Content = "Инвертировать выделенные",
@@ -218,10 +223,11 @@ public sealed partial class StructuralElementEditor : UserControl {
         invertSelectedButton.IsEnabled = hasSelection;
         clearSelectionButton.IsEnabled = hasSelection;
         editModeHint.Text = editMode switch {
-            CellEditMode.SelectCells => "Щелчок добавляет или снимает выделение, значение 0/1 сохраняется",
-            CellEditMode.SetAnchor => "Щелчок назначает единственную опору, значение 0/1 сохраняется",
-            _ => "Щелчок переключает значение клетки между 0 и 1"
+            CellEditMode.SelectCells => "Зажмите ЛКМ и ведите: от невыделенной клетки — выделить путь, от выделенной — снять выделение. Значения 0/1 сохраняются",
+            CellEditMode.SetAnchor => "Щелчок ЛКМ назначает единственную опору, значение 0/1 сохраняется",
+            _ => "Щелчок или протягивание ЛКМ инвертирует 0/1, каждую клетку один раз за проход"
         };
+        editModeHint.Text += "\nЗажатая ПКМ всегда инвертирует 0/1 независимо от режима";
     }
 
     private void SetSelectedCells(bool value) { // задаем одно 0/1 всем отметкам, чтобы менять разрозненный набор вместе

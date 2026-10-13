@@ -5,8 +5,18 @@ using Avalonia.Input;
 namespace ImageVisionApp.Controls;
 
 public sealed partial class StructuralElementEditor {
-    private void MatrixScroll_OnBrushPressed(object? sender, PointerPressedEventArgs e) { // начинаем проход только от ПКМ на видимой клетке и захватываем указатель
-        if (e.GetCurrentPoint(matrixScroll).Properties.PointerUpdateKind != PointerUpdateKind.RightButtonPressed) {
+    private void MatrixScroll_OnBrushPressed(object? sender, PointerPressedEventArgs e) { // начинаем проход ЛКМ по режиму или ПКМ для инверсии
+        PointerUpdateKind updateKind = e.GetCurrentPoint(matrixScroll).Properties.PointerUpdateKind;
+        bool rightPressed = updateKind == PointerUpdateKind.RightButtonPressed;
+        bool leftPressed = updateKind == PointerUpdateKind.LeftButtonPressed;
+        if ((!rightPressed && !leftPressed) ||
+            (leftPressed && editMode == CellEditMode.SetAnchor)) {
+            // назначение опоры оставляем обычному щелчку кнопки клетки
+            return;
+        }
+        if (brushPointer is not null) {
+            // дополнительная кнопка не перезапускает начатый проход
+            e.Handled = true;
             return;
         }
         Point viewportPoint = GetViewportPoint(e);
@@ -14,21 +24,25 @@ public sealed partial class StructuralElementEditor {
         if (viewportPoint.X < 0 || viewportPoint.Y < 0 ||
             viewportPoint.X >= matrixScroll.Viewport.Width ||
             viewportPoint.Y >= matrixScroll.Viewport.Height ||
-            !TryGetCellAt(matrixPoint, out _, out _)) {
+            !TryGetCellAt(matrixPoint, out int row, out int column)) {
             return;
         }
         EndBrushStroke();
+        brushUsesRightButton = rightPressed;
+        brushMode = rightPressed ? CellEditMode.ToggleValue : editMode;
+        brushSelectCells = !selectedCells.Contains((row, column));
         brushPointer = e.Pointer;
         brushPointer.Capture(matrixScroll);
         previousBrushPoint = matrixPoint;
         hoverViewportPoint = viewportPoint;
         PaintBrushSegment(matrixPoint, matrixPoint);
         UpdateCoordinateView();
+        // перехват в Tunnel не дает Button начать обычный Click и изменить клетку второй раз
         e.Handled = true;
     }
 
-    private void MatrixScroll_OnBrushReleased(object? sender, PointerReleasedEventArgs e) { // дорисовываем последний участок и завершаем проход при отпускании ПКМ
-        if (brushPointer != e.Pointer || e.GetCurrentPoint(matrixScroll).Properties.IsRightButtonPressed) {
+    private void MatrixScroll_OnBrushReleased(object? sender, PointerReleasedEventArgs e) { // завершаем проход при отпускании начавшей его кнопки
+        if (brushPointer != e.Pointer || IsBrushButtonPressed(e)) {
             return;
         }
         Point matrixPoint = e.GetPosition(matrixGrid);
@@ -39,21 +53,30 @@ public sealed partial class StructuralElementEditor {
         e.Handled = true;
     }
 
+    private bool IsBrushButtonPressed(PointerEventArgs e) { // проверяем кнопку текущего прохода, а не любую зажатую кнопку
+        return brushUsesRightButton
+            ? e.GetCurrentPoint(matrixScroll).Properties.IsRightButtonPressed
+            : e.GetCurrentPoint(matrixScroll).Properties.IsLeftButtonPressed;
+    }
+
     private void EndBrushStroke() { // очищаем проход и освобождаем только собственный захват указателя
         IPointer? pointer = brushPointer;
         // сначала сбрасываем состояние, чтобы PointerCaptureLost не завершал проход повторно
         brushPointer = null;
         previousBrushPoint = null;
-        invertedDuringStroke.Clear();
+        visitedDuringStroke.Clear();
+        brushUsesRightButton = false;
+        brushMode = CellEditMode.ToggleValue;
+        brushSelectCells = false;
         if (pointer is not null && pointer.Captured == matrixScroll) {
             pointer.Capture(null);
         }
     }
 
-    private void PaintBrushSegment(Point from, Point to) { // инвертируем пересеченные клетки видимой части пути без пропусков между событиями
+    private void PaintBrushSegment(Point from, Point to) { // обрабатываем пересеченные клетки видимой части пути без пропусков между событиями
         // вход — две точки в координатах матрицы, сначала обрезаем путь по видимой области
         // шаг содержит квадрат 36s и промежуток 4s, DDA переходит по границам шагов вдоль отрезка
-        // каждый кандидат проверяем по квадрату, набор прохода защищает от повторной инверсии
+        // каждый кандидат проверяем по квадрату, набор прохода защищает от повторной обработки
         Size matrixSize = GetMatrixSize(zoomSlider.Value);
         Rect viewport = new Rect(matrixScroll.Offset.X, matrixScroll.Offset.Y,
             matrixScroll.Viewport.Width, matrixScroll.Viewport.Height);
@@ -81,7 +104,7 @@ public sealed partial class StructuralElementEditor {
         double nextY = stepY == 0 ? double.PositiveInfinity : (boundaryY - start.Y) / dy;
         // идем по пересечениям отрезка с шагами сетки, а не только по точкам событий мыши
         while (row >= 0 && row < rows && column >= 0 && column < columns) {
-            TryInvertStrokeCell(row, column, start, end, visibleMatrix, stride, CellSide * scale);
+            TryProcessStrokeCell(row, column, start, end, visibleMatrix, stride, CellSide * scale);
             if (row == endRow && column == endColumn) {
                 break;
             }
@@ -100,9 +123,13 @@ public sealed partial class StructuralElementEditor {
                 nextY += deltaY;
             }
         }
+        if (brushMode == CellEditMode.SelectCells) {
+            // счетчик и доступность групповых действий обновляем один раз после участка пути
+            UpdateSelectionControls();
+        }
     }
 
-    private void TryInvertStrokeCell(int row, int column, Point from, Point to, Rect visibleMatrix, double stride, double cellSize) { // проверяем пересечение квадрата и допускаем одну инверсию за проход
+    private void TryProcessStrokeCell(int row, int column, Point from, Point to, Rect visibleMatrix, double stride, double cellSize) { // проверяем пересечение квадрата и выполняем действие один раз за проход
         Rect cellBounds = new Rect(column * stride, row * stride, cellSize, cellSize);
         if (!TryClipBrushSegment(from, to, cellBounds, out Point start, out Point end)) {
             return;
@@ -112,10 +139,22 @@ public sealed partial class StructuralElementEditor {
         if (middle.X < visibleMatrix.X || middle.X >= visibleMatrix.Right ||
             middle.Y < visibleMatrix.Y || middle.Y >= visibleMatrix.Bottom ||
             !TryGetCellAt(middle, out int hitRow, out int hitColumn) ||
-            hitRow != row || hitColumn != column || !invertedDuringStroke.Add((row, column))) {
+            hitRow != row || hitColumn != column || !visitedDuringStroke.Add((row, column))) {
             return;
         }
-        cells[row, column] = !cells[row, column];
+        if (brushMode == CellEditMode.SelectCells) {
+            // начало на неотмеченной клетке добавляет весь путь, на отмеченной снимает весь путь
+            // пересечение со старым выделением не переключает направление посреди жеста
+            if (brushSelectCells) {
+                selectedCells.Add((row, column));
+            }
+            else {
+                selectedCells.Remove((row, column));
+            }
+        }
+        else {
+            cells[row, column] = !cells[row, column];
+        }
         inspectedRow = row;
         inspectedColumn = column;
         RefreshCellVisual(row, column);

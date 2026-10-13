@@ -96,6 +96,8 @@ public sealed partial class StructuralElementEditor {
     private Border CreateEditControls() { // собираем выбор режима и группу для работы с черновиком из одной панели
         // карточку собираем один раз, поэтому подписки не добавляются при обновлении матрицы
         editModeInput.SelectionChanged += (_, _) => {
+            // новый режим начнет следующий жест, текущий проход завершаем
+            EndBrushStroke();
             editMode = editModeInput.SelectedIndex switch {
                 1 => CellEditMode.SelectCells,
                 2 => CellEditMode.SetAnchor,

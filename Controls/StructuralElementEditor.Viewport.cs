@@ -100,7 +100,7 @@ public sealed partial class StructuralElementEditor {
     private void MatrixScroll_OnPointerMoved(object? sender, PointerEventArgs e) {
         hoverViewportPoint = GetViewportPoint(e);
         if (brushPointer == e.Pointer) {
-            if (e.GetCurrentPoint(matrixScroll).Properties.IsRightButtonPressed) {
+            if (IsBrushButtonPressed(e)) {
                 Point matrixPoint = e.GetPosition(matrixGrid);
                 PaintBrushSegment(previousBrushPoint ?? matrixPoint, matrixPoint);
                 previousBrushPoint = matrixPoint;
