@@ -21,7 +21,7 @@ public partial class MainWindow {
             Child = new StackPanel {
                 Spacing = 6,
                 Children = {
-                    new TextBlock { Text = "Эрозия", FontWeight = FontWeight.SemiBold },
+                    new TextBlock { Text = "Морфология", FontWeight = FontWeight.SemiBold },
                     CreateMorphologyActions()
                 }
             }
@@ -45,12 +45,24 @@ public partial class MainWindow {
             errorText.Text = error;
             errorText.IsVisible = !added;
         };
+        Button dilationButton = new Button { Content = "Добавить дилатацию" };
+        dilationButton.Click += (_, _) => {
+            if (DataContext is not MainViewModel viewModel) {
+                errorText.Text = "Очередь недоступна";
+                errorText.IsVisible = true;
+                return;
+            }
+            bool added = viewModel.TryAddDilationStep(out string error);
+            errorText.Text = error;
+            errorText.IsVisible = !added;
+        };
         return new StackPanel {
             Spacing = 6,
             Children = {
                 erosionButton,
+                dilationButton,
                 new TextBlock {
-                    Text = "Эрозия использует примененную матрицу. После редактирования сначала подтвердите изменения.",
+                    Text = "Операции используют примененную матрицу. После редактирования сначала подтвердите изменения.",
                     TextWrapping = TextWrapping.Wrap
                 },
                 errorText

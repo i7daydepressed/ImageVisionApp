@@ -65,6 +65,48 @@ public static class MorphologyService {
         }
     }
 
+    public static void Dilate(MagickImage image, StructuralElement element) {
+        ArgumentNullException.ThrowIfNull(image);
+        ArgumentNullException.ThrowIfNull(element);
+
+        // плоская дилатация берет максимум отдельно по R,G,B, единицы задают соседство
+        // S = {(column - AnchorColumn, row - AnchorRow) для активных клеток}
+        // result_c(x,y) = max image_c(x - dx, y - dy), (dx,dy) из S
+        // знак минус нужен для дилатации с отраженным соседством, у эрозии используется плюс
+        // на симметричном кресте разница незаметна, на односторонней форме меняет направление
+        // например, S={(+1,-1),(-1,0)}: для P(100,50) читаем (99,51) и (101,50)
+        // соседи (220,40,180) и (70,190,90) дают (220,190,180)
+        // итоговый цвет не обязан совпадать с одним соседом, максимум выбирается по каждому каналу
+        // на ЧБ max(220,70,180) = 220, светлые детали расширяются при обычной активной опоре
+        // для [0,0,1] с опорой на среднем нуле dx=+1: результат читает x-1
+        // единственный сосед дает сдвиг содержимого вправо, без обязательного расширения
+        // при неактивной опоре текущий пиксель не входит в максимум автоматически
+        // native Dilate начинает максимум с 0, поэтому обход через Negate здесь не нужен
+        // native сам отражает форму и опору, передаем исходное ядро с reflect=false
+        // реализация: https://github.com/ImageMagick/ImageMagick/blob/7.1.2-31/MagickCore/morphology.c
+        string kernel = CreateUserKernel(element, false);
+
+        image.ColorSpace = ColorSpace.sRGB;
+        image.Depth = 8;
+        VirtualPixelMethod previousVirtualPixelMethod = image.VirtualPixelMethod;
+        try {
+            // за границей повторяем ближайший крайний пиксель, как в эрозии
+            // результат строится из прежних значений, уже измененные соседи не читаются повторно
+            image.VirtualPixelMethod = VirtualPixelMethod.Edge;
+            image.Morphology(new MorphologySettings {
+                Method = MorphologyMethod.Dilate,
+                UserKernel = kernel,
+                Channels = Channels.RGB,
+                Iterations = 1
+            });
+            // размер и alpha текущего пикселя сохраняем, расширяем цвета, а не маску прозрачности
+            // RGB полностью прозрачного соседа участвует, если его позиция входит в элемент
+        }
+        finally {
+            image.VirtualPixelMethod = previousVirtualPixelMethod;
+        }
+    }
+
     private static string CreateUserKernel(StructuralElement element, bool reflect) {
         // Magick.NET ожидает width x height + originX + originY, затем строки слева направо
         // columns соответствуют width/X, rows соответствуют height/Y

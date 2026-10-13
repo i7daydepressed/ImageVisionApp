@@ -33,6 +33,10 @@ public sealed partial class ImageEditStep : ObservableObject {
             ? $"Эрозия {element.Rows}×{element.Columns} (Y×X), " +
               $"опора X={element.AnchorColumn + 1}, Y={element.AnchorRow + 1}"
             : "Эрозия: матрица отсутствует",
+        ImageOperationType.Dilation => ElementSnapshot is StructuralElement dilationElement
+            ? $"Дилатация {dilationElement.Rows}×{dilationElement.Columns} (Y×X), " +
+              $"опора X={dilationElement.AnchorColumn + 1}, Y={dilationElement.AnchorRow + 1}"
+            : "Дилатация: матрица отсутствует",
         _ => Type.ToString()
     };
 

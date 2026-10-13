@@ -60,6 +60,13 @@ public class ImageProcessingService{
                         ?? throw new ArgumentException("Для шага эрозии отсутствует матрица");
                     MorphologyService.Erode(processedImage, element);
                     break;
+
+                case ImageOperationType.Dilation:
+                    // следующий шаг получает результат предыдущего, но свой снимок матрицы
+                    StructuralElement dilationElement = step.ElementSnapshot
+                        ?? throw new ArgumentException("Для шага дилатации отсутствует матрица");
+                    MorphologyService.Dilate(processedImage, dilationElement);
+                    break;
             }
         }
         // сохраняем глубину каналов Q8: палитровый PNG иначе может вернуться с 4-битным RGBA
