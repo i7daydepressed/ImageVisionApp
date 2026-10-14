@@ -24,10 +24,10 @@ public sealed partial class StructuralElementEditor {
         SetSlotsStatus(occupied > 0 ? $"Восстановлено сохраненных матриц: {occupied}" : "");
     }
 
-    private bool TryStoreSlot(int index, StructuralElement? element) { // меняем слот в памяти только после успешной записи полного документа
+    private bool TryStoreSlot(int index, StructuralElement? element, out string error) { // меняем слот в памяти только после успешной записи полного документа
         StructuralElement?[] proposed = (StructuralElement?[])savedSlots.Clone();
         proposed[index] = element;
-        if (!slotStorage.TrySave(proposed, out string error)) {
+        if (!slotStorage.TrySave(proposed, out error)) {
             SetSlotsStatus(error, true);
             return false;
         }
@@ -139,7 +139,7 @@ public sealed partial class StructuralElementEditor {
             SetSlotsStatus(statusText.Text ?? "Не удалось сохранить матрицу", true);
             return;
         }
-        if (!TryStoreSlot(index, snapshot)) {
+        if (!TryStoreSlot(index, snapshot, out _)) {
             return;
         }
         SetSlotsStatus($"Черновик сохранен в ячейку {index + 1}");
@@ -162,7 +162,7 @@ public sealed partial class StructuralElementEditor {
     }
 
     private void ClearSavedSlot(int index) { // очищаем один слот, черновик и примененный элемент не трогаем
-        if (!TryStoreSlot(index, null)) {
+        if (!TryStoreSlot(index, null, out _)) {
             return;
         }
         SetSlotsStatus($"Ячейка {index + 1} очищена");

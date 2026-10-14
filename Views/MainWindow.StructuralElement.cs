@@ -10,6 +10,8 @@ using ImageVisionApp.ViewModels;
 namespace ImageVisionApp.Views;
 
 public partial class MainWindow {
+    private StructuralElementEditor? structuralElementEditor;
+
     private Border CreateStructuralElementCard() {
         TextBlock description = new TextBlock { TextWrapping = TextWrapping.Wrap };
         description.Bind(
@@ -21,6 +23,7 @@ public partial class MainWindow {
             : StructuralElement.CreateCross();
         StructuralElementEditor editor =
             new StructuralElementEditor(initialElement, description);
+        structuralElementEditor = editor;
         editor.SelectionApplied += selectedElement => {
             if (DataContext is MainViewModel currentViewModel) {
                 // редактор передает готовый элемент, очередь и предпросмотр не меняем

@@ -10,7 +10,7 @@ public partial class MainWindow {
     private Border CreateMorphologyCard() {
         // карточка стоит среди инструментов, матрицу по-прежнему подтверждаем в редакторе
         return new Border {
-            Width = 286,
+            Width = 584,
             MinHeight = 160,
             Padding = new Thickness(12),
             BorderBrush = Brushes.Gray,

@@ -75,7 +75,9 @@ public partial class MainWindow {
 
         Button editButton = new Button {
             Content = "Изменить",
-            IsEnabled = step is not null && ImageStepParameterRules.CanEdit(step.Type),
+            IsEnabled = step is not null &&
+                (ImageStepParameterRules.CanEdit(step.Type) ||
+                 step.Type is ImageOperationType.Erosion or ImageOperationType.Dilation),
             HorizontalAlignment = HorizontalAlignment.Left
         };
         editButton.Click += (_, _) => EditAdvancedStep(step);
@@ -174,9 +176,14 @@ public partial class MainWindow {
             return;
         }
         int index = viewModel.AdvancedSteps.IndexOf(step);
-        if (index >= 0) {
-            queueStepEditor?.SetStep(step, index);
+        if (index < 0) {
+            return;
         }
+        if (step.Type is ImageOperationType.Erosion or ImageOperationType.Dilation) {
+            OpenMorphologyStepSlots(step, viewModel);
+            return;
+        }
+        queueStepEditor?.SetStep(step, index);
     }
 
     private string? ApplyQueueStepParameter(ImageEditStep step, double value) { // передаем команду текущей ViewModel и возвращаем ошибку карточке

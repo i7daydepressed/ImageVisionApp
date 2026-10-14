@@ -8,7 +8,7 @@ public sealed partial class ImageEditStep : ObservableObject {
     // матрица этого шага на момент его создания, отдельно от выбора для следующих действий
     // null означает, что матрица шагу не передавалась, прежние числовые действия работают как раньше
     // модель хранит только форму 0/1 и одну опору, состояние редактора сюда не переносим
-    public StructuralElement? ElementSnapshot { get; }
+    public StructuralElement? ElementSnapshot { get; private set; }
 
     // У каждого шага свое значение: например, две яркости могут быть +60 и +90
     [ObservableProperty]
@@ -51,6 +51,21 @@ public sealed partial class ImageEditStep : ObservableObject {
         // шаг A продолжит хранить крест со своей опорой, B получит квадрат со своей опорой
         ElementSnapshot = structuralElement?.CreateSnapshot();
     }
+    // команда передает отдельный готовый снимок, при откате возвращает прежний объект
+    // StructuralElement неизменяемый, его закрытый массив не доступен вызывающему коду
+    internal void SetElementSnapshot(StructuralElement snapshot) {
+        System.ArgumentNullException.ThrowIfNull(snapshot);
+        if (Type is not (ImageOperationType.Erosion or ImageOperationType.Dilation)) {
+            throw new System.InvalidOperationException("Этот шаг не использует структурный элемент");
+        }
+        if (System.Object.ReferenceEquals(ElementSnapshot, snapshot)) {
+            return;
+        }
+        ElementSnapshot = snapshot;
+        OnPropertyChanged(nameof(ElementSnapshot));
+        OnPropertyChanged(nameof(DisplayName));
+    }
+
     partial void OnParameterChanged(double value) {
         OnPropertyChanged(nameof(DisplayName));
     }
