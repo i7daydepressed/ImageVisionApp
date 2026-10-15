@@ -53,6 +53,7 @@ public sealed partial class ImageEditStep : ObservableObject {
             ? $"Черная шляпа {blackHatElement.Rows}×{blackHatElement.Columns} (Y×X), " +
               $"опора X={blackHatElement.AnchorColumn + 1}, Y={blackHatElement.AnchorRow + 1}"
             : "Черная шляпа: матрица отсутствует",
+        ImageOperationType.Sharpen => "Резкость 3×3",
         _ => Type.ToString()
     };
 

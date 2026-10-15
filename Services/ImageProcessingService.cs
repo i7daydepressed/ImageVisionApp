@@ -92,6 +92,10 @@ public class ImageProcessingService{
                         ?? throw new ArgumentException("Для шага черной шляпы отсутствует матрица");
                     MorphologyService.BlackHat(processedImage, blackHatElement);
                     break;
+
+                case ImageOperationType.Sharpen:
+                    ImageFilterService.Sharpen(processedImage);
+                    break;
             }
         }
         // сохраняем глубину каналов Q8: палитровый PNG иначе может вернуться с 4-битным RGBA
