@@ -12,6 +12,10 @@ public partial class MainViewModel {
         return TryAddFilterStep(ImageOperationType.MotionBlur, out error);
     }
 
+    public bool TryAddEmbossStep(out string error) {
+        return TryAddFilterStep(ImageOperationType.Emboss, out error);
+    }
+
     private bool TryAddFilterStep(ImageOperationType type, out string error) {
         error = string.Empty;
         if (originalImageData is null) {
@@ -19,7 +23,7 @@ public partial class MainViewModel {
             return false;
         }
 
-        // оба фильтра имеют фиксированные матрицы, снимок элемента морфологии не нужен
+        // фильтры имеют фиксированные матрицы, снимок элемента морфологии не нужен
         ImageEditStep step = new ImageEditStep(type);
         AdvancedSteps.Add(step);
         try {
@@ -29,7 +33,12 @@ public partial class MainViewModel {
         catch (Exception exception) {
             // неуспешный результат еще не опубликован, удаляем только новый объект
             AdvancedSteps.Remove(step);
-            string operationName = type == ImageOperationType.Sharpen ? "резкость" : "размытие в движении";
+            string operationName = type switch {
+                ImageOperationType.Sharpen => "резкость",
+                ImageOperationType.MotionBlur => "размытие в движении",
+                ImageOperationType.Emboss => "тиснение",
+                _ => "фильтр"
+            };
             error = $"Не удалось добавить {operationName}: {exception.Message}";
             return false;
         }

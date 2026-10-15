@@ -55,6 +55,7 @@ public sealed partial class ImageEditStep : ObservableObject {
             : "Черная шляпа: матрица отсутствует",
         ImageOperationType.Sharpen => "Резкость 3×3",
         ImageOperationType.MotionBlur => "Размытие в движении 1×9 (Y×X)",
+        ImageOperationType.Emboss => "Тиснение 3×3",
         _ => Type.ToString()
     };
 

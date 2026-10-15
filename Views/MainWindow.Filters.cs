@@ -37,6 +37,18 @@ public partial class MainWindow {
             errorText.IsVisible = !added;
         };
 
+        Button embossButton = new Button { Content = "Добавить тиснение" };
+        embossButton.Click += (_, _) => {
+            if (DataContext is not MainViewModel viewModel) {
+                errorText.Text = "Очередь недоступна";
+                errorText.IsVisible = true;
+                return;
+            }
+            bool added = viewModel.TryAddEmbossStep(out string error);
+            errorText.Text = error;
+            errorText.IsVisible = !added;
+        };
+
         return new Border {
             Width = 584,
             MinHeight = 160,
@@ -54,10 +66,10 @@ public partial class MainWindow {
                         Orientation = Orientation.Horizontal,
                         ItemSpacing = 8,
                         LineSpacing = 8,
-                        Children = { sharpenButton, motionBlurButton }
+                        Children = { sharpenButton, motionBlurButton, embossButton }
                     },
                     new TextBlock {
-                        Text = "Резкость усиливает границы. Размытие в движении усредняет 9 пикселей по горизонтали. Повторное добавление применяет выбранный фильтр еще раз.",
+                        Text = "Резкость усиливает границы. Размытие усредняет 9 пикселей по горизонтали. Тиснение выделяет рельеф на сером фоне. Повторное добавление применяет выбранный фильтр еще раз.",
                         TextWrapping = TextWrapping.Wrap
                     },
                     errorText

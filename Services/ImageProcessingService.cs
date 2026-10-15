@@ -100,11 +100,20 @@ public class ImageProcessingService{
                 case ImageOperationType.MotionBlur:
                     ImageFilterService.MotionBlur(processedImage);
                     break;
+
+                case ImageOperationType.Emboss:
+                    ImageFilterService.Emboss(processedImage);
+                    break;
             }
         }
         // сохраняем глубину каналов Q8: палитровый PNG иначе может вернуться с 4-битным RGBA
         processedImage.Depth = 8;
         processedImage.Settings.SetDefine(MagickFormat.Png, "bit-depth", "8");
+        if (processedImage.HasAlpha) {
+            // автоматический PNG с tRNS может потерять alpha серого пикселя, сохраняем явный RGBA
+            // png:color-type=6 задает RGB с alpha: https://usage.imagemagick.org/formats/#png_write
+            processedImage.Settings.SetDefine(MagickFormat.Png, "color-type", "6");
+        }
         //после всех шагов возвращаем готовое изображение в виде байтов пнг
         return processedImage.ToByteArray(MagickFormat.Png);
     }
