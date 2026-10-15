@@ -129,22 +129,7 @@ public partial class MainViewModel : ViewModelBase{
         ApplyAdvancedQueue();
     }
 
-    // меняет положение шага и заново применяет очередь в новом порядке
-    public void MoveAdvancedStep(ImageEditStep? step, int offset) {
-        if (step is null || (offset != -1 && offset != 1)) {
-            return;
-        }
 
-        int oldIndex = AdvancedSteps.IndexOf(step);
-        int newIndex = oldIndex + offset;
-
-        if (oldIndex < 0 || newIndex < 0 || newIndex >= AdvancedSteps.Count) {
-            return;
-        }
-
-        AdvancedSteps.Move(oldIndex, newIndex);
-        ApplyAdvancedQueue();
-    }
 
     // добавляет действие в конец очереди и пересчитывает изображение по всем шагам
     public void AddAdvancedStep(ImageOperationType type, double parameter = 0) {

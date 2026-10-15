@@ -56,12 +56,16 @@ public partial class MainWindow {
     //получает один элемент из AdvancedSteps к примеру step может быть действием яркость +50
     private Grid CreateAdvancedQueueRow(ImageEditStep? step) {
         Grid row = new Grid {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"),
+            ColumnDefinitions = new ColumnDefinitions("54,*,Auto"),
             RowDefinitions = new RowDefinitions("Auto,Auto"),
             ColumnSpacing = 6,
             RowSpacing = 8,
-            MinHeight = 60
+            MinHeight = 64
         };
+
+        QueueStepPositionControl positionControl = CreateQueueStepPositionControl(step);
+        Grid.SetRowSpan(positionControl, 2);
+        row.Children.Add(positionControl);
 
         TextBlock name = new TextBlock {//текст блок шага
             VerticalAlignment = VerticalAlignment.Center,
@@ -70,7 +74,8 @@ public partial class MainWindow {
         name.Bind(
             TextBlock.TextProperty,
             new Avalonia.Data.Binding("DisplayName"));//название шага
-        Grid.SetColumnSpan(name, 4);
+        Grid.SetColumn(name, 1);
+        Grid.SetColumnSpan(name, 2);
         row.Children.Add(name);
 
         Button editButton = new Button {
@@ -82,33 +87,8 @@ public partial class MainWindow {
         };
         editButton.Click += (_, _) => EditAdvancedStep(step);
         Grid.SetRow(editButton, 1);
+        Grid.SetColumn(editButton, 1);
         row.Children.Add(editButton);
-
-        Button moveUpButton = new Button {
-            Content = "↑",
-            MinWidth = 28
-        };
-        moveUpButton.Click += (_, _) => {
-            if (DataContext is MainViewModel viewModel) {
-                viewModel.MoveAdvancedStep(step, -1);
-            }
-        };
-        Grid.SetRow(moveUpButton, 1);
-        Grid.SetColumn(moveUpButton, 1);
-        row.Children.Add(moveUpButton);
-
-        Button moveDownButton = new Button {
-            Content = "↓",
-            MinWidth = 28
-        };
-        moveDownButton.Click += (_, _) => {
-            if (DataContext is MainViewModel viewModel) {
-                viewModel.MoveAdvancedStep(step, 1);
-            }
-        };
-        Grid.SetRow(moveDownButton, 1);
-        Grid.SetColumn(moveDownButton, 2);
-        row.Children.Add(moveDownButton);
 
         Button removeButton = new Button {//минусик для удаления
             Content = "−",
@@ -122,7 +102,7 @@ public partial class MainWindow {
         };
 
         Grid.SetRow(removeButton, 1);
-        Grid.SetColumn(removeButton, 3);// ставит минус справа
+        Grid.SetColumn(removeButton, 2);// ставит минус справа
         row.Children.Add(removeButton);
         return row;
     }
@@ -152,6 +132,7 @@ public partial class MainWindow {
         if (queueEditingViewModel is not null) {
             queueEditingViewModel.AdvancedSteps.CollectionChanged += QueueEditor_OnStepsChanged;
         }
+        RefreshQueueStepPositions();
     }
 
     private void DetachQueueEditingViewModel() { // освобождаем подписку при смене DataContext и закрытии окна
@@ -162,6 +143,8 @@ public partial class MainWindow {
     }
 
     private void QueueEditor_OnStepsChanged(object? sender, NotifyCollectionChangedEventArgs e) {
+        // номера обновляются и без открытого числового редактора
+        RefreshQueueStepPositions();
         ImageEditStep? step = queueStepEditor?.SelectedStep;
         if (step is null) {
             return;
