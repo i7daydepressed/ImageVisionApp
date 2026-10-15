@@ -34,7 +34,7 @@ public partial class MainWindow {
             }
         };
         Slider slider = new Slider {
-            Width = 260,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
             Height = 52,
             Minimum = sliderMinimum,
             Maximum = sliderMaximum,
