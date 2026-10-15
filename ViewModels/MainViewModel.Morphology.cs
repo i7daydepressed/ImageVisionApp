@@ -12,6 +12,14 @@ public partial class MainViewModel {
         return TryAddMorphologyStep(ImageOperationType.Dilation, out error);
     }
 
+    public bool TryAddOpeningStep(out string error) {
+        return TryAddMorphologyStep(ImageOperationType.Opening, out error);
+    }
+
+    public bool TryAddClosingStep(out string error) {
+        return TryAddMorphologyStep(ImageOperationType.Closing, out error);
+    }
+
     private bool TryAddMorphologyStep(ImageOperationType type, out string error) {
         error = string.Empty;
         if (originalImageData is null) {
@@ -34,7 +42,13 @@ public partial class MainViewModel {
             // удаляем только добавленный объект, прежние шаги и показанный результат сохраняются
             // второй пересчет не нужен: неуспешный результат еще не был показан
             AdvancedSteps.Remove(step);
-            string operationName = type == ImageOperationType.Erosion ? "эрозию" : "дилатацию";
+            string operationName = type switch {
+                ImageOperationType.Erosion => "эрозию",
+                ImageOperationType.Dilation => "дилатацию",
+                ImageOperationType.Opening => "открытие",
+                ImageOperationType.Closing => "закрытие",
+                _ => "морфологическую операцию"
+            };
             error = $"Не удалось добавить {operationName}: {exception.Message}";
             return false;
         }

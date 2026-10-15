@@ -15,7 +15,8 @@ public partial class MainViewModel {
             error = "Выбранный шаг больше не находится в очереди";
             return false;
         }
-        if (step.Type is not (ImageOperationType.Erosion or ImageOperationType.Dilation)) {
+        if (step.Type is not (ImageOperationType.Erosion or ImageOperationType.Dilation or
+                              ImageOperationType.Opening or ImageOperationType.Closing)) {
             error = "Этот шаг не использует структурный элемент";
             return false;
         }

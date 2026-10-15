@@ -67,6 +67,19 @@ public class ImageProcessingService{
                         ?? throw new ArgumentException("Для шага дилатации отсутствует матрица");
                     MorphologyService.Dilate(processedImage, dilationElement);
                     break;
+
+                case ImageOperationType.Opening:
+                    // один шаг выполняет два прохода с одной собственной матрицей
+                    StructuralElement openingElement = step.ElementSnapshot
+                        ?? throw new ArgumentException("Для шага открытия отсутствует матрица");
+                    MorphologyService.Open(processedImage, openingElement);
+                    break;
+
+                case ImageOperationType.Closing:
+                    StructuralElement closingElement = step.ElementSnapshot
+                        ?? throw new ArgumentException("Для шага закрытия отсутствует матрица");
+                    MorphologyService.Close(processedImage, closingElement);
+                    break;
             }
         }
         // сохраняем глубину каналов Q8: палитровый PNG иначе может вернуться с 4-битным RGBA

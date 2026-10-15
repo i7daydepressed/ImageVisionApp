@@ -107,6 +107,22 @@ public static class MorphologyService {
         }
     }
 
+    public static void Open(MagickImage image, StructuralElement element) {
+        // открытие: сначала минимум по соседству, затем максимум по результату первого прохода
+        // для обычной симметричной формы убирает небольшие светлые детали на темном фоне
+        // оба прохода используют один снимок, alpha и правило края сохраняют Erode/Dilate
+        Erode(image, element);
+        Dilate(image, element);
+    }
+
+    public static void Close(MagickImage image, StructuralElement element) {
+        // закрытие: сначала максимум по соседству, затем минимум по результату первого прохода
+        // для обычной симметричной формы заполняет небольшие темные разрывы на светлом фоне
+        // первый проход не публикуется отдельно и не добавляет второй шаг в очередь
+        Dilate(image, element);
+        Erode(image, element);
+    }
+
     private static string CreateUserKernel(StructuralElement element, bool reflect) {
         // Magick.NET ожидает width x height + originX + originY, затем строки слева направо
         // columns соответствуют width/X, rows соответствуют height/Y

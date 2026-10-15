@@ -56,11 +56,35 @@ public partial class MainWindow {
             errorText.Text = error;
             errorText.IsVisible = !added;
         };
+        Button openingButton = new Button { Content = "Добавить открытие" };
+        openingButton.Click += (_, _) => {
+            if (DataContext is not MainViewModel viewModel) {
+                errorText.Text = "Очередь недоступна";
+                errorText.IsVisible = true;
+                return;
+            }
+            bool added = viewModel.TryAddOpeningStep(out string error);
+            errorText.Text = error;
+            errorText.IsVisible = !added;
+        };
+        Button closingButton = new Button { Content = "Добавить закрытие" };
+        closingButton.Click += (_, _) => {
+            if (DataContext is not MainViewModel viewModel) {
+                errorText.Text = "Очередь недоступна";
+                errorText.IsVisible = true;
+                return;
+            }
+            bool added = viewModel.TryAddClosingStep(out string error);
+            errorText.Text = error;
+            errorText.IsVisible = !added;
+        };
         return new StackPanel {
             Spacing = 6,
             Children = {
                 erosionButton,
                 dilationButton,
+                openingButton,
+                closingButton,
                 new TextBlock {
                     Text = "Операции используют примененную матрицу. После редактирования сначала подтвердите изменения.",
                     TextWrapping = TextWrapping.Wrap

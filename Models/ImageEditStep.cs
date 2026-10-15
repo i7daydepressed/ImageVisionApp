@@ -37,6 +37,14 @@ public sealed partial class ImageEditStep : ObservableObject {
             ? $"Дилатация {dilationElement.Rows}×{dilationElement.Columns} (Y×X), " +
               $"опора X={dilationElement.AnchorColumn + 1}, Y={dilationElement.AnchorRow + 1}"
             : "Дилатация: матрица отсутствует",
+        ImageOperationType.Opening => ElementSnapshot is StructuralElement openingElement
+            ? $"Открытие {openingElement.Rows}×{openingElement.Columns} (Y×X), " +
+              $"опора X={openingElement.AnchorColumn + 1}, Y={openingElement.AnchorRow + 1}"
+            : "Открытие: матрица отсутствует",
+        ImageOperationType.Closing => ElementSnapshot is StructuralElement closingElement
+            ? $"Закрытие {closingElement.Rows}×{closingElement.Columns} (Y×X), " +
+              $"опора X={closingElement.AnchorColumn + 1}, Y={closingElement.AnchorRow + 1}"
+            : "Закрытие: матрица отсутствует",
         _ => Type.ToString()
     };
 
@@ -55,7 +63,8 @@ public sealed partial class ImageEditStep : ObservableObject {
     // StructuralElement неизменяемый, его закрытый массив не доступен вызывающему коду
     internal void SetElementSnapshot(StructuralElement snapshot) {
         System.ArgumentNullException.ThrowIfNull(snapshot);
-        if (Type is not (ImageOperationType.Erosion or ImageOperationType.Dilation)) {
+        if (Type is not (ImageOperationType.Erosion or ImageOperationType.Dilation or
+                         ImageOperationType.Opening or ImageOperationType.Closing)) {
             throw new System.InvalidOperationException("Этот шаг не использует структурный элемент");
         }
         if (System.Object.ReferenceEquals(ElementSnapshot, snapshot)) {
