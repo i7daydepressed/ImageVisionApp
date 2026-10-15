@@ -83,7 +83,8 @@ public partial class MainWindow {
             IsEnabled = step is not null &&
                 (ImageStepParameterRules.CanEdit(step.Type) ||
                  step.Type is ImageOperationType.Erosion or ImageOperationType.Dilation or
-                              ImageOperationType.Opening or ImageOperationType.Closing),
+                              ImageOperationType.Opening or ImageOperationType.Closing or
+                              ImageOperationType.MorphologicalGradient),
             HorizontalAlignment = HorizontalAlignment.Left
         };
         editButton.Click += (_, _) => EditAdvancedStep(step);
@@ -164,7 +165,8 @@ public partial class MainWindow {
             return;
         }
         if (step.Type is ImageOperationType.Erosion or ImageOperationType.Dilation or
-                         ImageOperationType.Opening or ImageOperationType.Closing) {
+                         ImageOperationType.Opening or ImageOperationType.Closing or
+                         ImageOperationType.MorphologicalGradient) {
             OpenMorphologyStepSlots(step, viewModel);
             return;
         }

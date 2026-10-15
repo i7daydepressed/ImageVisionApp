@@ -123,6 +123,43 @@ public static class MorphologyService {
         Erode(image, element);
     }
 
+    public static void Gradient(MagickImage image, StructuralElement element) {
+        ArgumentNullException.ThrowIfNull(image);
+        ArgumentNullException.ThrowIfNull(element);
+
+        VirtualPixelMethod previousVirtualPixelMethod = image.VirtualPixelMethod;
+        try {
+            // оба прохода начинаются с одного входа этого шага, а не с результата друг друга
+            using MagickImage dilated = new MagickImage(image);
+            using MagickImage eroded = new MagickImage(image);
+            Dilate(dilated, element);
+            Erode(eroded, element);
+
+            byte[] dilatedRgba = dilated.ToByteArray(MagickFormat.Rgba);
+            byte[] erodedRgba = eroded.ToByteArray(MagickFormat.Rgba);
+            byte[] gradientRgb = new byte[dilatedRgba.Length / 4 * 3];
+            for (int rgbaIndex = 0, rgbIndex = 0; rgbaIndex < dilatedRgba.Length; rgbaIndex += 4, rgbIndex += 3) {
+                for (int channel = 0; channel < 3; channel++) {
+                    // новый канал = max(0, дилатация - эрозия), например 200 - 70 = 130
+                    // при неактивной опоре разность может быть отрицательной: 40 - 90 дает 0
+                    gradientRgb[rgbIndex + channel] = (byte)Math.Max(
+                        0, dilatedRgba[rgbaIndex + channel] - erodedRgba[rgbaIndex + channel]);
+                }
+            }
+
+            image.ColorSpace = ColorSpace.sRGB;
+            image.Depth = 8;
+            // передаем только RGB, исходная alpha и метаданные текущего изображения сохраняются
+            // https://github.com/dlemstra/Magick.NET/blob/298053457c16f413a9df6edaca668b12289bea2d/src/Magick.NET/MagickImage.cs#L3455-L3480
+            image.ImportPixels(gradientRgb,
+                new PixelImportSettings(image.Width, image.Height, StorageType.Char, PixelMapping.RGB));
+        }
+        finally {
+            // проход на копии может сменить правило края исходника, возвращаем его и при ошибке
+            image.VirtualPixelMethod = previousVirtualPixelMethod;
+        }
+    }
+
     private static string CreateUserKernel(StructuralElement element, bool reflect) {
         // Magick.NET ожидает width x height + originX + originY, затем строки слева направо
         // columns соответствуют width/X, rows соответствуют height/Y

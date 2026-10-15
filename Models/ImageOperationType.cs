@@ -12,5 +12,6 @@ public enum ImageOperationType {
     Erosion,
     Dilation,
     Opening,
-    Closing
+    Closing,
+    MorphologicalGradient
 }

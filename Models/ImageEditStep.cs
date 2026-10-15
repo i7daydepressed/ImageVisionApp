@@ -45,6 +45,10 @@ public sealed partial class ImageEditStep : ObservableObject {
             ? $"Закрытие {closingElement.Rows}×{closingElement.Columns} (Y×X), " +
               $"опора X={closingElement.AnchorColumn + 1}, Y={closingElement.AnchorRow + 1}"
             : "Закрытие: матрица отсутствует",
+        ImageOperationType.MorphologicalGradient => ElementSnapshot is StructuralElement gradientElement
+            ? $"Градиент {gradientElement.Rows}×{gradientElement.Columns} (Y×X), " +
+              $"опора X={gradientElement.AnchorColumn + 1}, Y={gradientElement.AnchorRow + 1}"
+            : "Градиент: матрица отсутствует",
         _ => Type.ToString()
     };
 
@@ -64,7 +68,8 @@ public sealed partial class ImageEditStep : ObservableObject {
     internal void SetElementSnapshot(StructuralElement snapshot) {
         System.ArgumentNullException.ThrowIfNull(snapshot);
         if (Type is not (ImageOperationType.Erosion or ImageOperationType.Dilation or
-                         ImageOperationType.Opening or ImageOperationType.Closing)) {
+                         ImageOperationType.Opening or ImageOperationType.Closing or
+                         ImageOperationType.MorphologicalGradient)) {
             throw new System.InvalidOperationException("Этот шаг не использует структурный элемент");
         }
         if (System.Object.ReferenceEquals(ElementSnapshot, snapshot)) {

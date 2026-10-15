@@ -20,6 +20,10 @@ public partial class MainViewModel {
         return TryAddMorphologyStep(ImageOperationType.Closing, out error);
     }
 
+    public bool TryAddMorphologicalGradientStep(out string error) {
+        return TryAddMorphologyStep(ImageOperationType.MorphologicalGradient, out error);
+    }
+
     private bool TryAddMorphologyStep(ImageOperationType type, out string error) {
         error = string.Empty;
         if (originalImageData is null) {
@@ -47,6 +51,7 @@ public partial class MainViewModel {
                 ImageOperationType.Dilation => "дилатацию",
                 ImageOperationType.Opening => "открытие",
                 ImageOperationType.Closing => "закрытие",
+                ImageOperationType.MorphologicalGradient => "морфологический градиент",
                 _ => "морфологическую операцию"
             };
             error = $"Не удалось добавить {operationName}: {exception.Message}";

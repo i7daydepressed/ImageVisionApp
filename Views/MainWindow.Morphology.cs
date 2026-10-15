@@ -78,13 +78,32 @@ public partial class MainWindow {
             errorText.Text = error;
             errorText.IsVisible = !added;
         };
+        Button gradientButton = new Button { Content = "Добавить градиент" };
+        gradientButton.Click += (_, _) => {
+            if (DataContext is not MainViewModel viewModel) {
+                errorText.Text = "Очередь недоступна";
+                errorText.IsVisible = true;
+                return;
+            }
+            bool added = viewModel.TryAddMorphologicalGradientStep(out string error);
+            errorText.Text = error;
+            errorText.IsVisible = !added;
+        };
         return new StackPanel {
             Spacing = 6,
             Children = {
-                erosionButton,
-                dilationButton,
-                openingButton,
-                closingButton,
+                new WrapPanel {
+                    Orientation = Orientation.Horizontal,
+                    ItemSpacing = 8,
+                    LineSpacing = 8,
+                    Children = {
+                        erosionButton,
+                        dilationButton,
+                        openingButton,
+                        closingButton,
+                        gradientButton
+                    }
+                },
                 new TextBlock {
                     Text = "Операции используют примененную матрицу. После редактирования сначала подтвердите изменения.",
                     TextWrapping = TextWrapping.Wrap
