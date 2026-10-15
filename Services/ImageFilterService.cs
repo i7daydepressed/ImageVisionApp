@@ -49,4 +49,41 @@ public static class ImageFilterService {
         image.ImportPixels(sharpenedRgb,
             new PixelImportSettings(image.Width, image.Height, StorageType.Char, PixelMapping.RGB));
     }
+
+    public static void MotionBlur(MagickImage image) {
+        ArgumentNullException.ThrowIfNull(image);
+        image.ColorSpace = ColorSpace.sRGB;
+        image.Depth = 8;
+
+        // экспортируем RGBA с копии, наличие alpha у рабочего RGB-изображения не меняем
+        using MagickImage source = new MagickImage(image);
+        byte[] sourceRgba = source.ToByteArray(MagickFormat.Rgba);
+        byte[] blurredRgb = new byte[sourceRgba.Length / 4 * 3];
+        int width = checked((int)image.Width);
+        int height = checked((int)image.Height);
+
+        // горизонтальная полоса из 9 весов по 1/9, опора на пятом пикселе
+        // новый канал = среднее четырех соседей слева, центра и четырех справа
+        // https://www.mathworks.com/help/images/ref/fspecial.html
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int target = (y * width + x) * 3;
+                for (int channel = 0; channel < 3; channel++) {
+                    int sum = 0;
+                    for (int offset = -4; offset <= 4; offset++) {
+                        // за краем повторяем ближайший пиксель, строку y не меняем
+                        int sourceX = Math.Clamp(x + offset, 0, width - 1);
+                        sum += sourceRgba[(y * width + sourceX) * 4 + channel];
+                    }
+                    // сумма 0..2295, округляем среднее к ближайшему целому без усечения вниз
+                    blurredRgb[target + channel] = (byte)((sum + 4) / 9);
+                }
+            }
+        }
+
+        // меняем только RGB, исходная alpha и метаданные остаются у рабочего объекта
+        // https://github.com/dlemstra/Magick.NET/blob/298053457c16f413a9df6edaca668b12289bea2d/src/Magick.NET/MagickImage.cs#L3455-L3480
+        image.ImportPixels(blurredRgb,
+            new PixelImportSettings(image.Width, image.Height, StorageType.Char, PixelMapping.RGB));
+    }
 }

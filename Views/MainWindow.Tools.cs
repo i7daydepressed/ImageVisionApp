@@ -30,7 +30,7 @@ public partial class MainWindow {
 
         int currentColumns = 0;
         void UpdateToolsLayout(double availableWidth) {
-            // 286 на карточку и 12 между колонками: 4 колонки требуют 1180
+            // пороги UI1 сохраняем, первая колонка подстраивается под текст кнопок
             int columns = availableWidth >= 1180 ? 4 :
                 availableWidth >= 882 ? 3 : availableWidth >= 584 ? 2 : 1;
             if (columns == currentColumns) {
@@ -38,9 +38,9 @@ public partial class MainWindow {
             }
             currentColumns = columns;
             toolsLayout.ColumnDefinitions = new ColumnDefinitions(columns switch {
-                4 => "*,*,*,*",
-                3 => "*,*,*",
-                2 => "*,*",
+                4 => "Auto,*,*,*",
+                3 => "Auto,*,*",
+                2 => "Auto,*",
                 _ => "*"
             });
             toolsLayout.RowDefinitions = new RowDefinitions(columns switch {

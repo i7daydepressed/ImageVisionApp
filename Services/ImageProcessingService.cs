@@ -96,6 +96,10 @@ public class ImageProcessingService{
                 case ImageOperationType.Sharpen:
                     ImageFilterService.Sharpen(processedImage);
                     break;
+
+                case ImageOperationType.MotionBlur:
+                    ImageFilterService.MotionBlur(processedImage);
+                    break;
             }
         }
         // сохраняем глубину каналов Q8: палитровый PNG иначе может вернуться с 4-битным RGBA

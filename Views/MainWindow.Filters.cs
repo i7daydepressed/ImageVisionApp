@@ -25,6 +25,18 @@ public partial class MainWindow {
             errorText.IsVisible = !added;
         };
 
+        Button motionBlurButton = new Button { Content = "Добавить размытие" };
+        motionBlurButton.Click += (_, _) => {
+            if (DataContext is not MainViewModel viewModel) {
+                errorText.Text = "Очередь недоступна";
+                errorText.IsVisible = true;
+                return;
+            }
+            bool added = viewModel.TryAddMotionBlurStep(out string error);
+            errorText.Text = error;
+            errorText.IsVisible = !added;
+        };
+
         return new Border {
             Width = 584,
             MinHeight = 160,
@@ -42,10 +54,10 @@ public partial class MainWindow {
                         Orientation = Orientation.Horizontal,
                         ItemSpacing = 8,
                         LineSpacing = 8,
-                        Children = { sharpenButton }
+                        Children = { sharpenButton, motionBlurButton }
                     },
                     new TextBlock {
-                        Text = "Резкость усиливает границы и мелкие детали. Повторное добавление применяет фильтр еще раз.",
+                        Text = "Резкость усиливает границы. Размытие в движении усредняет 9 пикселей по горизонтали. Повторное добавление применяет выбранный фильтр еще раз.",
                         TextWrapping = TextWrapping.Wrap
                     },
                     errorText

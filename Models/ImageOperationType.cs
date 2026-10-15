@@ -15,5 +15,6 @@ public enum ImageOperationType {
     Closing,
     MorphologicalGradient,
     BlackHat,
-    Sharpen
+    Sharpen,
+    MotionBlur
 }
