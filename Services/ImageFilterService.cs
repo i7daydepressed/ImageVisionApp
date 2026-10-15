@@ -1,10 +1,56 @@
 using System;
 using ImageMagick;
+using ImageVisionApp.Models;
 
 namespace ImageVisionApp.Services;
 
 // фильтры работают с текущим изображением, состояние очереди и интерфейса сюда не передаем
 public static class ImageFilterService {
+    public static void ApplyKernel(MagickImage image, FilterKernel kernel) {
+        ArgumentNullException.ThrowIfNull(image);
+        ArgumentNullException.ThrowIfNull(kernel);
+        image.ColorSpace = ColorSpace.sRGB;
+        image.Depth = 8;
+
+        // экспортируем копию: наличие alpha у рабочего изображения остается прежним
+        using MagickImage source = new MagickImage(image);
+        byte[] sourceRgba = source.ToByteArray(MagickFormat.Rgba);
+        byte[] filteredRgb = new byte[sourceRgba.Length / 4 * 3];
+        int width = checked((int)image.Width);
+        int height = checked((int)image.Height);
+
+        // прямое наложение без отражения: сосед = пиксель + ячейка - опора
+        // канал = сумма(вес * канал соседа) / делитель + смещение
+        // делитель задан явно, сумма весов не нормализуется автоматически
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int target = (y * width + x) * 3;
+                for (int channel = 0; channel < 3; channel++) {
+                    double sum = 0;
+                    for (int row = 0; row < kernel.Rows; row++) {
+                        int sourceY = (int)Math.Clamp((long)y + row - kernel.AnchorRow, 0, height - 1);
+                        for (int column = 0; column < kernel.Columns; column++) {
+                            // за краем повторяем ближайший пиксель, все выборки читают вход шага
+                            int sourceX = (int)Math.Clamp((long)x + column - kernel.AnchorColumn, 0, width - 1);
+                            int sourceIndex = (sourceY * width + sourceX) * 4 + channel;
+                            sum += kernel.GetWeight(row, column) * sourceRgba[sourceIndex];
+                        }
+                    }
+                    double value = sum / kernel.Divisor + kernel.Offset;
+                    if (!double.IsFinite(value)) {
+                        throw new InvalidOperationException("Переполнение при расчете пользовательской матрицы");
+                    }
+                    // ограничиваем готовый канал, половины округляем вверх после ограничения
+                    filteredRgb[target + channel] = (byte)Math.Round(
+                        Math.Clamp(value, 0, 255), MidpointRounding.AwayFromZero);
+                }
+            }
+        }
+
+        // все каналы рассчитаны до записи, alpha текущего пикселя не перезаписывается
+        image.ImportPixels(filteredRgb,
+            new PixelImportSettings(image.Width, image.Height, StorageType.Char, PixelMapping.RGB));
+    }
     public static void Sharpen(MagickImage image) {
         ArgumentNullException.ThrowIfNull(image);
         image.ColorSpace = ColorSpace.sRGB;

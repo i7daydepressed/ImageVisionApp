@@ -10,6 +10,9 @@ public sealed partial class ImageEditStep : ObservableObject {
     // модель хранит только форму 0/1 и одну опору, состояние редактора сюда не переносим
     public StructuralElement? ElementSnapshot { get; private set; }
 
+    // числовое ядро пользовательского фильтра, отдельно от элемента морфологии 0/1
+    public FilterKernel? KernelSnapshot { get; private set; }
+
     // У каждого шага свое значение: например, две яркости могут быть +60 и +90
     [ObservableProperty]
     public partial double Parameter { get; set; }
@@ -56,19 +59,26 @@ public sealed partial class ImageEditStep : ObservableObject {
         ImageOperationType.Sharpen => "Резкость 3×3",
         ImageOperationType.MotionBlur => "Размытие в движении 1×9 (Y×X)",
         ImageOperationType.Emboss => "Тиснение 3×3",
+        ImageOperationType.CustomFilter => KernelSnapshot is FilterKernel kernel
+            ? $"Своя матрица {kernel.Rows}×{kernel.Columns} (Y×X), " +
+              $"опора X={kernel.AnchorColumn + 1}, Y={kernel.AnchorRow + 1}, " +
+              $"делитель {kernel.Divisor:G}, смещение {kernel.Offset:G}"
+            : "Своя матрица: ядро отсутствует",
         _ => Type.ToString()
     };
 
     public ImageEditStep(
         ImageOperationType type,
         double parameter = 0,
-        StructuralElement? structuralElement = null) {
+        StructuralElement? structuralElement = null,
+        FilterKernel? filterKernel = null) {
         Type = type;
         Parameter = parameter;
         // у каждого шага свой снимок, новый выбор или загрузка слота не заменяют его содержимое
         // например, шаг A получил крест 3x3, затем выбран квадрат 5x5 для шага B
         // шаг A продолжит хранить крест со своей опорой, B получит квадрат со своей опорой
         ElementSnapshot = structuralElement?.CreateSnapshot();
+        KernelSnapshot = filterKernel?.CreateSnapshot();
     }
     // команда передает отдельный готовый снимок, при откате возвращает прежний объект
     // StructuralElement неизменяемый, его закрытый массив не доступен вызывающему коду
@@ -84,6 +94,20 @@ public sealed partial class ImageEditStep : ObservableObject {
         }
         ElementSnapshot = snapshot;
         OnPropertyChanged(nameof(ElementSnapshot));
+        OnPropertyChanged(nameof(DisplayName));
+    }
+
+    // принимает готовый независимый снимок, при откате возвращаем прежний объект
+    internal void SetKernelSnapshot(FilterKernel snapshot) {
+        System.ArgumentNullException.ThrowIfNull(snapshot);
+        if (Type != ImageOperationType.CustomFilter) {
+            throw new System.InvalidOperationException("Этот шаг не использует пользовательское ядро");
+        }
+        if (System.Object.ReferenceEquals(KernelSnapshot, snapshot)) {
+            return;
+        }
+        KernelSnapshot = snapshot;
+        OnPropertyChanged(nameof(KernelSnapshot));
         OnPropertyChanged(nameof(DisplayName));
     }
 

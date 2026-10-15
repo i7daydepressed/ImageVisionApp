@@ -104,6 +104,12 @@ public class ImageProcessingService{
                 case ImageOperationType.Emboss:
                     ImageFilterService.Emboss(processedImage);
                     break;
+
+                case ImageOperationType.CustomFilter:
+                    FilterKernel kernel = step.KernelSnapshot
+                        ?? throw new ArgumentException("Для пользовательского фильтра отсутствует ядро");
+                    ImageFilterService.ApplyKernel(processedImage, kernel);
+                    break;
             }
         }
         // сохраняем глубину каналов Q8: палитровый PNG иначе может вернуться с 4-битным RGBA

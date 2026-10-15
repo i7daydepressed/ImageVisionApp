@@ -17,5 +17,6 @@ public enum ImageOperationType {
     BlackHat,
     Sharpen,
     MotionBlur,
-    Emboss
+    Emboss,
+    CustomFilter
 }
