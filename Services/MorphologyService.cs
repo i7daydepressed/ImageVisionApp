@@ -160,6 +160,42 @@ public static class MorphologyService {
         }
     }
 
+    public static void BlackHat(MagickImage image, StructuralElement element) {
+        ArgumentNullException.ThrowIfNull(image);
+        ArgumentNullException.ThrowIfNull(element);
+
+        VirtualPixelMethod previousVirtualPixelMethod = image.VirtualPixelMethod;
+        try {
+            // вход и закрытие сравниваем в одном пространстве sRGB с 8-битными каналами
+            image.ColorSpace = ColorSpace.sRGB;
+            image.Depth = 8;
+            using MagickImage closed = new MagickImage(image);
+            // экспорт RGBA включает alpha, поэтому читаем копию и не меняем ее наличие у входа
+            byte[] sourceRgba = closed.ToByteArray(MagickFormat.Rgba);
+            // закрытие выполняется на копии: вход шага нужен для последующего вычитания
+            Close(closed, element);
+            byte[] closedRgba = closed.ToByteArray(MagickFormat.Rgba);
+            byte[] blackHatRgb = new byte[sourceRgba.Length / 4 * 3];
+            for (int rgbaIndex = 0, rgbIndex = 0; rgbaIndex < sourceRgba.Length; rgbaIndex += 4, rgbIndex += 3) {
+                for (int channel = 0; channel < 3; channel++) {
+                    // новый канал = max(0, закрытие - вход), например 200 - 40 = 160
+                    // отрицательную разность у края ограничиваем нулем, модуль не берем
+                    blackHatRgb[rgbIndex + channel] = (byte)Math.Max(
+                        0, closedRgba[rgbaIndex + channel] - sourceRgba[rgbaIndex + channel]);
+                }
+            }
+
+            // записываем только RGB, alpha и метаданные текущего изображения сохраняются
+            // https://github.com/dlemstra/Magick.NET/blob/298053457c16f413a9df6edaca668b12289bea2d/src/Magick.NET/MagickImage.cs#L3455-L3480
+            image.ImportPixels(blackHatRgb,
+                new PixelImportSettings(image.Width, image.Height, StorageType.Char, PixelMapping.RGB));
+        }
+        finally {
+            // возвращаем правило края исходного объекта, как в градиенте H6
+            image.VirtualPixelMethod = previousVirtualPixelMethod;
+        }
+    }
+
     private static string CreateUserKernel(StructuralElement element, bool reflect) {
         // Magick.NET ожидает width x height + originX + originY, затем строки слева направо
         // columns соответствуют width/X, rows соответствуют height/Y

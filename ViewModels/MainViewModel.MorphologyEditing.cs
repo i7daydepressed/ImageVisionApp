@@ -17,7 +17,7 @@ public partial class MainViewModel {
         }
         if (step.Type is not (ImageOperationType.Erosion or ImageOperationType.Dilation or
                               ImageOperationType.Opening or ImageOperationType.Closing or
-                              ImageOperationType.MorphologicalGradient)) {
+                              ImageOperationType.MorphologicalGradient or ImageOperationType.BlackHat)) {
             error = "Этот шаг не использует структурный элемент";
             return false;
         }

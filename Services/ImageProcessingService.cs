@@ -86,6 +86,12 @@ public class ImageProcessingService{
                         ?? throw new ArgumentException("Для шага градиента отсутствует матрица");
                     MorphologyService.Gradient(processedImage, gradientElement);
                     break;
+
+                case ImageOperationType.BlackHat:
+                    StructuralElement blackHatElement = step.ElementSnapshot
+                        ?? throw new ArgumentException("Для шага черной шляпы отсутствует матрица");
+                    MorphologyService.BlackHat(processedImage, blackHatElement);
+                    break;
             }
         }
         // сохраняем глубину каналов Q8: палитровый PNG иначе может вернуться с 4-битным RGBA

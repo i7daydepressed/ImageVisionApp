@@ -89,6 +89,17 @@ public partial class MainWindow {
             errorText.Text = error;
             errorText.IsVisible = !added;
         };
+        Button blackHatButton = new Button { Content = "Добавить черную шляпу" };
+        blackHatButton.Click += (_, _) => {
+            if (DataContext is not MainViewModel viewModel) {
+                errorText.Text = "Очередь недоступна";
+                errorText.IsVisible = true;
+                return;
+            }
+            bool added = viewModel.TryAddBlackHatStep(out string error);
+            errorText.Text = error;
+            errorText.IsVisible = !added;
+        };
         return new StackPanel {
             Spacing = 6,
             Children = {
@@ -101,7 +112,8 @@ public partial class MainWindow {
                         dilationButton,
                         openingButton,
                         closingButton,
-                        gradientButton
+                        gradientButton,
+                        blackHatButton
                     }
                 },
                 new TextBlock {
