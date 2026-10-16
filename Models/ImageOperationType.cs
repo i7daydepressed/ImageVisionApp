@@ -18,5 +18,6 @@ public enum ImageOperationType {
     Sharpen,
     MotionBlur,
     Emboss,
-    CustomFilter
+    CustomFilter,
+    Median
 }

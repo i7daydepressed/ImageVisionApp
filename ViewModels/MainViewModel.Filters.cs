@@ -39,6 +39,10 @@ public partial class MainViewModel {
         return TryAddFilterStep(ImageOperationType.Emboss, out error);
     }
 
+    public bool TryAddMedianStep(out string error) {
+        return TryAddFilterStep(ImageOperationType.Median, out error);
+    }
+
     private bool TryAddFilterStep(
         ImageOperationType type, out string error, FilterKernel? filterKernel = null) {
         error = string.Empty;
@@ -61,6 +65,7 @@ public partial class MainViewModel {
                 ImageOperationType.Sharpen => "резкость",
                 ImageOperationType.MotionBlur => "размытие в движении",
                 ImageOperationType.Emboss => "тиснение",
+                ImageOperationType.Median => "медианный фильтр",
                 ImageOperationType.CustomFilter => "пользовательский фильтр",
                 _ => "фильтр"
             };

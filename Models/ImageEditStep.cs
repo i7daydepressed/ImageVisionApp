@@ -59,6 +59,7 @@ public sealed partial class ImageEditStep : ObservableObject {
         ImageOperationType.Sharpen => "Резкость 3×3",
         ImageOperationType.MotionBlur => "Размытие в движении 1×9 (Y×X)",
         ImageOperationType.Emboss => "Тиснение 3×3",
+        ImageOperationType.Median => "Медианный фильтр 3×3",
         ImageOperationType.CustomFilter => KernelSnapshot is FilterKernel kernel
             ? $"Своя матрица {kernel.Rows}×{kernel.Columns} (Y×X), " +
               $"опора X={kernel.AnchorColumn + 1}, Y={kernel.AnchorRow + 1}, " +

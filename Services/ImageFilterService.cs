@@ -51,6 +51,49 @@ public static class ImageFilterService {
         image.ImportPixels(filteredRgb,
             new PixelImportSettings(image.Width, image.Height, StorageType.Char, PixelMapping.RGB));
     }
+    public static void Median(MagickImage image) {
+        ArgumentNullException.ThrowIfNull(image);
+        image.ColorSpace = ColorSpace.sRGB;
+        image.Depth = 8;
+
+        // экспорт RGBA выполняем на копии, наличие alpha у рабочего объекта сохраняем
+        using MagickImage source = new MagickImage(image);
+        byte[] sourceRgba = source.ToByteArray(MagickFormat.Rgba);
+        byte[] filteredRgb = new byte[sourceRgba.Length / 4 * 3];
+        int width = checked((int)image.Width);
+        int height = checked((int)image.Height);
+        byte[] neighbors = new byte[9];
+
+        // для каждого RGB собираем окно 3x3, сортируем 9 значений и берем пятое, индекс 4
+        // например, 0,100,100,100,255,100,100,100,100 после сортировки дают медиану 100
+        // это выбор по порядку, коэффициентов и усреднения здесь нет
+        // независимые каналы и повтор края: https://docs.opencv.org/4.8.0/d4/d86/group__imgproc__filter.html
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int target = (y * width + x) * 3;
+                for (int channel = 0; channel < 3; channel++) {
+                    int index = 0;
+                    for (int dy = -1; dy <= 1; dy++) {
+                        int sourceY = Math.Clamp(y + dy, 0, height - 1);
+                        for (int dx = -1; dx <= 1; dx++) {
+                            // за краем повторяем ближайший пиксель, все выборки читают вход шага
+                            int sourceX = Math.Clamp(x + dx, 0, width - 1);
+                            neighbors[index] = sourceRgba[(sourceY * width + sourceX) * 4 + channel];
+                            index++;
+                        }
+                    }
+                    // перед каждым расчетом все 9 позиций заполнены заново, сортировка не портит источник
+                    Array.Sort(neighbors);
+                    filteredRgb[target + channel] = neighbors[4];
+                }
+            }
+        }
+
+        // импортируем только RGB, alpha текущего пикселя и метаданные не перезаписываем
+        image.ImportPixels(filteredRgb,
+            new PixelImportSettings(image.Width, image.Height, StorageType.Char, PixelMapping.RGB));
+    }
+
     public static void Sharpen(MagickImage image) {
         ArgumentNullException.ThrowIfNull(image);
         image.ColorSpace = ColorSpace.sRGB;

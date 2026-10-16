@@ -105,6 +105,10 @@ public class ImageProcessingService{
                     ImageFilterService.Emboss(processedImage);
                     break;
 
+                case ImageOperationType.Median:
+                    ImageFilterService.Median(processedImage);
+                    break;
+
                 case ImageOperationType.CustomFilter:
                     FilterKernel kernel = step.KernelSnapshot
                         ?? throw new ArgumentException("Для пользовательского фильтра отсутствует ядро");
