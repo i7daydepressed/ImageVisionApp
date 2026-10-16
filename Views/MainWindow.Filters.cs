@@ -49,6 +49,18 @@ public partial class MainWindow {
             errorText.IsVisible = !added;
         };
 
+        Button customButton = new Button { Content = "Своя матрица…" };
+        customButton.Click += (_, _) => {
+            if (DataContext is not MainViewModel viewModel) {
+                errorText.Text = "Очередь недоступна";
+                errorText.IsVisible = true;
+                return;
+            }
+            errorText.Text = string.Empty;
+            errorText.IsVisible = false;
+            OpenFilterKernelEditor(viewModel);
+        };
+
         return new Border {
             Width = 584,
             MinHeight = 160,
@@ -66,10 +78,10 @@ public partial class MainWindow {
                         Orientation = Orientation.Horizontal,
                         ItemSpacing = 8,
                         LineSpacing = 8,
-                        Children = { sharpenButton, motionBlurButton, embossButton }
+                        Children = { sharpenButton, motionBlurButton, embossButton, customButton }
                     },
                     new TextBlock {
-                        Text = "Резкость усиливает границы. Размытие усредняет 9 пикселей по горизонтали. Тиснение выделяет рельеф на сером фоне. Повторное добавление применяет выбранный фильтр еще раз.",
+                        Text = "Резкость усиливает границы. Размытие усредняет 9 пикселей по горизонтали. Тиснение выделяет рельеф на сером фоне. «Своя матрица» открывает числовой редактор; подтверждение добавляет один шаг.",
                         TextWrapping = TextWrapping.Wrap
                     },
                     errorText

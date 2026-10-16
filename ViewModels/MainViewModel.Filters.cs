@@ -22,6 +22,11 @@ public partial class MainViewModel {
     public bool TryAddCustomFilterStep(out string error) {
         return TryAddFilterStep(ImageOperationType.CustomFilter, out error, SelectedFilterKernel);
     }
+
+    public bool TryAddCustomFilterStep(FilterKernel kernel, out string error) {
+        ArgumentNullException.ThrowIfNull(kernel);
+        return TryAddFilterStep(ImageOperationType.CustomFilter, out error, kernel);
+    }
     public bool TryAddSharpenStep(out string error) {
         return TryAddFilterStep(ImageOperationType.Sharpen, out error);
     }
