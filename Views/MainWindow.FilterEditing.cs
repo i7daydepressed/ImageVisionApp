@@ -7,6 +7,8 @@ namespace ImageVisionApp.Views;
 public partial class MainWindow {
     private bool filterKernelDialogOpen;
 
+    // прежний маршрут открытия FilterKernelWindow, действующие кнопки его больше не вызывают
+    // метод сохранен вместе с диалогом, ввод работает в карточках, изменение шага через ячейки
     private async void OpenFilterKernelEditor(MainViewModel viewModel, ImageEditStep? step = null) {
         if (filterKernelDialogOpen || !ReferenceEquals(DataContext, viewModel)) {
             return;

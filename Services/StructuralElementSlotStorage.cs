@@ -8,7 +8,7 @@ namespace ImageVisionApp.Services;
 
 // отвечает только за формат и файловое хранение, не знает о кнопках и черновике редактора
 public sealed class StructuralElementSlotStorage {
-    private const int FormatVersion = 1;
+    private const int FormatVersion = 2;
     private readonly int slotCount;
     private readonly string? configuredFilePath;
     private bool writeAllowed;
@@ -25,8 +25,8 @@ public sealed class StructuralElementSlotStorage {
         configuredFilePath = filePath;
     }
 
-    public bool TryLoad(out StructuralElement?[] slots, out string error) {
-        slots = new StructuralElement?[slotCount];
+    public bool TryLoad(out MatrixSlot?[] slots, out string error) {
+        slots = new MatrixSlot?[slotCount];
         error = "";
         writeAllowed = false;
         string path = configuredFilePath ?? "системная папка данных";
@@ -35,17 +35,17 @@ public sealed class StructuralElementSlotStorage {
             string json = File.ReadAllText(path);
             StructuralElementSlotsDocument? document =
                 JsonSerializer.Deserialize<StructuralElementSlotsDocument>(json, JsonOptions);
-            if (document is null || document.Version != FormatVersion) {
+            if (document is null || document.Version is not (1 or FormatVersion)) {
                 throw new InvalidDataException("Неизвестная версия файла сохраненных матриц");
             }
             if (document.Slots is null || document.Slots.Length != slotCount) {
                 throw new InvalidDataException($"Файл должен содержать ровно {slotCount} слота");
             }
-            StructuralElement?[] restored = new StructuralElement?[slotCount];
+            MatrixSlot?[] restored = new MatrixSlot?[slotCount];
             for (int index = 0; index < slotCount; index++) {
                 StructuralElementSlotData? data = document.Slots[index];
                 if (data is not null) {
-                    restored[index] = ReadElement(data);
+                    restored[index] = ReadSlot(data, document.Version);
                 }
             }
             // передаем результат только после проверки всех слотов, частично прочитанные данные не выдаем
@@ -69,7 +69,7 @@ public sealed class StructuralElementSlotStorage {
         }
     }
 
-    public bool TrySave(StructuralElement?[] slots, out string error) {
+    public bool TrySave(MatrixSlot?[] slots, out string error) {
         error = "";
         if (!writeAllowed) {
             error = "Запись слотов недоступна: хранилище не загружено. " +
@@ -85,9 +85,9 @@ public sealed class StructuralElementSlotStorage {
             }
             StructuralElementSlotData?[] data = new StructuralElementSlotData?[slotCount];
             for (int index = 0; index < slotCount; index++) {
-                StructuralElement? element = slots[index];
+                MatrixSlot? element = slots[index];
                 if (element is not null) {
-                    data[index] = WriteElement(element);
+                    data[index] = WriteSlot(element);
                 }
             }
             StructuralElementSlotsDocument document = new StructuralElementSlotsDocument {
@@ -142,6 +142,57 @@ public sealed class StructuralElementSlotStorage {
         return Path.Combine(dataDirectory, "ImageVisionApp", "structural-element-slots.json");
     }
 
+    private static MatrixSlot ReadSlot(StructuralElementSlotData data, int version) {
+        // прежние записи без типа читаем как морфологию, файл меняется только при успешном сохранении
+        string kind = version == 1 ? "morphology" : data.Kind
+            ?? throw new InvalidDataException("В ячейке отсутствует тип матрицы");
+        if (version == 1 && data.Kind is not null && data.Kind != "morphology") {
+            throw new InvalidDataException("Тип матрицы не соответствует версии файла");
+        }
+        if (kind == "morphology") {
+            if (data.Weights is not null) {
+                throw new InvalidDataException("Структурный элемент не должен содержать числовые веса");
+            }
+            return MatrixSlot.ForElement(ReadElement(data));
+        }
+        if (kind != "filter" || data.Cells is null || data.Cells.Length != 0 ||
+            data.Weights is not double[][] weights || weights.Length == 0 ||
+            weights[0] is null || weights[0].Length == 0) {
+            throw new InvalidDataException("Неизвестный тип или неверное содержимое числовой матрицы");
+        }
+        int rows = weights.Length;
+        int columns = weights[0].Length;
+        double[,] values = new double[rows, columns];
+        for (int row = 0; row < rows; row++) {
+            if (weights[row] is null || weights[row].Length != columns) {
+                throw new InvalidDataException("Строки числовой матрицы должны иметь одинаковую длину");
+            }
+            for (int column = 0; column < columns; column++) {
+                values[row, column] = weights[row][column];
+            }
+        }
+        return MatrixSlot.ForKernel(new FilterKernel(values, data.AnchorRow, data.AnchorColumn, data.Divisor, data.Offset));
+    }
+
+    private static StructuralElementSlotData WriteSlot(MatrixSlot slot) {
+        if (slot.Element is StructuralElement element) {
+            return WriteElement(element);
+        }
+        FilterKernel kernel = slot.Kernel!;
+        double[][] weights = new double[kernel.Rows][];
+        for (int row = 0; row < kernel.Rows; row++) {
+            weights[row] = new double[kernel.Columns];
+            for (int column = 0; column < kernel.Columns; column++) {
+                weights[row][column] = kernel.GetWeight(row, column);
+            }
+        }
+        return new StructuralElementSlotData {
+            Kind = "filter", Cells = Array.Empty<int[]>(), Weights = weights,
+            AnchorRow = kernel.AnchorRow, AnchorColumn = kernel.AnchorColumn,
+            Divisor = kernel.Divisor, Offset = kernel.Offset
+        };
+    }
+
     private static StructuralElement ReadElement(StructuralElementSlotData data) {
         if (data.Cells is null || data.Cells.Length == 0 ||
             data.Cells[0] is null || data.Cells[0].Length == 0) {
@@ -177,6 +228,7 @@ public sealed class StructuralElementSlotStorage {
             cells[row] = values;
         }
         return new StructuralElementSlotData {
+            Kind = "morphology",
             Cells = cells,
             AnchorRow = element.AnchorRow,
             AnchorColumn = element.AnchorColumn

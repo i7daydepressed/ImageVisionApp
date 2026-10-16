@@ -172,7 +172,7 @@ public partial class MainWindow {
             return;
         }
         if (step.Type == ImageOperationType.CustomFilter) {
-            OpenFilterKernelEditor(viewModel, step);
+            OpenMorphologyStepSlots(step, viewModel);
             return;
         }
         queueStepEditor?.SetStep(step, index);

@@ -14,6 +14,9 @@ using ImageVisionApp.ViewModels;
 namespace ImageVisionApp.Views;
 
 // хранит текстовый черновик, подтверждение передает владельцу очереди
+// прежний отдельный редактор: раньше открывался кнопкой «Своя матрица» и изменением шага
+// ввод перенесен в карточки с вкладками, кнопка изменения шага открывает обмен с ячейками
+// сейчас из интерфейса не вызывается, реализация сохранена для возможного повторного использования
 public sealed class FilterKernelWindow : Window {
     private readonly Func<FilterKernel, string?> applyKernel;
     private readonly TextBox rowsInput = new TextBox { Width = 80 };

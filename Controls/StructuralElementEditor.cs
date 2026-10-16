@@ -76,7 +76,7 @@ public sealed partial class StructuralElementEditor : UserControl {
     private const int SavedSlotCount = 4;
     private readonly StructuralElementSlotStorage slotStorage =
         new StructuralElementSlotStorage(SavedSlotCount);
-    private readonly StructuralElement?[] savedSlots = new StructuralElement?[SavedSlotCount];
+    private readonly MatrixSlot?[] savedSlots = new MatrixSlot?[SavedSlotCount];
     private readonly TextBlock[] slotDescriptions = new TextBlock[SavedSlotCount];
     private readonly Button[] slotSaveButtons = new Button[SavedSlotCount];
     private readonly Button[] slotLoadButtons = new Button[SavedSlotCount];

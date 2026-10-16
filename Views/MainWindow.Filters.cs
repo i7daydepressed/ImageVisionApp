@@ -49,7 +49,7 @@ public partial class MainWindow {
             errorText.IsVisible = !added;
         };
 
-        Button customButton = new Button { Content = "Своя матрица…" };
+        Button customButton = new Button { Content = "Добавить свою матрицу" };
         customButton.Click += (_, _) => {
             if (DataContext is not MainViewModel viewModel) {
                 errorText.Text = "Очередь недоступна";
@@ -58,7 +58,14 @@ public partial class MainWindow {
             }
             errorText.Text = string.Empty;
             errorText.IsVisible = false;
-            OpenFilterKernelEditor(viewModel);
+            if (structuralElementEditor is null) {
+                errorText.Text = "Редактор матриц недоступен";
+                errorText.IsVisible = true;
+                return;
+            }
+            bool added = structuralElementEditor.TryApplyFilterDraft(out string error);
+            errorText.Text = error;
+            errorText.IsVisible = !added;
         };
 
         return new Border {
@@ -81,7 +88,7 @@ public partial class MainWindow {
                         Children = { sharpenButton, motionBlurButton, embossButton, customButton }
                     },
                     new TextBlock {
-                        Text = "Резкость усиливает границы. Размытие усредняет 9 пикселей по горизонтали. Тиснение выделяет рельеф на сером фоне. «Своя матрица» открывает числовой редактор; подтверждение добавляет один шаг.",
+                        Text = "Резкость усиливает границы. Размытие усредняет 9 пикселей по горизонтали. Тиснение выделяет рельеф на сером фоне. Своя матрица берется из числовой вкладки редактора ниже; недопустимые значения нужно исправить перед добавлением.",
                         TextWrapping = TextWrapping.Wrap
                     },
                     errorText

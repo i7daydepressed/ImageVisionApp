@@ -9,14 +9,14 @@ namespace ImageVisionApp.Controls;
 
 public sealed partial class StructuralElementEditor {
     private void RestoreSavedSlots() { // восстанавливаем снимки после создания кнопок, не загружаем их в черновик
-        if (!slotStorage.TryLoad(out StructuralElement?[] restored, out string error)) {
+        if (!slotStorage.TryLoad(out MatrixSlot?[] restored, out string error)) {
             SetSlotsStatus(error, true);
             return;
         }
         Array.Copy(restored, savedSlots, SavedSlotCount);
         UpdateSavedSlots();
         int occupied = 0;
-        foreach (StructuralElement? element in savedSlots) {
+        foreach (MatrixSlot? element in savedSlots) {
             if (element is not null) {
                 occupied++;
             }
@@ -24,8 +24,12 @@ public sealed partial class StructuralElementEditor {
         SetSlotsStatus(occupied > 0 ? $"Восстановлено сохраненных матриц: {occupied}" : "");
     }
 
-    private bool TryStoreSlot(int index, StructuralElement? element, out string error) { // меняем слот в памяти только после успешной записи полного документа
-        StructuralElement?[] proposed = (StructuralElement?[])savedSlots.Clone();
+    private bool TryStoreSlot(int index, MatrixSlot? element, out string error) { // меняем слот в памяти только после успешной записи полного документа
+        if (element is not null && !MatrixSlot.CanReplace(savedSlots[index], element, out error)) {
+            SetSlotsStatus(error, true);
+            return false;
+        }
+        MatrixSlot?[] proposed = (MatrixSlot?[])savedSlots.Clone();
         proposed[index] = element;
         if (!slotStorage.TrySave(proposed, out error)) {
             SetSlotsStatus(error, true);
@@ -45,7 +49,7 @@ public sealed partial class StructuralElementEditor {
                     FontWeight = FontWeight.SemiBold
                 },
                 new TextBlock {
-                    Text = "Сохраняются на этом компьютере. Загрузка меняет черновик; применение выполняется отдельно.",
+                    Text = "Четыре общие ячейки для двух типов матриц. Загрузка меняет черновик открытой вкладки; несовместимый тип не загружается. Для смены типа сначала очистите ячейку.",
                     FontSize = 12,
                     TextWrapping = TextWrapping.Wrap
                 }
@@ -116,16 +120,12 @@ public sealed partial class StructuralElementEditor {
 
     private void UpdateSavedSlots() { // описания и доступность кнопок берем из снимков, а не из текущего черновика
         for (int index = 0; index < SavedSlotCount; index++) {
-            StructuralElement? element = savedSlots[index];
+            MatrixSlot? element = savedSlots[index];
             bool occupied = element is not null;
             slotSaveButtons[index].Content = occupied ? "Заменить" : "Сохранить";
             slotLoadButtons[index].IsEnabled = occupied;
             slotClearButtons[index].IsEnabled = occupied;
-            slotDescriptions[index].Text = element is null
-                ? "Пусто — сохраните текущий черновик"
-                : $"Строк (Y): {element.Rows}, столбцов (X): {element.Columns}\n" +
-                  $"Активных: {element.ActiveCellCount}\n" +
-                  $"Опора: X = {element.AnchorColumn + 1}, Y = {element.AnchorRow + 1}";
+            slotDescriptions[index].Text = element?.Description ?? "Пусто — сохраните текущий черновик";
         }
     }
 
@@ -135,28 +135,55 @@ public sealed partial class StructuralElementEditor {
     }
 
     private void SaveDraftToSlot(int index) { // кладем независимый снимок только после проверки, прежний слот при ошибке остается
-        if (!TryCreateDraftSnapshot(out StructuralElement? snapshot) || snapshot is null) {
-            SetSlotsStatus(statusText.Text ?? "Не удалось сохранить матрицу", true);
+        MatrixSlotKind kind = selectedMatrixMode == 0 ? MatrixSlotKind.Morphology : MatrixSlotKind.Filter;
+        // проверяем тип до чтения черновика, чужая ячейка не меняет даже размеры редактора
+        if (savedSlots[index] is MatrixSlot occupied && occupied.Kind != kind) {
+            SetSlotsStatus("В ячейке матрица другого типа. Выберите другую ячейку или сначала очистите эту.", true);
             return;
         }
-        if (!TryStoreSlot(index, snapshot, out _)) {
-            return;
+        MatrixSlot slot;
+        if (selectedMatrixMode == 0) {
+            if (!TryCreateDraftSnapshot(out StructuralElement? element) || element is null) {
+                SetSlotsStatus(statusText.Text ?? "Не удалось сохранить матрицу", true);
+                return;
+            }
+            slot = MatrixSlot.ForElement(element);
         }
-        SetSlotsStatus($"Черновик сохранен в ячейку {index + 1}");
+        else {
+            if (!TryGetFilterDraft(out FilterKernel? kernel, out string error)) {
+                ShowFilterEditor(error);
+                SetSlotsStatus(error, true);
+                return;
+            }
+            slot = MatrixSlot.ForKernel(kernel!);
+        }
+        if (TryStoreSlot(index, slot, out _)) {
+            SetSlotsStatus($"Черновик сохранен в ячейку {index + 1}");
+        }
     }
 
-    private void LoadSavedSlot(int index) { // загружаем копию без применения, при новом размере включаем вписывание
-        StructuralElement? element = savedSlots[index];
-        if (element is null) {
+    private void LoadSavedSlot(int index) {
+        MatrixSlot? slot = savedSlots[index];
+        if (slot is null) {
             SetSlotsStatus($"Ячейка {index + 1} пуста", true);
             return;
         }
-        bool dimensionsChanged = element.Rows != cells.GetLength(0) ||
-            element.Columns != cells.GetLength(1);
-        // загрузка меняет только черновик, последний примененный savedElement остается прежним
-        LoadDraft(element);
-        if (dimensionsChanged) {
-            FitMatrix();
+        MatrixSlotKind expected = selectedMatrixMode == 0 ? MatrixSlotKind.Morphology : MatrixSlotKind.Filter;
+        if (slot.Kind != expected) {
+            SetSlotsStatus("Тип матрицы ячейки не соответствует открытой вкладке. Загрузка не выполнена.", true);
+            return;
+        }
+        if (slot.Element is StructuralElement element) {
+            // загружаем копию без применения, при новом размере включаем вписывание
+            bool dimensionsChanged = element.Rows != cells.GetLength(0) || element.Columns != cells.GetLength(1);
+            // загрузка меняет только черновик, последний примененный savedElement остается прежним
+            LoadDraft(element);
+            if (dimensionsChanged) {
+                FitMatrix();
+            }
+        }
+        else {
+            LoadFilterDraft(slot.Kernel!);
         }
         SetSlotsStatus($"Ячейка {index + 1} загружена в черновик");
     }

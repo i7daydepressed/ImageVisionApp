@@ -10,10 +10,10 @@ namespace ImageVisionApp.Views;
 public sealed class MorphologyStepSlotsWindow : Window {
     private readonly ImageEditStep step;
     private readonly int slotCount;
-    private readonly Func<int, StructuralElement?> readSlot;
-    private readonly Func<int, StructuralElement, string?> saveSlot;
-    private readonly Func<StructuralElement, string?> applyElement;
-    private StructuralElement? selectedSlotSnapshot;
+    private readonly Func<int, MatrixSlot?> readSlot;
+    private readonly Func<int, MatrixSlot, string?> saveSlot;
+    private readonly Func<MatrixSlot, string?> applyElement;
+    private MatrixSlot? selectedSlotSnapshot;
     private readonly TextBlock stepDetails = new TextBlock { TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock slotDetails = new TextBlock { TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock statusText = new TextBlock { TextWrapping = TextWrapping.Wrap };
@@ -23,9 +23,9 @@ public sealed class MorphologyStepSlotsWindow : Window {
 
     public MorphologyStepSlotsWindow(
         ImageEditStep step, int slotCount,
-        Func<int, StructuralElement?> readSlot,
-        Func<int, StructuralElement, string?> saveSlot,
-        Func<StructuralElement, string?> applyElement) {
+        Func<int, MatrixSlot?> readSlot,
+        Func<int, MatrixSlot, string?> saveSlot,
+        Func<MatrixSlot, string?> applyElement) {
         ArgumentNullException.ThrowIfNull(step);
         ArgumentNullException.ThrowIfNull(readSlot);
         ArgumentNullException.ThrowIfNull(saveSlot);
@@ -70,7 +70,7 @@ public sealed class MorphologyStepSlotsWindow : Window {
                     slotInput,
                     slotDetails,
                     new TextBlock {
-                        Text = "Сохранение заменяет содержимое выбранной ячейки. Загрузка сразу изменяет матрицу этого шага и пересчитывает результат.",
+                        Text = "Сохранение заменяет совместимую ячейку. Загрузка совместимой матрицы изменяет только этот шаг и пересчитывает результат; другой тип не применяется.",
                         TextWrapping = TextWrapping.Wrap
                     },
                     new WrapPanel { ItemSpacing = 8, LineSpacing = 8, Children = { saveButton, loadButton } },
@@ -85,27 +85,27 @@ public sealed class MorphologyStepSlotsWindow : Window {
 
     private void RefreshStepDetails() {
         stepDetails.Text = step.DisplayName;
-        saveButton.IsEnabled = step.ElementSnapshot is not null;
+        saveButton.IsEnabled = GetStepSnapshot() is not null;
     }
 
     private void RefreshSelectedSlot() {
         int index = slotInput.SelectedIndex;
         selectedSlotSnapshot = index >= 0 && index < slotCount ? readSlot(index) : null;
         loadButton.IsEnabled = selectedSlotSnapshot is not null;
-        slotDetails.Text = selectedSlotSnapshot is StructuralElement element
-            ? $"Строк (Y): {element.Rows}, столбцов (X): {element.Columns}, " +
-              $"активных: {element.ActiveCellCount}, " +
-              $"опора X={element.AnchorColumn + 1}, Y={element.AnchorRow + 1}"
-            : "Ячейка пуста";
+        slotDetails.Text = selectedSlotSnapshot?.Description ?? "Ячейка пуста";
     }
 
     private void SaveStepToSlot() {
         int index = slotInput.SelectedIndex;
-        if (index < 0 || index >= slotCount || step.ElementSnapshot is not StructuralElement element) {
+        if (index < 0 || index >= slotCount || GetStepSnapshot() is not MatrixSlot element) {
             SetStatus("Выберите ячейку и шаг с матрицей", true);
             return;
         }
         // сохраняем снимок шага, не текущий общий выбор и не черновик основного редактора
+        if (!MatrixSlot.CanReplace(readSlot(index), element, out string typeError)) {
+            SetStatus(typeError, true);
+            return;
+        }
         string? error = saveSlot(index, element);
         if (error is not null) {
             SetStatus(error, true);
@@ -116,14 +116,27 @@ public sealed class MorphologyStepSlotsWindow : Window {
     }
 
     private void LoadSlotIntoStep() {
-        if (selectedSlotSnapshot is not StructuralElement element) {
+        if (selectedSlotSnapshot is not MatrixSlot element) {
             SetStatus("Выбранная ячейка пуста", true);
+            return;
+        }
+        MatrixSlot? stepSnapshot = GetStepSnapshot();
+        if (stepSnapshot is null || element.Kind != stepSnapshot.Kind) {
+            SetStatus("Тип матрицы ячейки не подходит для выбранного шага. Загрузка не выполнена.", true);
             return;
         }
         // команда сама копирует модель и возвращает прежний снимок при ошибке пересчета
         string? error = applyElement(element);
         RefreshStepDetails();
         SetStatus(error ?? "Матрица ячейки применена к выбранному шагу", error is not null);
+    }
+
+    private MatrixSlot? GetStepSnapshot() {
+        // снимок берем из выбранного объекта очереди, общий редактор здесь не читается
+        if (step.Type == ImageOperationType.CustomFilter) {
+            return step.KernelSnapshot is FilterKernel kernel ? MatrixSlot.ForKernel(kernel) : null;
+        }
+        return step.ElementSnapshot is StructuralElement element ? MatrixSlot.ForElement(element) : null;
     }
 
     private void SetStatus(string message, bool isError = false) {

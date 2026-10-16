@@ -24,6 +24,17 @@ public partial class MainWindow {
         StructuralElementEditor editor =
             new StructuralElementEditor(initialElement, description);
         structuralElementEditor = editor;
+        editor.FilterApplyRequested += kernel => {
+            if (DataContext is not MainViewModel currentViewModel) {
+                return "Очередь недоступна";
+            }
+            // ядро берем из проверенного черновика, прежний валидный выбор не подставляем
+            if (!currentViewModel.TryAddCustomFilterStep(kernel, out string error)) {
+                return error;
+            }
+            currentViewModel.SetFilterKernel(kernel);
+            return null;
+        };
         editor.SelectionApplied += selectedElement => {
             if (DataContext is MainViewModel currentViewModel) {
                 // редактор передает готовый элемент, очередь и предпросмотр не меняем

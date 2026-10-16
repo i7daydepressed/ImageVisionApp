@@ -21,9 +21,22 @@ public sealed partial class StructuralElementEditor {
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Top
         };
-        layout.Children.Add(settingsCard);
-        Grid.SetColumn(matrixCard, 1);
-        layout.Children.Add(matrixCard);
+        // оба редактора создаются один раз, вкладки сохраняют их черновики и обработчики
+        settingsTabs = CreateMatrixTabs(settingsCard, CreateFilterSettingsCard());
+        matrixTabs = CreateMatrixTabs(matrixCard, CreateFilterMatrixCard());
+        settingsTabs.SelectionChanged += (_, e) => {
+            if (ReferenceEquals(e.Source, settingsTabs)) {
+                SelectMatrixMode(settingsTabs.SelectedIndex);
+            }
+        };
+        matrixTabs.SelectionChanged += (_, e) => {
+            if (ReferenceEquals(e.Source, matrixTabs)) {
+                SelectMatrixMode(matrixTabs.SelectedIndex);
+            }
+        };
+        layout.Children.Add(settingsTabs);
+        Grid.SetColumn(matrixTabs, 1);
+        layout.Children.Add(matrixTabs);
         Grid.SetRow(savedElementsCard, 1);
         Grid.SetColumnSpan(savedElementsCard, 2);
         layout.Children.Add(savedElementsCard);
