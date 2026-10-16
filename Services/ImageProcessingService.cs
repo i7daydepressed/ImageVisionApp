@@ -93,6 +93,14 @@ public class ImageProcessingService{
                     MorphologyService.BlackHat(processedImage, blackHatElement);
                     break;
 
+                // берем результат предыдущих шагов и матрицу именно этого цилиндра
+                // открытие и вычитание выполняются здесь вместе, следующий шаг получит готовую разность
+                case ImageOperationType.TopHat:
+                    StructuralElement topHatElement = step.ElementSnapshot
+                        ?? throw new ArgumentException("Для шага цилиндра отсутствует матрица");
+                    MorphologyService.TopHat(processedImage, topHatElement);
+                    break;
+
                 case ImageOperationType.Sharpen:
                     ImageFilterService.Sharpen(processedImage);
                     break;

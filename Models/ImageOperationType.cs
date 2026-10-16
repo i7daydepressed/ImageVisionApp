@@ -19,5 +19,7 @@ public enum ImageOperationType {
     MotionBlur,
     Emboss,
     CustomFilter,
-    Median
+    Median,
+    // новый тип дописываем в конец: TopHat получает 18, прежние номера не сдвигаются
+    TopHat
 }

@@ -15,9 +15,11 @@ public partial class MainViewModel {
             error = "Выбранный шаг больше не находится в очереди";
             return false;
         }
+        // цилиндру меняем ElementSnapshot через общий откат, числовое ядро сюда не допускаем
         if (step.Type is not (ImageOperationType.Erosion or ImageOperationType.Dilation or
                               ImageOperationType.Opening or ImageOperationType.Closing or
-                              ImageOperationType.MorphologicalGradient or ImageOperationType.BlackHat)) {
+                              ImageOperationType.MorphologicalGradient or ImageOperationType.BlackHat or
+                              ImageOperationType.TopHat)) {
             error = "Этот шаг не использует структурный элемент";
             return false;
         }

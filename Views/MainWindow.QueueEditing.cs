@@ -78,6 +78,7 @@ public partial class MainWindow {
         Grid.SetColumnSpan(name, 2);
         row.Children.Add(name);
 
+        // у цилиндра редактируем снимок матрицы через ячейки, а не числовой Parameter
         Button editButton = new Button {
             Content = "Изменить",
             IsEnabled = step is not null &&
@@ -85,7 +86,7 @@ public partial class MainWindow {
                  step.Type is ImageOperationType.Erosion or ImageOperationType.Dilation or
                               ImageOperationType.Opening or ImageOperationType.Closing or
                               ImageOperationType.MorphologicalGradient or ImageOperationType.BlackHat or
-                              ImageOperationType.CustomFilter),
+                              ImageOperationType.TopHat or ImageOperationType.CustomFilter),
             HorizontalAlignment = HorizontalAlignment.Left
         };
         editButton.Click += (_, _) => EditAdvancedStep(step);
@@ -167,7 +168,10 @@ public partial class MainWindow {
         }
         if (step.Type is ImageOperationType.Erosion or ImageOperationType.Dilation or
                          ImageOperationType.Opening or ImageOperationType.Closing or
-                         ImageOperationType.MorphologicalGradient or ImageOperationType.BlackHat) {
+                         ImageOperationType.MorphologicalGradient or ImageOperationType.BlackHat or
+                         ImageOperationType.TopHat) {
+            // передаем тот же объект очереди: загрузка из ячейки заменит снимок только выбранного шага
+            // совместимость с морфологией проверяет окно обмена до вызова команды
             OpenMorphologyStepSlots(step, viewModel);
             return;
         }

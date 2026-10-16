@@ -28,6 +28,12 @@ public partial class MainViewModel {
         return TryAddMorphologyStep(ImageOperationType.BlackHat, out error);
     }
 
+    // общий путь сам копирует примененный элемент и добавляет один объект с одним пересчетом
+    // при ошибке он уберет только новый цилиндр, прежние шаги и показанный результат сохранятся
+    public bool TryAddTopHatStep(out string error) {
+        return TryAddMorphologyStep(ImageOperationType.TopHat, out error);
+    }
+
     private bool TryAddMorphologyStep(ImageOperationType type, out string error) {
         error = string.Empty;
         if (originalImageData is null) {
@@ -57,6 +63,7 @@ public partial class MainViewModel {
                 ImageOperationType.Closing => "закрытие",
                 ImageOperationType.MorphologicalGradient => "морфологический градиент",
                 ImageOperationType.BlackHat => "черную шляпу",
+                ImageOperationType.TopHat => "цилиндр",
                 _ => "морфологическую операцию"
             };
             error = $"Не удалось добавить {operationName}: {exception.Message}";

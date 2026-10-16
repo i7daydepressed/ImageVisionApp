@@ -196,6 +196,52 @@ public static class MorphologyService {
         }
     }
 
+    // белый Top Hat выделяет небольшие светлые детали относительно формы элемента
+    // получаем текущее изображение шага и его соседство с опорой, открытие считаем на копии
+    // затем заменяем RGB входа разностью с открытием, alpha в вычитании не участвует
+    // оба внутренних прохода дают один результат для очереди, отдельные шаги не создаются
+    public static void TopHat(MagickImage image, StructuralElement element) {
+        ArgumentNullException.ThrowIfNull(image);
+        ArgumentNullException.ThrowIfNull(element);
+
+        VirtualPixelMethod previousVirtualPixelMethod = image.VirtualPixelMethod;
+        try {
+            // вход и открытие сравниваем в одном пространстве sRGB с 8-битными каналами
+            image.ColorSpace = ColorSpace.sRGB;
+            image.Depth = 8;
+            // рабочий вход нужен для итоговой записи, копия хранит отдельный результат открытия
+            using MagickImage opened = new MagickImage(image);
+            // экспорт RGBA выполняем на копии, наличие alpha у рабочего входа сохраняем
+            byte[] sourceRgba = opened.ToByteArray(MagickFormat.Rgba);
+            // открытие: эрозия, затем дилатация, оба прохода используют один снимок элемента
+            Open(opened, element);
+            byte[] openedRgba = opened.ToByteArray(MagickFormat.Rgba);
+            // у входа четыре байта на пиксель RGBA, у результата три RGB: четвертый байт пропускаем
+            byte[] topHatRgb = new byte[sourceRgba.Length / 4 * 3];
+            // оба массива RGBA уже готовы, записанный слева результат не влияет на соседей справа
+            for (int rgbaIndex = 0, rgbIndex = 0; rgbaIndex < sourceRgba.Length; rgbaIndex += 4, rgbIndex += 3) {
+                for (int channel = 0; channel < 3; channel++) {
+                    // новый канал = max(0, вход - открытие), например 230 - 100 = 130
+                    // светлая деталь, убранная открытием, остается на темном фоне результата
+                    // у края с неактивной опорой возможен минус, ограничиваем нулем без модуля
+                    // пример края: [90,200,40] с формой [0,0,1] и средней опорой открывается в [200,200,40]
+                    // первая разность равна -110 и дает 0, поэтому здесь нельзя брать модуль
+                    topHatRgb[rgbIndex + channel] = (byte)Math.Max(
+                        0, sourceRgba[rgbaIndex + channel] - openedRgba[rgbaIndex + channel]);
+                }
+            }
+
+            // определение Top Hat: https://docs.opencv.org/4.13.0/d3/dbe/tutorial_opening_closing_hats.html
+            // записываем только RGB, alpha текущего пикселя и метаданные не перезаписываем
+            image.ImportPixels(topHatRgb,
+                new PixelImportSettings(image.Width, image.Height, StorageType.Char, PixelMapping.RGB));
+        }
+        finally {
+            // правило края исходного объекта сохраняется и при ошибке обработки копии
+            image.VirtualPixelMethod = previousVirtualPixelMethod;
+        }
+    }
+
     private static string CreateUserKernel(StructuralElement element, bool reflect) {
         // Magick.NET ожидает width x height + originX + originY, затем строки слева направо
         // columns соответствуют width/X, rows соответствуют height/Y

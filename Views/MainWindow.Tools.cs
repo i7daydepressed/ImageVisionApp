@@ -8,6 +8,7 @@ using ImageVisionApp.ViewModels;
 namespace ImageVisionApp.Views;
 
 public partial class MainWindow {
+    // собираем карточки один раз, дальше сетка только распределяет между ними место
     private Border CreateAdvancedToolsPanel() {
         Border quickActionsCard = CreateQuickActionsCard();
         Border brightnessCard = CreateBrightnessCard();
@@ -28,17 +29,21 @@ public partial class MainWindow {
             toolsLayout.Children.Add(card);
         }
 
+        // это номер раскладки: режим 4 использует семь физических колонок, включая Auto
         int currentColumns = 0;
         void UpdateToolsLayout(double availableWidth) {
             // пороги UI1 сохраняем, первая колонка подстраивается под текст кнопок
             int columns = availableWidth >= 1180 ? 4 :
                 availableWidth >= 882 ? 3 : availableWidth >= 584 ? 2 : 1;
+            // внутри одного режима размеры пересчитает Grid, определения колонок повторно не создаем
             if (columns == currentColumns) {
                 return;
             }
             currentColumns = columns;
             toolsLayout.ColumnDefinitions = new ColumnDefinitions(columns switch {
-                4 => "Auto,*,*,*",
+                // половины обычных колонок дают двум нижним карточкам одинаковую ширину
+                // три обычные карточки делим на шесть половин: сверху берем по две, снизу по три
+                4 => "Auto,*,*,*,*,*,*",
                 3 => "Auto,*,*",
                 2 => "Auto,*",
                 _ => "*"
@@ -55,13 +60,15 @@ public partial class MainWindow {
             switch (columns) {
                 case 4:
                     PlaceToolsCard(quickActionsCard, 0, 0, rowSpan: 2);
-                    PlaceToolsCard(brightnessCard, 0, 1);
-                    PlaceToolsCard(saturationCard, 0, 2);
-                    PlaceToolsCard(contrastCard, 0, 3);
-                    PlaceToolsCard(morphologyCard, 1, 1, columnSpan: 2);
-                    PlaceToolsCard(filtersCard, 1, 3);
+                    PlaceToolsCard(brightnessCard, 0, 1, columnSpan: 2);
+                    PlaceToolsCard(saturationCard, 0, 3, columnSpan: 2);
+                    PlaceToolsCard(contrastCard, 0, 5, columnSpan: 2);
+                    // делим нижний ряд поровну, WrapPanel каждой карточки сам переносит кнопки
+                    PlaceToolsCard(morphologyCard, 1, 1, columnSpan: 3);
+                    PlaceToolsCard(filtersCard, 1, 4, columnSpan: 3);
                     break;
                 case 3:
+                    // контрастность уходит вниз, обе карточки операций занимают две правые колонки
                     PlaceToolsCard(quickActionsCard, 0, 0, rowSpan: 2);
                     PlaceToolsCard(brightnessCard, 0, 1);
                     PlaceToolsCard(saturationCard, 0, 2);
@@ -70,6 +77,7 @@ public partial class MainWindow {
                     PlaceToolsCard(filtersCard, 2, 1, columnSpan: 2);
                     break;
                 case 2:
+                    // морфологию выносим в отдельный ряд, чтобы длинным названиям хватало места
                     PlaceToolsCard(quickActionsCard, 0, 0, rowSpan: 2);
                     PlaceToolsCard(brightnessCard, 0, 1);
                     PlaceToolsCard(saturationCard, 1, 1);
@@ -87,6 +95,7 @@ public partial class MainWindow {
 
         // контролы создаются один раз, при изменении ширины меняются только координаты сетки
         toolsLayout.SizeChanged += (_, _) => UpdateToolsLayout(toolsLayout.Bounds.Width);
+        // пока ширина неизвестна, ставим карточки в столбец до первого измерения
         UpdateToolsLayout(0);
 
         // общая рамка охватывает сетку всех шести карточек
@@ -101,6 +110,7 @@ public partial class MainWindow {
         };
     }
 
+    // задаем и позицию, и span: после смены режима старое объединение ячеек не остается
     private static void PlaceToolsCard(
         Control card, int row, int column, int rowSpan = 1, int columnSpan = 1) {
         Grid.SetRow(card, row);

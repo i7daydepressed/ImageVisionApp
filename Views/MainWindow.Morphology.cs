@@ -89,6 +89,18 @@ public partial class MainWindow {
             errorText.Text = error;
             errorText.IsVisible = !added;
         };
+        Button topHatButton = new Button { Content = "Добавить цилиндр (Top Hat)" };
+        topHatButton.Click += (_, _) => {
+            if (DataContext is not MainViewModel viewModel) {
+                errorText.Text = "Очередь недоступна";
+                errorText.IsVisible = true;
+                return;
+            }
+            // команда берет подтвержденную матрицу, незавершенный черновик редактора здесь не читаем
+            bool added = viewModel.TryAddTopHatStep(out string error);
+            errorText.Text = error;
+            errorText.IsVisible = !added;
+        };
         Button blackHatButton = new Button { Content = "Добавить черную шляпу" };
         blackHatButton.Click += (_, _) => {
             if (DataContext is not MainViewModel viewModel) {
@@ -113,6 +125,7 @@ public partial class MainWindow {
                         openingButton,
                         closingButton,
                         gradientButton,
+                        topHatButton,
                         blackHatButton
                     }
                 },

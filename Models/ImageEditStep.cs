@@ -56,6 +56,11 @@ public sealed partial class ImageEditStep : ObservableObject {
             ? $"Черная шляпа {blackHatElement.Rows}×{blackHatElement.Columns} (Y×X), " +
               $"опора X={blackHatElement.AnchorColumn + 1}, Y={blackHatElement.AnchorRow + 1}"
             : "Черная шляпа: матрица отсутствует",
+        // описание берем из снимка этого шага, новый общий выбор матрицы его не меняет
+        ImageOperationType.TopHat => ElementSnapshot is StructuralElement topHatElement
+            ? $"Цилиндр (Top Hat) {topHatElement.Rows}×{topHatElement.Columns} (Y×X), " +
+              $"опора X={topHatElement.AnchorColumn + 1}, Y={topHatElement.AnchorRow + 1}"
+            : "Цилиндр (Top Hat): матрица отсутствует",
         ImageOperationType.Sharpen => "Резкость 3×3",
         ImageOperationType.MotionBlur => "Размытие в движении 1×9 (Y×X)",
         ImageOperationType.Emboss => "Тиснение 3×3",
@@ -85,9 +90,11 @@ public sealed partial class ImageEditStep : ObservableObject {
     // StructuralElement неизменяемый, его закрытый массив не доступен вызывающему коду
     internal void SetElementSnapshot(StructuralElement snapshot) {
         System.ArgumentNullException.ThrowIfNull(snapshot);
+        // цилиндр участвует в том же обмене снимка, что и остальные операции морфологии
         if (Type is not (ImageOperationType.Erosion or ImageOperationType.Dilation or
                          ImageOperationType.Opening or ImageOperationType.Closing or
-                         ImageOperationType.MorphologicalGradient or ImageOperationType.BlackHat)) {
+                         ImageOperationType.MorphologicalGradient or ImageOperationType.BlackHat or
+                         ImageOperationType.TopHat)) {
             throw new System.InvalidOperationException("Этот шаг не использует структурный элемент");
         }
         if (System.Object.ReferenceEquals(ElementSnapshot, snapshot)) {
