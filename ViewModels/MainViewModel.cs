@@ -1,9 +1,9 @@
-using System.ComponentModel;
 using System.IO;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using ImageVisionApp.Models;
 using ImageVisionApp.Services;
+using System.Collections.ObjectModel;
 
 namespace ImageVisionApp.ViewModels;
 
@@ -14,28 +14,32 @@ public partial class MainViewModel : ViewModelBase{
 
     // исходник изоб
     private byte[]? originalImageData;// для magick
-    private bool suppressTransformationUpdates;//флаг запрещающий автообновляться редактируемой картинки сразу после изменения одного какогото ползунка
 
-    public ImageTransformationSettings Settings { get; } =
-        new ImageTransformationSettings();//настройки изменения изображения
+    //действия в левой панели расширенного режима: ListBox видит добавление и удаление шагов
+    public ObservableCollection<ImageEditStep> AdvancedSteps { get; } = new();
+    //эт коллекция похожая на список, которая сообщает подписчикам об изменении своего состава: добавили элемент, удалили, очистили или переместили. Для этого она выдаёт событие CollectionChanged.
 
-    public bool IsLinearCorrectionEnabled =>//буд вид для галочки // нелин корекц
-        Settings.CorrectionMode ==
-        GrayscaleCorrectionMode.Linear; //енеблет ли лин коррекция? CorrectionMode сейчас Linear?
+    private ImageHistogramData? originalHistogram;//отрисовка гистограм
 
-    public bool IsNonlinearCorrectionEnabled =>// лин лог корекц
-        Settings.CorrectionMode ==
-        GrayscaleCorrectionMode.Nonlinear;
+    // матрица для следующего морфологического шага, отдельно от уже добавленной очереди
+    public StructuralElement SelectedStructuralElement { get; private set; } =
+        StructuralElement.CreateCross();
 
-    public MainViewModel() {
-        Settings.PropertyChanged += Settings_PropertyChanged;
-    }
+    public string StructuralElementDescription =>
+        $"строк (Y): {SelectedStructuralElement.Rows}, " +
+        $"столбцов (X): {SelectedStructuralElement.Columns}, " +
+        $"активных ячеек: {SelectedStructuralElement.ActiveCellCount}, " +
+        $"опора: X = {SelectedStructuralElement.AnchorColumn + 1}, " +
+        $"Y = {SelectedStructuralElement.AnchorRow + 1}";
 
     [ObservableProperty] //когда значение свойства изменилось, нужно уведомить интерфейс - тот подставит значение в внутренние созданные классы для отображения/работы визуализации
     public partial Bitmap? OriginalImage { get; set; }
 
     [ObservableProperty]
     public partial Bitmap? ModifiedImage { get; set; }
+
+    [ObservableProperty]
+    public partial ImageHistogramComparison? HistogramComparison { get; set; }// гистограммы исходника и текущего результата в одном объекте
 
     [ObservableProperty]
     public partial ImageInfo? CurrentImageInfo { get; set; }
@@ -45,10 +49,10 @@ public partial class MainViewModel : ViewModelBase{
         = "Изображение не выбрано";
 
     public void LoadImage(byte[] imageData, string fileName){//реактим на событие загрузки збр
-
         // сохр исхд байты
         originalImageData = imageData;
-        ResetTransformationSettings();
+        // новый исходник начинает новую очередь
+        AdvancedSteps.Clear();
         
         var newImageInfo =
                 imageStatsFileService.readImageInfo(imageData, fileName);
@@ -65,16 +69,26 @@ public partial class MainViewModel : ViewModelBase{
         OriginalImage = newOriginalImage;
         ModifiedImage = newModifiedImage;
         CurrentImageInfo = newImageInfo;
+        // создание гистограмы
+        originalHistogram = imageHistogramService.CalculateHistogram(imageData);
+        HistogramComparison = new ImageHistogramComparison(
+            originalHistogram,
+            originalHistogram);
         StatusMessage = fileName;
     }
 
-    private void UpdateModifiedImage() {
-        // собираем результат заново с учетом всех настроек
-        byte[]? processedImageData =
-            CreateProcessedImageData();
+    private void UpdateModifiedImage(byte[] processedImageData) {
+        // получаем готовые байты текущей очереди, сами настройки здесь не применяем
 
-        if (processedImageData is null) {
-            return;
+        ImageHistogramComparison? nextComparison = null;
+        // // считаем гистограмму по тем же байтам, из которых сделали измененное изображение
+        if (originalHistogram is not null) {//обновляем гистограмму
+            ImageHistogramData processedHistogram =
+                imageHistogramService.CalculateHistogram(processedImageData);
+
+            nextComparison = new ImageHistogramComparison(
+                originalHistogram,
+                processedHistogram);
         }
 
         using MemoryStream processedImageStream =
@@ -84,145 +98,72 @@ public partial class MainViewModel : ViewModelBase{
         Bitmap newModifiedImage =
             new Bitmap(processedImageStream);
 
-        ModifiedImage?.Dispose();
-
+        // сначала подготовили обе части результата, теперь заменяем показанное состояние
+        Bitmap? previousImage = ModifiedImage;
         ModifiedImage = newModifiedImage;
+        if (nextComparison is not null) {
+            HistogramComparison = nextComparison;
+        }
+        previousImage?.Dispose();
     }
 
-    public void ConvertImageToGrayscale() {
+    //пересчитывает изображение по действиям из очереди и обновляет его гистограмму
+    public void ApplyAdvancedQueue() {
         if (originalImageData is null) {
             StatusMessage = "Сначала выберите изображение";
             return;
         }
 
-        bool newGrayscaleState =
-            !Settings.IsGrayscaleEnabled;
+        byte[] processedImageData =
+            imageProcessingService.ApplySteps(originalImageData, AdvancedSteps);
 
-        // меняем связанные настройки вместе,
-        // чтобы изображение не пересобиралось между изменениями
-        suppressTransformationUpdates = true;
-
-        try {//выключаем коррекцию если у нас нет градации
-            Settings.IsGrayscaleEnabled = newGrayscaleState;
-
-            if (!newGrayscaleState) {
-                Settings.CorrectionMode = GrayscaleCorrectionMode.None;
-            }
-        }
-        finally {
-            suppressTransformationUpdates = false;
-        }
-
-        // после изменения всех связанных настроек
-        // пересобираем изображение только один раз
-        UpdateModifiedImage();
+        UpdateModifiedImage(processedImageData);
     }
 
-    public void ApplyLinearGrayscaleCorrection() {
+    //удаляет выбранное действие и пересчитывает изображение по оставшимся шагам
+    public void RemoveAdvancedStep(ImageEditStep? step) {
+        if (step is null || !AdvancedSteps.Remove(step)) {
+            return;
+        }
+
+        ApplyAdvancedQueue();
+    }
+
+
+
+    // добавляет действие в конец очереди и пересчитывает изображение по всем шагам
+    public void AddAdvancedStep(ImageOperationType type, double parameter = 0) {
         if (originalImageData is null) {
             StatusMessage = "Сначала выберите изображение";
             return;
         }
 
-        // коррекция применяется только к серому изображению,
-        // поэтому включаем оба параметра одним изменением
-        suppressTransformationUpdates = true;
-        bool shouldEnableCorrection = !IsLinearCorrectionEnabled;
-
-        try {//вкл градацию
-            if (shouldEnableCorrection) {
-                Settings.IsGrayscaleEnabled = true;
-                Settings.CorrectionMode = GrayscaleCorrectionMode.Linear;
-            }
-            else {
-                // отключаем только коррекцию,
-                // изображение оставляем серым
-                Settings.CorrectionMode =
-                    GrayscaleCorrectionMode.None;
-            }
-        }
-        finally {
-            suppressTransformationUpdates = false;
-        }
-
-        UpdateModifiedImage();
-
-        StatusMessage = shouldEnableCorrection
-            ? "Применена линейная коррекция изображения"
-            : "Линейная коррекция отключена";
+        AdvancedSteps.Add(new ImageEditStep(type, parameter));
+        ApplyAdvancedQueue();
+        // цепочка здесь такая создаем ImageEditStep → добавляем в AdvancedSteps → ListBox получает новую строку → ApplyAdvancedQueue() пересчитывает картинку и гистограмму
     }
 
-    public void ApplyNonlinearLogGrayscaleCorrection() {
+    // убирает все действия расширенного режима и пересчитывает результат из исходного изображения
+    public void ResetAdvancedQueue() {
         if (originalImageData is null) {
             StatusMessage = "Сначала выберите изображение";
             return;
         }
 
-        bool shouldEnableCorrection = !IsNonlinearCorrectionEnabled;
-
-        suppressTransformationUpdates = true;
-
-        try {
-            if (shouldEnableCorrection) {// тоже ток к серому
-                Settings.IsGrayscaleEnabled = true;
-                Settings.CorrectionMode =
-                    GrayscaleCorrectionMode.Nonlinear;
-            }
-            else {
-                Settings.CorrectionMode = GrayscaleCorrectionMode.None;
-            }
-        }
-        finally {
-            suppressTransformationUpdates = false;
-        }
-
-        UpdateModifiedImage();
-
-        StatusMessage = shouldEnableCorrection
-            ? "Применена нелинейная логарифмическая коррекция изображения"
-            : "Нелинейная коррекция отключена";
+        AdvancedSteps.Clear();
+        ApplyAdvancedQueue();
     }
 
-    public void ResetBrightness() {// сбросить яркость
-        if (originalImageData is null) {
-            StatusMessage = "Сначала выберите изображение";
-            return;
-        }
-
-        // изменение свойства автоматически вызовет
-        // Settings_PropertyChanged и пересоберет изображение
-        Settings.BrightnessAdjustment = 0;
-    }
-
-    public void ResetSaturation() {// сброс насыщенности
-        if (originalImageData is null) {
-            StatusMessage = "Сначала выберите изображение";
-            return;
-        }
-
-        Settings.SaturationPercentage = 100;
-    }
-
-    public void ResetContrast() {//сброс контраста
-
-        if (originalImageData is null) {
-            StatusMessage = "Сначала выберите изображение";
-            return;
-        }
-
-        Settings.ContrastAdjustment = 0;
-    }
-
-    public byte[]? CreateProcessedImageData() {//создать итог байты изм избрж
-
+    // готовит результат расширенного редактора для сохранения
+    public byte[]? CreateAdvancedProcessedImageData() {
         if (originalImageData is null) {
             StatusMessage = "Сначала выберите изображение";
             return null;
         }
 
-        return imageProcessingService.ApplyTransformations(
+        return imageProcessingService.ApplySteps(// берет исходное изображение и заново применяет к нему действия из AdvancedSteps по порядку
             originalImageData,
-            Settings);
+            AdvancedSteps);
     }
 
     public ImageHistogramComparison? CreateHistogramComparison() {
@@ -231,79 +172,15 @@ public partial class MainViewModel : ViewModelBase{
             return null;
         }
 
-        byte[]? processedImageData =
-            CreateProcessedImageData();
-
-        if (processedImageData is null) {
-            return null;
-        }
-
-        ImageHistogramData originalHistogram =
-            imageHistogramService.CalculateHistogram(originalImageData);
-
-        ImageHistogramData processedHistogram =
-            imageHistogramService.CalculateHistogram(processedImageData);
-
-        return new ImageHistogramComparison(
-            originalHistogram,
-            processedHistogram);
+        // берем ту же пару, которую уже рассчитали для текущего предпросмотра
+        return HistogramComparison;
     }
 
-    public void ResetAllTransformations() {//сбросить изменения
-        if (originalImageData is null) {
-            StatusMessage = "Сначала выберите изображение";
-            return;
-        }
-
-        // во время группового сброса автоматические
-        // обновления временно отключаются
-        ResetTransformationSettings();
-
-        // псле изменения всех настроек
-        // пересобираем изображение
-        UpdateModifiedImage();
-    }
-
-    public void RotateClockwise() {//повернуть вправо на 90
-        if (originalImageData is null) {
-            StatusMessage = "Сначала выберите изображение";
-            return;
-        }
-
-        Settings.RotationDegrees =
-            (Settings.RotationDegrees + 90) % 360;
-    }
-
-    private void Settings_PropertyChanged(// если ползунок изменился вызывается этот метод
-        object? sender,
-        PropertyChangedEventArgs e) {//вцелом измениения е типа проперте чангед евентс арг
-
-        if (e.PropertyName == nameof(ImageTransformationSettings.CorrectionMode)) {
-            OnPropertyChanged(nameof(IsLinearCorrectionEnabled));// единств точка обновления IsLinearCorrectionEnabled
-            OnPropertyChanged(nameof(IsNonlinearCorrectionEnabled));//такж
-        }
-
-        if (suppressTransformationUpdates) {
-            return;
-        }
-
-        if (originalImageData is null) {
-            return;
-        }
-
-        // пересобираем
-        UpdateModifiedImage();
-    }
-
-    private void ResetTransformationSettings() {
-        suppressTransformationUpdates = true;
-
-        try {
-            Settings.Reset();
-        }
-        finally {
-            suppressTransformationUpdates = false;
-        }
+    public void SetStructuralElement(StructuralElement structuralElement) {
+        SelectedStructuralElement = structuralElement;
+        // карточка обновит сведения о выбранной матрице, очередь и предпросмотр не меняем
+        OnPropertyChanged(nameof(SelectedStructuralElement));
+        OnPropertyChanged(nameof(StructuralElementDescription));
     }
 
     public void ShowError(string message)

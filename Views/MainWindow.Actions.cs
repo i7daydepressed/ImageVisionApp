@@ -57,169 +57,25 @@ public partial class MainWindow {
     }
     // </IFilePickerService, реализацию FilePickerService>
 
-    private void ConvertToGrayscaleButton_OnClick(
+    // кнопка расширенного режима сохраняет результат очереди AdvancedSteps
+    private async void SaveAdvancedResultButton_OnClick(
         object? sender,
         RoutedEventArgs e
         ) {
-        if (DataContext is not MainViewModel viewModel) {
-            return;
-        }
-
-        try {
-            viewModel.ConvertImageToGrayscale();
-        }
-        catch (Exception exception) {
-            viewModel.ShowError(
-                $"Не удалось перевести изображение в градации серого: " +
-                exception.Message);
-        }
+        await SaveResultAsync();
     }
 
-    private void ApplyLinearGrayscaleCorrectionButton_OnClick(
-        object? sender,
-        RoutedEventArgs e
-        ) {
+    // строим результат очереди, затем показываем диалог и записываем пнг в файл
+    private async System.Threading.Tasks.Task SaveResultAsync() {
 
         if (DataContext is not MainViewModel viewModel) {
             return;
         }
 
         try {
-            viewModel.ApplyLinearGrayscaleCorrection();
-        }
-        catch (Exception exception) {
-            viewModel.ShowError(
-                $"Не удалось применить линейную коррекцию: " +
-                exception.Message);
-        }
-    }
-
-    private void ApplyNonlinearGrayscaleCorrectionButton_OnClick(
-        object? sender,
-        RoutedEventArgs e
-        ) {
-
-        if (DataContext is not MainViewModel viewModel) {
-            return;
-        }
-
-        try {
-            viewModel.ApplyNonlinearLogGrayscaleCorrection();
-        }
-        catch (Exception exception) {
-            viewModel.ShowError(
-                $"Не удалось применить нелинейную коррекцию: " +
-                exception.Message);
-        }
-    }
-
-    private void ResetBrightnessButton_OnClick(
-        object? sender,
-        RoutedEventArgs e
-        ) {
-
-        if (DataContext is not MainViewModel viewModel) {
-            return;
-        }
-
-        try {
-            viewModel.ResetBrightness();
-        }
-        catch (Exception exception) {
-            viewModel.ShowError(
-                $"Не удалось сбросить яркость: " +
-                exception.Message);
-        }
-    }
-
-    private void ResetSaturationButton_OnClick(
-        object? sender,
-        RoutedEventArgs e
-        ) {
-
-        if (DataContext is not MainViewModel viewModel) {
-            return;
-        }
-
-        try {
-            viewModel.ResetSaturation();
-        }
-        catch (Exception exception) {
-            viewModel.ShowError(
-                $"Не удалось сбросить насыщенность: " +
-                exception.Message);
-        }
-    }
-
-    private void ResetContrastButton_OnClick(
-        object? sender,
-        RoutedEventArgs e
-        ) {
-
-        if (DataContext is not MainViewModel viewModel) {
-            return;
-        }
-
-        try {
-            viewModel.ResetContrast();
-        }
-        catch (Exception exception) {
-            viewModel.ShowError(
-                $"Не удалось сбросить контрастность: " +
-                exception.Message);
-        }
-    }
-
-    private void RotateClockwiseButton_OnClick(
-        object? sender,
-        RoutedEventArgs e
-        ) {
-
-        if (DataContext is not MainViewModel viewModel) {
-            return;
-        }
-
-        try {
-            viewModel.RotateClockwise();
-        }
-        catch (Exception exception) {
-            viewModel.ShowError(
-                $"Не удалось повернуть изображение: " +
-                exception.Message);
-        }
-    }
-
-    private void ResetAllTransformationsButton_OnClick(
-        object? sender,
-        RoutedEventArgs e
-        ) {
-
-        if (DataContext is not MainViewModel viewModel) {
-            return;
-        }
-
-        try {
-            viewModel.ResetAllTransformations();
-        }
-        catch (Exception exception) {
-            viewModel.ShowError(
-                $"Не удалось сбросить изменения: " +
-                exception.Message);
-        }
-    }
-
-    private async void SaveResultButton_OnClick(
-        object? sender,
-        RoutedEventArgs e
-        ) {
-
-        if (DataContext is not MainViewModel viewModel) {
-            return;
-        }
-
-        try {
+            // сохранение применяет те же шаги, что и предпросмотр
             byte[]? processedImageData =
-                viewModel.CreateProcessedImageData();
+                viewModel.CreateAdvancedProcessedImageData();
 
             if (processedImageData is null) {
                 return;

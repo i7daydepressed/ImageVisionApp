@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using ImageMagick;
 using ImageVisionApp.Models;
 
@@ -6,59 +7,133 @@ namespace ImageVisionApp.Services;
 
 public class ImageProcessingService{
 
-    public byte[] ApplyTransformations(
+    //берет исходное изображение и последовательно применяет к нему действия из очереди
+    // в том порядке, в котором они переданы, возвращает итоговое изображение в байтах пнг
+    public byte[] ApplySteps(//
         byte[] originalImageData,
-        ImageTransformationSettings settings
-        ){
-        // каждый раз берем базовое избрж
+        IEnumerable<ImageEditStep> steps) {//итерабле
+
+        // каждый пересчет начинаем с исходных байтов, чтобы предыдущая обработка не накопилась повторно
         using MagickImage processedImage = new MagickImage(originalImageData);
 
-        //применяем параметры преобразования
-        if (settings.BrightnessAdjustment != 0) {
-            ChangeBrightness(
-                processedImage,
-                settings.BrightnessAdjustment);
-        }
 
-        if (settings.SaturationPercentage != 100) {//насыщенность
-            ChangeSaturation(
-                processedImage,
-                settings.SaturationPercentage);
-        }
-        if (settings.ContrastAdjustment != 0) {//контраст
-            ChangeContrast(
-                processedImage,
-                settings.ContrastAdjustment);
-        }
+        // идем по шагам в переданном порядке: каждый меняет то же изображение
+        // поэтому следующий шаг получает результат предыдущего
+        foreach (ImageEditStep step in steps) {
+            // Type определяет операцию, Parameter — ее значение, если оно нужно
+            switch (step.Type) {
+                case ImageOperationType.Brightness:
+                    ChangeBrightness(processedImage, step.Parameter);
+                    break;
 
-        if (settings.IsGrayscaleEnabled) {//серое
-            ConvertToGrayscale(processedImage);
+                case ImageOperationType.Saturation:
+                    ChangeSaturation(processedImage, step.Parameter);
+                    break;
 
-            // линейная и нелинчб коррекция
-            switch (settings.CorrectionMode) {
-                case GrayscaleCorrectionMode.Linear:
+                case ImageOperationType.Contrast:
+                    ChangeContrast(processedImage, step.Parameter);
+                    break;
+
+                case ImageOperationType.Grayscale:
+                    ConvertToGrayscale(processedImage);
+                    break;
+
+                case ImageOperationType.LinearGrayscaleCorrection:
+                    // коррекция сначала переводит текущий результат в серый
+                    ConvertToGrayscale(processedImage);
                     ApplyLinearCorrection(processedImage);
                     break;
 
-                case GrayscaleCorrectionMode.Nonlinear:
+                case ImageOperationType.NonlinearGrayscaleCorrection:
+                    // шаг работает и без отдельного действия градаций серого в очереди
+                    ConvertToGrayscale(processedImage);
                     ApplyLogarithmicCorrection(processedImage);
+                    break;
+
+                case ImageOperationType.Rotation:
+                    RotateImage(processedImage, (int)step.Parameter);
+                    break;
+
+                case ImageOperationType.Erosion:
+                    // читаем снимок именно этого шага, текущий выбор редактора здесь недоступен
+                    StructuralElement element = step.ElementSnapshot
+                        ?? throw new ArgumentException("Для шага эрозии отсутствует матрица");
+                    MorphologyService.Erode(processedImage, element);
+                    break;
+
+                case ImageOperationType.Dilation:
+                    // следующий шаг получает результат предыдущего, но свой снимок матрицы
+                    StructuralElement dilationElement = step.ElementSnapshot
+                        ?? throw new ArgumentException("Для шага дилатации отсутствует матрица");
+                    MorphologyService.Dilate(processedImage, dilationElement);
+                    break;
+
+                case ImageOperationType.Opening:
+                    // один шаг выполняет два прохода с одной собственной матрицей
+                    StructuralElement openingElement = step.ElementSnapshot
+                        ?? throw new ArgumentException("Для шага открытия отсутствует матрица");
+                    MorphologyService.Open(processedImage, openingElement);
+                    break;
+
+                case ImageOperationType.Closing:
+                    StructuralElement closingElement = step.ElementSnapshot
+                        ?? throw new ArgumentException("Для шага закрытия отсутствует матрица");
+                    MorphologyService.Close(processedImage, closingElement);
+                    break;
+
+                case ImageOperationType.MorphologicalGradient:
+                    StructuralElement gradientElement = step.ElementSnapshot
+                        ?? throw new ArgumentException("Для шага градиента отсутствует матрица");
+                    MorphologyService.Gradient(processedImage, gradientElement);
+                    break;
+
+                case ImageOperationType.BlackHat:
+                    StructuralElement blackHatElement = step.ElementSnapshot
+                        ?? throw new ArgumentException("Для шага черной шляпы отсутствует матрица");
+                    MorphologyService.BlackHat(processedImage, blackHatElement);
+                    break;
+
+                // берем результат предыдущих шагов и матрицу именно этого цилиндра
+                // открытие и вычитание выполняются здесь вместе, следующий шаг получит готовую разность
+                case ImageOperationType.TopHat:
+                    StructuralElement topHatElement = step.ElementSnapshot
+                        ?? throw new ArgumentException("Для шага цилиндра отсутствует матрица");
+                    MorphologyService.TopHat(processedImage, topHatElement);
+                    break;
+
+                case ImageOperationType.Sharpen:
+                    ImageFilterService.Sharpen(processedImage);
+                    break;
+
+                case ImageOperationType.MotionBlur:
+                    ImageFilterService.MotionBlur(processedImage);
+                    break;
+
+                case ImageOperationType.Emboss:
+                    ImageFilterService.Emboss(processedImage);
+                    break;
+
+                case ImageOperationType.Median:
+                    ImageFilterService.Median(processedImage);
+                    break;
+
+                case ImageOperationType.CustomFilter:
+                    FilterKernel kernel = step.KernelSnapshot
+                        ?? throw new ArgumentException("Для пользовательского фильтра отсутствует ядро");
+                    ImageFilterService.ApplyKernel(processedImage, kernel);
                     break;
             }
         }
-
-        if (settings.RotationDegrees != 0) {//поворот
-            RotateImage(
-                processedImage,
-                settings.RotationDegrees);
+        // сохраняем глубину каналов Q8: палитровый PNG иначе может вернуться с 4-битным RGBA
+        processedImage.Depth = 8;
+        processedImage.Settings.SetDefine(MagickFormat.Png, "bit-depth", "8");
+        if (processedImage.HasAlpha) {
+            // автоматический PNG с tRNS может потерять alpha серого пикселя, сохраняем явный RGBA
+            // png:color-type=6 задает RGB с alpha: https://usage.imagemagick.org/formats/#png_write
+            processedImage.Settings.SetDefine(MagickFormat.Png, "color-type", "6");
         }
-        //тут
-        //тут и там
-        //и тут ещо
-
-        // возвращаем резулт
-        byte[] processedImageData = processedImage.ToByteArray(MagickFormat.Png);
-
-        return processedImageData;
+        //после всех шагов возвращаем готовое изображение в виде байтов пнг
+        return processedImage.ToByteArray(MagickFormat.Png);
     }
 
 
@@ -67,12 +142,12 @@ public class ImageProcessingService{
         double brightnessAdjustment
         ){
 
-        if (brightnessAdjustment < -100 ||
-            brightnessAdjustment > 100) {
+        if (!double.IsFinite(brightnessAdjustment) ||
+            brightnessAdjustment < -100 || brightnessAdjustment > 100) {
 
             throw new ArgumentOutOfRangeException(
                 nameof(brightnessAdjustment),
-                "яркость должна быть от -100 до 100");
+                "яркость должна быть конечным числом от -100 до 100");
         }
 
         processedImage.BrightnessContrast(//https://github.com/ImageMagick/ImageMagick/blob/7.1.2-31/MagickCore/enhance.c#L225-L252
@@ -139,12 +214,11 @@ public class ImageProcessingService{
         // G = 125 + (100 - 125) × 1,5 = 87,5
         // B = 125 + (50 - 125) × 1,5 = 12,5
         
-        if (saturationPercentage < 0 ||
-            saturationPercentage > 200) {//https://github.com/dlemstra/Magick.NET/blob/0491ab4a43cac00f0326319a6daa8a59136b0901/src/Magick.NET/MagickImage.cs#L4180-L4211
+        if (!double.IsFinite(saturationPercentage) || saturationPercentage < 0) {//https://github.com/dlemstra/Magick.NET/blob/0491ab4a43cac00f0326319a6daa8a59136b0901/src/Magick.NET/MagickImage.cs#L4180-L4211
                                         //https://github.com/dlemstra/Magick.Native/blob/f36d33b6028f7799e2db39a4ae6e9c6de2aa3c0d/src/Magick.Native/MagickImage.c#L1813-L1818
             throw new ArgumentOutOfRangeException(//https://github.com/ImageMagick/ImageMagick/blob/d956bba0bacd70dc1fbe0d8dc3b87dca14086496/MagickCore/enhance.c#L3550-L3567
                 nameof(saturationPercentage),
-                "насыщенность должна быть от 0 до 200");
+                "насыщенность должна быть конечным числом не меньше 0");
         }
 
         processedImage.Modulate(
@@ -157,12 +231,12 @@ public class ImageProcessingService{
         double contrastAdjustment
         ) {
 
-        if (contrastAdjustment < -100 ||
-            contrastAdjustment > 100) {
+        if (!double.IsFinite(contrastAdjustment) ||
+            contrastAdjustment < -100 || contrastAdjustment > 100) {
 
             throw new ArgumentOutOfRangeException(
                 nameof(contrastAdjustment),
-                "контрастность должна быть от -100 до 100");
+                "контрастность должна быть конечным числом от -100 до 100");
         }
 
         processedImage.BrightnessContrast(//https://github.com/dlemstra/Magick.NET/blob/0491ab4a43cac00f0326319a6daa8a59136b0901/src/Magick.NET/MagickImage.cs#L1415-L1436
@@ -310,40 +384,6 @@ public class ImageProcessingService{
         processedImage.Rotate(rotationDegrees);//https://github.com/dlemstra/Magick.NET/blob/main/src/Magick.NET/MagickImage.cs#L5743-L5753
     }
 
-    [Obsolete]
-    public byte[] ConvertToGrayscale(byte[] sourceImageData){
-        // из исходных байтов создаём объект изображения magick
-        using MagickImage magickImage =
-            new MagickImage(sourceImageData);
-
-        // метод изменяет объект
-        // в серое вот этим https://github.com/ImageMagick/ImageMagick/blob/fb965f1b54a65ddb633f8c2eac4452c782c66d7f/MagickCore/enhance.c#L2487-L2666
-        magickImage.Grayscale(PixelIntensityMethod.Rec709Luma);
-            {
-        // в нативном коде вариант Rec709Luma выбирает такую формулу чтобы rgb было умеренно серым в зависимости от текущ знач
-        // intensity =
-        //     0.212656 * red +
-        //     0.715158 * green +
-        //     0.072186 * blue;
-
-        // мега примерно что происходит
-        // for (int y = 0; y < imageHeight; y++){
-        //     for (int x = 0; x < imageWidth; x++){
-        //         double gray =
-        //             0.212656 * red +
-        //             0.715158 * green +
-        //             0.072186 * blue;
-        //         red = gray;
-        //         green = gray;
-        //         blue = gray;
-        //     }
-        // }
-            }
-        // назад в байты
-        byte[] grayscaleImageData = magickImage.ToByteArray(MagickFormat.Png);
-
-        return grayscaleImageData;
-    }
     private static void ConvertToGrayscale(MagickImage processedImage){
         // из исходных байтов создаём объект изображения magick
         // метод изменяет объект
