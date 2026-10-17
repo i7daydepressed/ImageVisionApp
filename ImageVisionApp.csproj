@@ -5,6 +5,8 @@
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <EnableAvaloniaXamlCompilation>false</EnableAvaloniaXamlCompilation>
+    <!-- архивы и вспомогательные проекты в docs не участвуют в сборке приложения -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);docs/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
