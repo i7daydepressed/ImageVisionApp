@@ -15,6 +15,9 @@ public partial class MainViewModel : ViewModelBase{
     // исходник изоб
     private byte[]? originalImageData;// для magick
 
+    // байты уже показанного результата, чтение входа анализа не запускает очередь повторно
+    private byte[]? modifiedImageData;
+
     //действия в левой панели расширенного режима: ListBox видит добавление и удаление шагов
     public ObservableCollection<ImageEditStep> AdvancedSteps { get; } = new();
     //эт коллекция похожая на список, которая сообщает подписчикам об изменении своего состава: добавили элемент, удалили, очистили или переместили. Для этого она выдаёт событие CollectionChanged.
@@ -48,33 +51,43 @@ public partial class MainViewModel : ViewModelBase{
     public partial string StatusMessage { get; set; }
         = "Изображение не выбрано";
 
-    public void LoadImage(byte[] imageData, string fileName){//реактим на событие загрузки збр
-        // сохр исхд байты
-        originalImageData = imageData;
-        // новый исходник начинает новую очередь
+    public void LoadImage(byte[] imageData, string fileName) {
+        // сначала готовим новый документ, при ошибке прежние байты, очередь и Bitmap остаются
+        byte[] nextImageData = (byte[])imageData.Clone();
+        ImageInfo nextImageInfo = imageStatsFileService.readImageInfo(nextImageData, fileName);
+        ImageHistogramData nextOriginalHistogram = imageHistogramService.CalculateHistogram(nextImageData);
+        ImageHistogramComparison nextComparison = new ImageHistogramComparison(
+            nextOriginalHistogram, nextOriginalHistogram);
+
+        using MemoryStream originalStream = new MemoryStream(nextImageData);
+        using MemoryStream modifiedStream = new MemoryStream(nextImageData);
+        Bitmap nextOriginalImage = new Bitmap(originalStream);
+        Bitmap nextModifiedImage;
+        try {
+            nextModifiedImage = new Bitmap(modifiedStream);
+        }
+        catch {
+            nextOriginalImage.Dispose();
+            throw;
+        }
+
+        Bitmap? previousOriginalImage = OriginalImage;
+        Bitmap? previousModifiedImage = ModifiedImage;
+
+        // кэш и предпросмотры публикуют один подготовленный документ
+        originalImageData = nextImageData;
+        modifiedImageData = nextImageData;
+        originalHistogram = nextOriginalHistogram;
         AdvancedSteps.Clear();
-        
-        var newImageInfo =
-                imageStatsFileService.readImageInfo(imageData, fileName);
-
-        using var originalStream = new MemoryStream(imageData);
-        using var modifiedStream = new MemoryStream(imageData);
-
-        var newOriginalImage = new Bitmap(originalStream);
-        var newModifiedImage = new Bitmap(modifiedStream);
-
-        OriginalImage?.Dispose();
-        ModifiedImage?.Dispose();
-
-        OriginalImage = newOriginalImage;
-        ModifiedImage = newModifiedImage;
-        CurrentImageInfo = newImageInfo;
-        // создание гистограмы
-        originalHistogram = imageHistogramService.CalculateHistogram(imageData);
-        HistogramComparison = new ImageHistogramComparison(
-            originalHistogram,
-            originalHistogram);
+        OriginalImage = nextOriginalImage;
+        ModifiedImage = nextModifiedImage;
+        CurrentImageInfo = nextImageInfo;
+        HistogramComparison = nextComparison;
         StatusMessage = fileName;
+        ResetAnalysisInputAfterLoad();
+
+        previousOriginalImage?.Dispose();
+        previousModifiedImage?.Dispose();
     }
 
     private void UpdateModifiedImage(byte[] processedImageData) {
@@ -100,10 +113,12 @@ public partial class MainViewModel : ViewModelBase{
 
         // сначала подготовили обе части результата, теперь заменяем показанное состояние
         Bitmap? previousImage = ModifiedImage;
+        modifiedImageData = processedImageData;
         ModifiedImage = newModifiedImage;
         if (nextComparison is not null) {
             HistogramComparison = nextComparison;
         }
+        NotifyEditedAnalysisInputChanged();
         previousImage?.Dispose();
     }
 

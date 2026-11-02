@@ -108,60 +108,24 @@ public partial class MainWindow : Window {
 
     private Border CreateToolbar() {
         // верх панель выбора картинки
-        Button openButton = new Button {
-            Content = "Открыть изображение"
-        };
+        Button openButton = new Button { Content = "Открыть изображение" };
         openButton.Click += OpenImageButton_OnClick;
 
-        Button advancedButton = new Button {
-            Content = "Расширенное редактирование →"
-        };
-
-        Button backButton = new Button {
-            Content = "← К простому виду",
-            IsVisible = false
-        };
-
-        // страницу создаем один раз, при переходах меняем только содержимое pageHost
-        ScrollViewer advancedPage = CreateAdvancedPage();
-
-        advancedButton.Click += (_, _) => {
-            if (DataContext is MainViewModel viewModel) {
-                // применяем текущую очередь к исходнику и обновляем картинку с гистограммой
-                viewModel.ApplyAdvancedQueue();
-            }
-
-            pageHost.Content = advancedPage;
-            openButton.IsVisible = false;
-            advancedButton.IsVisible = false;
-            backButton.IsVisible = true;
-        };
-
-        backButton.Click += (_, _) => {
-            pageHost.Content = simplePage;//симл пейдж
-            backButton.IsVisible = false;
-            openButton.IsVisible = true;
-            advancedButton.IsVisible = true;
-        };
-
-        TextBlock statusText =
-            CreateBoundText(viewModel => viewModel.StatusMessage);
+        TextBlock statusText = CreateBoundText(viewModel => viewModel.StatusMessage);
         statusText.VerticalAlignment = VerticalAlignment.Center;
+        statusText.TextTrimming = TextTrimming.CharacterEllipsis;
 
         Grid toolbarContent = new Grid {
             ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
             ColumnSpacing = 12
         };
-
-        // слева видна кнопка открытия или стрелка назад
         toolbarContent.Children.Add(openButton);
-        toolbarContent.Children.Add(backButton);
-
         Grid.SetColumn(statusText, 1);
         toolbarContent.Children.Add(statusText);
 
-        Grid.SetColumn(advancedButton, 2);
-        toolbarContent.Children.Add(advancedButton);
+        StackPanel navigation = CreatePageNavigation();
+        Grid.SetColumn(navigation, 2);
+        toolbarContent.Children.Add(navigation);
 
         return new Border {
             Padding = new Thickness(12),
