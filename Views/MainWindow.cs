@@ -31,6 +31,11 @@ public partial class MainWindow : Window {
         MinHeight = 600;
         Content = CreateLayout();
         DataContextChanged += MainWindow_OnDataContextChanged;
+        Closed += (_, _) => {
+            if (DataContext is MainViewModel viewModel) {
+                viewModel.DisposeAnalysis();
+            }
+        };
     }
 
     private Grid CreateLayout() {
