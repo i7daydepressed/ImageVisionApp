@@ -58,9 +58,23 @@ public partial class MainWindow {
 
         StackPanel methods = new StackPanel { Spacing = 8 };
         methods.Children.Add(edgeRow);
-        foreach (string name in new[] { "Ключевые точки", "Область номера", "Сегментация" }) {
+        foreach (string name in new[] { "Ключевые точки", "Область номера" }) {
             methods.Children.Add(new CheckBox { Content = name, IsEnabled = false });
         }
+        CheckBox segmentation = new CheckBox { Content = "Сегментация" };
+        segmentation.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(MainViewModel.IsSegmentationAnalysisEnabled)) {
+            Mode = BindingMode.TwoWay
+        });
+        Button segmentationSettings = new Button { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
+        segmentationSettings.Click += (_, _) => {
+            parametersTitle.Text = "Параметры сегментации";
+            parametersScroll.Content = CreateSegmentationParametersPanel();
+        };
+        Grid segmentationRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 4 };
+        segmentationRow.Children.Add(segmentation);
+        Grid.SetColumn(segmentationSettings, 1);
+        segmentationRow.Children.Add(segmentationSettings);
+        methods.Children.Add(segmentationRow);
         ScrollViewer methodsScroll = new ScrollViewer {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
@@ -125,6 +139,26 @@ public partial class MainWindow {
         error.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.HasCannyThresholdError)));
         canny.Children.Add(error);
         panel.Children.Add(canny);
+        return panel;
+    }
+
+    private static StackPanel CreateSegmentationParametersPanel() {
+        StackPanel panel = new StackPanel { Spacing = 8 };
+        panel.Children.Add(new TextBlock { Text = "Метод: K-means" });
+        panel.Children.Add(new TextBlock { Text = "Число кластеров N" });
+        TextBox clusters = new TextBox { PlaceholderText = "4", HorizontalAlignment = HorizontalAlignment.Stretch };
+        clusters.Bind(TextBox.TextProperty, new Binding(nameof(MainViewModel.SegmentationClusterCountText)) {
+            Mode = BindingMode.TwoWay
+        });
+        panel.Children.Add(clusters);
+        panel.Children.Add(new TextBlock {
+            Text = "Целое число от 2 до 20. Похожие цвета объединяются в группы. Результат выбирается как подложка",
+            TextWrapping = TextWrapping.Wrap
+        });
+        TextBlock error = new TextBlock { Foreground = Brushes.IndianRed, TextWrapping = TextWrapping.Wrap };
+        error.Bind(TextBlock.TextProperty, new Binding(nameof(MainViewModel.SegmentationValidationError)));
+        error.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.HasSegmentationValidationError)));
+        panel.Children.Add(error);
         return panel;
     }
 
@@ -207,10 +241,13 @@ public partial class MainWindow {
         options.Children.Add(new Separator());
         options.Children.Add(new TextBlock { Text = "Подложка результата", FontWeight = FontWeight.SemiBold });
         options.Children.Add(CreateAnalysisBackgroundOption(
-            "Входное изображение", true, nameof(MainViewModel.UseAnalysisInputBackground)));
-        options.Children.Add(new RadioButton { Content = "Сегментация", IsEnabled = false });
+            "Входное изображение", AnalysisResultBackground.Input, nameof(MainViewModel.UseAnalysisInputBackground)));
+        RadioButton segmentedBackground = CreateAnalysisBackgroundOption(
+            "Сегментация", AnalysisResultBackground.Segmentation, nameof(MainViewModel.IsAnalysisSegmentationBackground));
+        BindAnalysisPopup(segmentedBackground, IsEnabledProperty, nameof(MainViewModel.IsSegmentationAnalysisEnabled));
+        options.Children.Add(segmentedBackground);
         options.Children.Add(CreateAnalysisBackgroundOption(
-            "Без изображения", false, nameof(MainViewModel.IsAnalysisBlackBackground)));
+            "Без изображения", AnalysisResultBackground.Black, nameof(MainViewModel.IsAnalysisBlackBackground)));
         options.Children.Add(new Separator());
         options.Children.Add(new TextBlock { Text = "Отметки поверх подложки", FontWeight = FontWeight.SemiBold });
         CheckBox edges = new CheckBox { Content = "Границы" };
@@ -245,12 +282,12 @@ public partial class MainWindow {
         return option;
     }
 
-    private RadioButton CreateAnalysisBackgroundOption(string title, bool useInput, string checkedProperty) {
+    private RadioButton CreateAnalysisBackgroundOption(string title, AnalysisResultBackground background, string checkedProperty) {
         RadioButton option = new RadioButton { Content = title, GroupName = "AnalysisBackground" };
         BindAnalysisPopup(option, ToggleButton.IsCheckedProperty, checkedProperty);
         option.Click += (_, _) => {
             if (DataContext is MainViewModel viewModel) {
-                viewModel.UseAnalysisInputBackground = useInput;
+                viewModel.SelectedAnalysisBackground = background;
             }
         };
         return option;

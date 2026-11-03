@@ -11,28 +11,55 @@ public static class AnalysisCompositionService {
         CancellationToken cancellationToken = default) {
 
         ArgumentNullException.ThrowIfNull(edges);
+        return CreatePng(edges, null, useInputBackground ? AnalysisResultBackground.Input : AnalysisResultBackground.Black,
+            showEdges, cancellationToken);
+    }
+
+    public static byte[] CreatePng(
+        AnalysisEdgeResult? edges, AnalysisSegmentationResult? segmentation,
+        AnalysisResultBackground background, bool showEdges, CancellationToken cancellationToken = default) {
+
         cancellationToken.ThrowIfCancellationRequested();
+        if (edges is null && segmentation is null) {
+            throw new ArgumentException("Нет действительных данных для композиции");
+        }
+        if (background != AnalysisResultBackground.Black && background != AnalysisResultBackground.Input &&
+            background != AnalysisResultBackground.Segmentation) {
+            throw new ArgumentOutOfRangeException(nameof(background));
+        }
+        int width = edges?.Width ?? segmentation!.Width;
+        int height = edges?.Height ?? segmentation!.Height;
+        if (edges is not null && segmentation is not null &&
+            (edges.Width != segmentation.Width || edges.Height != segmentation.Height ||
+             edges.Source != segmentation.Source || edges.InputRevision != segmentation.InputRevision)) {
+            throw new ArgumentException("Результаты относятся к разным входам");
+        }
+        if (background == AnalysisResultBackground.Segmentation && segmentation is null) {
+            throw new ArgumentException("Сегментированная подложка еще не рассчитана");
+        }
         // собираем PNG из готовой карты и RGB-подложки, детектор здесь заново не вызываем
         // отклик управляет белым слоем: на черном фоне получаем саму карту, без слоя остается подложка
-        ReadOnlySpan<byte> source = edges.SourceRgb.Span;
-        ReadOnlySpan<byte> intensities = edges.Intensities.Span;
-        byte[] rgb = new byte[checked(edges.Width * edges.Height * 3)];
-        for (int y = 0; y < edges.Height; y++) {
+        ReadOnlySpan<byte> source = edges is not null ? edges.SourceRgb.Span : segmentation!.SourceRgb.Span;
+        ReadOnlySpan<byte> segmented = segmentation is not null ? segmentation.SegmentedRgb.Span : ReadOnlySpan<byte>.Empty;
+        ReadOnlySpan<byte> intensities = edges is not null ? edges.Intensities.Span : ReadOnlySpan<byte>.Empty;
+        byte[] rgb = new byte[checked(width * height * 3)];
+        for (int y = 0; y < height; y++) {
             cancellationToken.ThrowIfCancellationRequested();
-            for (int x = 0; x < edges.Width; x++) {
-                int pixel = y * edges.Width + x;
-                int strength = showEdges ? intensities[pixel] : 0;
+            for (int x = 0; x < width; x++) {
+                int pixel = y * width + x;
+                int strength = showEdges && edges is not null ? intensities[pixel] : 0;
                 for (int channel = 0; channel < 3; channel++) {
                     int index = pixel * 3 + channel;
-                    int background = useInputBackground ? source[index] : 0;
+                    int baseChannel = background == AnalysisResultBackground.Input ? source[index]
+                        : background == AnalysisResultBackground.Segmentation ? segmented[index] : 0;
                     // белый слой с alpha=strength/255, на черном фоне канал точно равен strength
-                    rgb[index] = (byte)((background * (255 - strength) + 255 * strength + 127) / 255);
+                    // белый слой сохраняет формулу A2, сегментация заменяет только подложку
+                    rgb[index] = (byte)((baseChannel * (255 - strength) + 255 * strength + 127) / 255);
                 }
             }
         }
-
         cancellationToken.ThrowIfCancellationRequested();
-        using MagickImage image = new MagickImage(MagickColors.Black, (uint)edges.Width, (uint)edges.Height);
+        using MagickImage image = new MagickImage(MagickColors.Black, (uint)width, (uint)height);
         image.ColorSpace = ColorSpace.sRGB;
         image.ImportPixels(rgb,
             new PixelImportSettings(image.Width, image.Height, StorageType.Char, PixelMapping.RGB));
