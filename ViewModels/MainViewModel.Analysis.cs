@@ -71,7 +71,7 @@ public partial class MainViewModel {
 
     private void NotifyAnalysisInputChanged() {
         analysisInputRevision++;
-        InvalidateRobertsAnalysis();
+        InvalidateEdgeAnalysis();
         OnPropertyChanged(nameof(SelectedAnalysisSource));
         OnPropertyChanged(nameof(IsOriginalAnalysisSource));
         OnPropertyChanged(nameof(IsEditedAnalysisSource));

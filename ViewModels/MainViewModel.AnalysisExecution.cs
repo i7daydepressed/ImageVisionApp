@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -23,7 +24,10 @@ public partial class MainViewModel {
     private long analysisResultRevision;
     private DispatcherTimer? analysisDebounce;
     private CancellationTokenSource? activeAnalysisCancellation;
-    private AnalysisEdgeResult? robertsResult;
+    private AnalysisEdgeMethod selectedEdgeMethod = AnalysisEdgeMethod.Roberts;
+    private string cannyLowerThresholdText = "50";
+    private string cannyUpperThresholdText = "150";
+    private AnalysisEdgeResult? edgesResult;
     private Bitmap? analysisResultImage;
     private byte[]? analysisResultPng;
     private string analysisStatusMessage = "Включите метод и выполните анализ";
@@ -38,9 +42,64 @@ public partial class MainViewModel {
             if (value) {
                 ShowAnalysisEdges = true;
             }
-            InvalidateRobertsAnalysis();
+            InvalidateEdgeAnalysis();
         }
     }
+
+    public AnalysisEdgeMethod SelectedEdgeMethod {
+        get => selectedEdgeMethod;
+        set {
+            Dispatcher.UIThread.VerifyAccess();
+            if (value != AnalysisEdgeMethod.Roberts && value != AnalysisEdgeMethod.Canny) {
+                throw new ArgumentOutOfRangeException(nameof(value));
+            }
+            if (!SetProperty(ref selectedEdgeMethod, value)) {
+                return;
+            }
+            OnPropertyChanged(nameof(SelectedEdgeMethodIndex));
+            OnPropertyChanged(nameof(IsRobertsEdgeMethod));
+            OnPropertyChanged(nameof(IsCannyEdgeMethod));
+            InvalidateEdgeAnalysis();
+        }
+    }
+
+    public int SelectedEdgeMethodIndex {
+        get => selectedEdgeMethod == AnalysisEdgeMethod.Canny ? 1 : 0;
+        set {
+            // -1 при подготовке ComboBox не сбрасывает уже выбранный метод
+            if (value == 0 || value == 1) {
+                SelectedEdgeMethod = value == 1 ? AnalysisEdgeMethod.Canny : AnalysisEdgeMethod.Roberts;
+            }
+        }
+    }
+
+    public bool IsRobertsEdgeMethod => selectedEdgeMethod == AnalysisEdgeMethod.Roberts;
+    public bool IsCannyEdgeMethod => selectedEdgeMethod == AnalysisEdgeMethod.Canny;
+
+    public string CannyLowerThresholdText {
+        get => cannyLowerThresholdText;
+        set {
+            Dispatcher.UIThread.VerifyAccess();
+            if (SetProperty(ref cannyLowerThresholdText, value ?? string.Empty)) {
+                NotifyCannyThresholdsChanged();
+            }
+        }
+    }
+
+    public string CannyUpperThresholdText {
+        get => cannyUpperThresholdText;
+        set {
+            Dispatcher.UIThread.VerifyAccess();
+            if (SetProperty(ref cannyUpperThresholdText, value ?? string.Empty)) {
+                NotifyCannyThresholdsChanged();
+            }
+        }
+    }
+
+    public string CannyThresholdError => TryGetCannyThresholds(out _, out _) ? string.Empty
+        : "Введите конечные числа: 0 ≤ нижний < верхний ≤ 32767";
+    public bool HasCannyThresholdError => !TryGetCannyThresholds(out _, out _);
+    private bool AreSelectedAnalysisParametersValid => IsRobertsEdgeMethod || !HasCannyThresholdError;
 
     public bool IsAutoAnalysisEnabled {
         get => isAutoAnalysisEnabled;
@@ -53,7 +112,7 @@ public partial class MainViewModel {
             if (!value) {
                 analysisRunRequested = false;
             }
-            else if (robertsResult is null) {
+            else if (edgesResult is null) {
                 ScheduleAutoAnalysis();
             }
         }
@@ -82,12 +141,13 @@ public partial class MainViewModel {
 
     public bool IsAnalysisBlackBackground => !useAnalysisInputBackground;
     public bool IsAnalysisRunning => analysisWorkerRunning;
-    public bool CanRunAnalysis => !analysisDisposed && isEdgesAnalysisEnabled && HasAnalysisInput && !analysisWorkerRunning;
+    public bool CanRunAnalysis => !analysisDisposed && isEdgesAnalysisEnabled && HasAnalysisInput &&
+        AreSelectedAnalysisParametersValid && !analysisWorkerRunning;
     public bool HasAnalysisResult => analysisResultImage is not null && analysisResultPng is not null;
     public bool IsAnalysisResultEmpty => !HasAnalysisResult;
     public bool CanSaveAnalysisResult => !analysisDisposed && HasAnalysisResult && !analysisWorkerRunning;
     public Bitmap? AnalysisResultImage => analysisResultImage;
-    public AnalysisEdgeResult? RobertsResult => robertsResult;
+    public AnalysisEdgeResult? EdgesResult => edgesResult;
     public long AnalysisResultRevision => analysisResultRevision;
     public string AnalysisStatusMessage {
         get => analysisStatusMessage;
@@ -124,12 +184,28 @@ public partial class MainViewModel {
         activeAnalysisCancellation?.Cancel();
         analysisRunRequested = false;
         analysisCompositionRequested = false;
-        SetRobertsResult(null);
+        SetEdgesResult(null);
         ReplaceAnalysisComposition(null, null);
     }
 
-    // вызывается после согласованной замены байтов документа в partial-файле входа
-    private void InvalidateRobertsAnalysis() {
+    private bool TryGetCannyThresholds(out double lowerThreshold, out double upperThreshold) {
+        bool lowerParsed = double.TryParse(cannyLowerThresholdText.Trim().Replace(',', '.'),
+            NumberStyles.Float, CultureInfo.InvariantCulture, out lowerThreshold);
+        bool upperParsed = double.TryParse(cannyUpperThresholdText.Trim().Replace(',', '.'),
+            NumberStyles.Float, CultureInfo.InvariantCulture, out upperThreshold);
+        return lowerParsed && upperParsed && CannyAnalysisService.AreThresholdsValid(lowerThreshold, upperThreshold);
+    }
+
+    private void NotifyCannyThresholdsChanged() {
+        OnPropertyChanged(nameof(CannyThresholdError));
+        OnPropertyChanged(nameof(HasCannyThresholdError));
+        if (IsCannyEdgeMethod) {
+            InvalidateEdgeAnalysis();
+        }
+    }
+
+    // вызывается после согласованной смены входа, метода или его действующих параметров
+    private void InvalidateEdgeAnalysis() {
         Dispatcher.UIThread.VerifyAccess();
         if (analysisDisposed) {
             return;
@@ -139,16 +215,18 @@ public partial class MainViewModel {
         activeAnalysisCancellation?.Cancel();
         analysisRunRequested = false;
         analysisCompositionRequested = false;
-        SetRobertsResult(null);
+        SetEdgesResult(null);
         ReplaceAnalysisComposition(null, null);
         AnalysisStatusMessage = !HasAnalysisInput ? "Откройте изображение"
             : !isEdgesAnalysisEnabled ? "Включите метод анализа"
-            : "Вход изменился, выполните анализ";
+            : !AreSelectedAnalysisParametersValid ? CannyThresholdError
+            : "Вход или параметры изменились, выполните анализ";
         ScheduleAutoAnalysis();
     }
 
     private void ScheduleAutoAnalysis() {
-        if (analysisDisposed || !isAutoAnalysisEnabled || !isEdgesAnalysisEnabled || !HasAnalysisInput) {
+        if (analysisDisposed || !isAutoAnalysisEnabled || !isEdgesAnalysisEnabled || !HasAnalysisInput ||
+            !AreSelectedAnalysisParametersValid) {
             return;
         }
         if (analysisDebounce is null) {
@@ -161,7 +239,8 @@ public partial class MainViewModel {
 
     private void AnalysisDebounce_OnTick(object? sender, EventArgs e) {
         analysisDebounce?.Stop();
-        if (analysisDisposed || !isAutoAnalysisEnabled || !isEdgesAnalysisEnabled || !HasAnalysisInput) {
+        if (analysisDisposed || !isAutoAnalysisEnabled || !isEdgesAnalysisEnabled || !HasAnalysisInput ||
+            !AreSelectedAnalysisParametersValid) {
             return;
         }
         // один флаг заменяет ожидающие запуски, работающий цикл сам заберет последний вход
@@ -172,14 +251,15 @@ public partial class MainViewModel {
     private void RequestAnalysisComposition() {
         analysisDisplayRevision++;
         ReplaceAnalysisComposition(null, null);
-        analysisCompositionRequested = robertsResult is not null && !analysisDisposed;
+        analysisCompositionRequested = edgesResult is not null && !analysisDisposed;
         if (analysisCompositionRequested) {
             _ = ProcessAnalysisRequestsAsync();
         }
     }
 
     private bool IsCurrentAnalysisWork(long generation) =>
-        !analysisDisposed && isEdgesAnalysisEnabled && HasAnalysisInput && generation == analysisWorkGeneration;
+        !analysisDisposed && isEdgesAnalysisEnabled && HasAnalysisInput && AreSelectedAnalysisParametersValid &&
+        generation == analysisWorkGeneration;
 
     private async Task ProcessAnalysisRequestsAsync() {
         if (analysisWorkerRunning || analysisDisposed) {
@@ -189,7 +269,7 @@ public partial class MainViewModel {
         NotifyAnalysisControls();
         try {
             // один цикл забирает последнюю потребность, флаги не создают очередь отдельных Task
-            // поколение защищает смену входа, версия показа отделяет ее от смены подложки и видимости
+            // поколение защищает вход и параметры, версия показа отделяет смену подложки и видимости
             while (!analysisDisposed && (analysisRunRequested || analysisCompositionRequested)) {
                 bool calculate = analysisRunRequested;
                 analysisRunRequested = false;
@@ -202,26 +282,35 @@ public partial class MainViewModel {
                 activeAnalysisCancellation = cancellation;
                 try {
                     if (calculate) {
-                        SetRobertsResult(null);
+                        SetEdgesResult(null);
                         ReplaceAnalysisComposition(null, null);
                         AnalysisInputSnapshot input = CaptureAnalysisInput()
                             ?? throw new InvalidOperationException("Вход анализа отсутствует");
                         int expectedWidth = AnalysisInputImage!.PixelSize.Width;
                         int expectedHeight = AnalysisInputImage.PixelSize.Height;
-                        AnalysisStatusMessage = "Выполняется анализ Робертса";
-                        AnalysisEdgeResult next = await Task.Run(
-                            () => RobertsAnalysisService.Analyze(input, cancellation.Token), cancellation.Token);
+                        AnalysisEdgeMethod method = selectedEdgeMethod;
+                        double lowerThreshold = 0;
+                        double upperThreshold = 0;
+                        if (method == AnalysisEdgeMethod.Canny && !TryGetCannyThresholds(out lowerThreshold, out upperThreshold)) {
+                            throw new InvalidOperationException(CannyThresholdError);
+                        }
+                        AnalysisStatusMessage = method == AnalysisEdgeMethod.Canny
+                            ? "Выполняется анализ Canny" : "Выполняется анализ Робертса";
+                        // worker получает снимок и значения, свойства ViewModel в Task.Run не читаются
+                        AnalysisEdgeResult next = await Task.Run(() => method == AnalysisEdgeMethod.Canny
+                            ? CannyAnalysisService.Analyze(input, lowerThreshold, upperThreshold, cancellation.Token)
+                            : RobertsAnalysisService.Analyze(input, cancellation.Token), cancellation.Token);
                         if (!IsCurrentAnalysisWork(generation) || next.InputRevision != AnalysisInputRevision) {
                             continue;
                         }
-                        if (next.Width != expectedWidth || next.Height != expectedHeight) {
-                            throw new InvalidOperationException("Размер декодированного входа не совпадает с предпросмотром");
+                        if (next.Width != expectedWidth || next.Height != expectedHeight || next.Method != method) {
+                            throw new InvalidOperationException("Размер или метод результата не соответствует выбранному входу");
                         }
-                        SetRobertsResult(next);
+                        SetEdgesResult(next);
                     }
 
-                    AnalysisEdgeResult? edges = robertsResult;
-                    if (edges is null || edges.InputRevision != AnalysisInputRevision) {
+                    AnalysisEdgeResult? edges = edgesResult;
+                    if (edges is null || edges.InputRevision != AnalysisInputRevision || edges.Method != selectedEdgeMethod) {
                         continue;
                     }
                     // после расчета берем последние настройки показа, детектор повторно не вызываем
@@ -233,7 +322,7 @@ public partial class MainViewModel {
                     byte[] png = await Task.Run(
                         () => AnalysisCompositionService.CreatePng(edges, useBackground, showEdges, cancellation.Token),
                         cancellation.Token);
-                    if (!IsCurrentAnalysisWork(generation) || !ReferenceEquals(edges, robertsResult) ||
+                    if (!IsCurrentAnalysisWork(generation) || !ReferenceEquals(edges, edgesResult) ||
                         displayRevision != analysisDisplayRevision) {
                         continue;
                     }
@@ -241,15 +330,16 @@ public partial class MainViewModel {
                     using MemoryStream stream = new MemoryStream(png);
                     Bitmap nextImage = new Bitmap(stream);
                     ReplaceAnalysisComposition(nextImage, png);
-                    AnalysisStatusMessage = $"Готово: Робертс · {edges.Width} × {edges.Height}";
+                    string methodName = edges.Method == AnalysisEdgeMethod.Canny ? "Canny" : "Робертс";
+                    AnalysisStatusMessage = $"Готово: {methodName} · {edges.Width} × {edges.Height}";
                 }
                 catch (OperationCanceledException) when (cancellation.IsCancellationRequested) {
-                    // отмененный вход не публикует картинку и не заменяет сообщение нового состояния
+                    // отмененная работа не публикует картинку и не заменяет сообщение нового состояния
                 }
                 catch (Exception exception) {
                     if (IsCurrentAnalysisWork(generation)) {
                         if (calculate) {
-                            SetRobertsResult(null);
+                            SetEdgesResult(null);
                         }
                         ReplaceAnalysisComposition(null, null);
                         AnalysisStatusMessage = $"Не удалось выполнить анализ: {exception.Message}";
@@ -266,9 +356,9 @@ public partial class MainViewModel {
         }
     }
 
-    private void SetRobertsResult(AnalysisEdgeResult? result) {
-        robertsResult = result;
-        OnPropertyChanged(nameof(RobertsResult));
+    private void SetEdgesResult(AnalysisEdgeResult? result) {
+        edgesResult = result;
+        OnPropertyChanged(nameof(EdgesResult));
     }
 
     private void ReplaceAnalysisComposition(Bitmap? image, byte[]? png) {

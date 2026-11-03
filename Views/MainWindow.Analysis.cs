@@ -49,7 +49,7 @@ public partial class MainWindow {
         Button settings = new Button { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
         settings.Click += (_, _) => {
             parametersTitle.Text = "Параметры границ";
-            parametersScroll.Content = CreateRobertsParametersPanel();
+            parametersScroll.Content = CreateEdgeParametersPanel();
         };
         Grid edgeRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 4 };
         edgeRow.Children.Add(edges);
@@ -84,21 +84,47 @@ public partial class MainWindow {
         return CreateAnalysisCard(layout);
     }
 
-    private static StackPanel CreateRobertsParametersPanel() {
+    private static StackPanel CreateEdgeParametersPanel() {
         StackPanel panel = new StackPanel { Spacing = 8 };
         panel.Children.Add(new TextBlock { Text = "Метод" });
-        panel.Children.Add(new ComboBox {
+        ComboBox method = new ComboBox {
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            Items = {
-                new ComboBoxItem { Content = "Робертс" },
-                new ComboBoxItem { Content = "Canny", IsEnabled = false }
-            },
-            SelectedIndex = 0
-        });
-        panel.Children.Add(new TextBlock {
+            ItemsSource = new[] { "Робертс", "Canny" }
+        };
+        method.Bind(SelectingItemsControl.SelectedIndexProperty,
+            new Binding(nameof(MainViewModel.SelectedEdgeMethodIndex)) { Mode = BindingMode.TwoWay });
+        panel.Children.Add(method);
+
+        TextBlock robertsHint = new TextBlock {
             Text = "Для Робертса дополнительные параметры не требуются",
             TextWrapping = TextWrapping.Wrap
+        };
+        robertsHint.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsRobertsEdgeMethod)));
+        panel.Children.Add(robertsHint);
+
+        StackPanel canny = new StackPanel { Spacing = 8 };
+        canny.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsCannyEdgeMethod)));
+        canny.Children.Add(new TextBlock { Text = "Нижний порог" });
+        TextBox lower = new TextBox { PlaceholderText = "50", HorizontalAlignment = HorizontalAlignment.Stretch };
+        lower.Bind(TextBox.TextProperty, new Binding(nameof(MainViewModel.CannyLowerThresholdText)) {
+            Mode = BindingMode.TwoWay
         });
+        canny.Children.Add(lower);
+        canny.Children.Add(new TextBlock { Text = "Верхний порог" });
+        TextBox upper = new TextBox { PlaceholderText = "150", HorizontalAlignment = HorizontalAlignment.Stretch };
+        upper.Bind(TextBox.TextProperty, new Binding(nameof(MainViewModel.CannyUpperThresholdText)) {
+            Mode = BindingMode.TwoWay
+        });
+        canny.Children.Add(upper);
+        canny.Children.Add(new TextBlock {
+            Text = "0 ≤ нижний < верхний ≤ 32767. Дробные числа: точка или запятая. Значения порогов, не проценты",
+            TextWrapping = TextWrapping.Wrap
+        });
+        TextBlock error = new TextBlock { Foreground = Brushes.IndianRed, TextWrapping = TextWrapping.Wrap };
+        error.Bind(TextBlock.TextProperty, new Binding(nameof(MainViewModel.CannyThresholdError)));
+        error.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.HasCannyThresholdError)));
+        canny.Children.Add(error);
+        panel.Children.Add(canny);
         return panel;
     }
 
