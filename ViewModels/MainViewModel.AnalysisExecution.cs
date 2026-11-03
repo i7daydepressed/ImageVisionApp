@@ -25,7 +25,7 @@ public partial class MainViewModel {
     private long analysisResultRevision;
     private DispatcherTimer? analysisDebounce;
     private CancellationTokenSource? activeAnalysisCancellation;
-    private enum AnalysisWorkerMethod { None, Edges, Segmentation, Composition }
+    private enum AnalysisWorkerMethod { None, Edges, Segmentation, Keypoints, Composition }
     private AnalysisWorkerMethod activeAnalysisMethod;
     private string edgesFailure = string.Empty;
     private AnalysisEdgeMethod selectedEdgeMethod = AnalysisEdgeMethod.Roberts;
@@ -106,11 +106,13 @@ public partial class MainViewModel {
         : "Введите конечные числа: 0 ≤ нижний < верхний ≤ 32767";
     public bool HasCannyThresholdError => !TryGetCannyThresholds(out _, out _);
     private bool AreSelectedAnalysisParametersValid => IsRobertsEdgeMethod || !HasCannyThresholdError;
-    private bool HasEnabledAnalysisMethods => isEdgesAnalysisEnabled || isSegmentationAnalysisEnabled;
+    private bool HasEnabledAnalysisMethods => isEdgesAnalysisEnabled || isSegmentationAnalysisEnabled || isKeypointAnalysisEnabled;
     private bool AreAllAnalysisParametersValid => (!isEdgesAnalysisEnabled || AreSelectedAnalysisParametersValid) &&
-        (!isSegmentationAnalysisEnabled || !HasSegmentationValidationError);
+        (!isSegmentationAnalysisEnabled || !HasSegmentationValidationError) &&
+        (!isKeypointAnalysisEnabled || !HasFastThresholdError);
     private bool HasMissingAnalysisResults => (isEdgesAnalysisEnabled && edgesResult is null) ||
-        (isSegmentationAnalysisEnabled && segmentationResult is null);
+        (isSegmentationAnalysisEnabled && segmentationResult is null) ||
+        (isKeypointAnalysisEnabled && keypointsResult is null);
 
     public bool IsAutoAnalysisEnabled {
         get => isAutoAnalysisEnabled;
@@ -214,6 +216,7 @@ public partial class MainViewModel {
         analysisCompositionRequested = false;
         SetEdgesResult(null);
         SetSegmentationResult(null);
+        SetKeypointsResult(null);
         ReplaceAnalysisComposition(null, null);
     }
 
@@ -239,14 +242,17 @@ public partial class MainViewModel {
         }
         edgesWorkRevision++;
         segmentationWorkRevision++;
+        keypointsWorkRevision++;
         edgesFailure = string.Empty;
         segmentationFailure = string.Empty;
+        keypointsFailure = string.Empty;
         analysisDebounce?.Stop();
         activeAnalysisCancellation?.Cancel();
         analysisRunRequested = false;
         analysisForceRunRequested = false;
         SetEdgesResult(null);
         SetSegmentationResult(null);
+        SetKeypointsResult(null);
         NotifySegmentationValidation();
         RequestAnalysisComposition();
         RefreshAnalysisStatus();
@@ -332,11 +338,15 @@ public partial class MainViewModel {
                     int height = AnalysisInputImage.PixelSize.Height;
                     long edgeRevision = edgesWorkRevision;
                     long segmentRevision = segmentationWorkRevision;
+                    long pointRevision = keypointsWorkRevision;
                     AnalysisEdgeMethod method = selectedEdgeMethod;
                     TryGetCannyThresholds(out double lower, out double upper);
                     TryGetSegmentationClusterCount(out int clusters);
+                    TryGetFastThreshold(out int fastThreshold);
+                    bool nonmaxSuppression = fastNonmaxSuppression;
                     bool calculateEdges = isEdgesAnalysisEnabled && (force || edgesResult is null);
                     bool calculateSegmentation = isSegmentationAnalysisEnabled && (force || segmentationResult is null);
+                    bool calculateKeypoints = isKeypointAnalysisEnabled && (force || keypointsResult is null);
                     // ручная кнопка повторяет выбранные методы, авто пересчитывает только недействительные
                     if (calculateEdges) {
                         SetEdgesResult(null);
@@ -346,12 +356,19 @@ public partial class MainViewModel {
                         SetSegmentationResult(null);
                         segmentationFailure = string.Empty;
                     }
+                    if (calculateKeypoints) {
+                        SetKeypointsResult(null);
+                        keypointsFailure = string.Empty;
+                    }
                     ReplaceAnalysisComposition(null, null);
                     if (calculateEdges && IsCurrentEdgeWork(edgeRevision, input.InputRevision)) {
                         await CalculateEdgesAsync(input, width, height, edgeRevision, method, lower, upper);
                     }
                     if (calculateSegmentation && IsCurrentSegmentationWork(segmentRevision, input.InputRevision)) {
                         await CalculateSegmentationAsync(input, width, height, segmentRevision, clusters);
+                    }
+                    if (calculateKeypoints && IsCurrentKeypointWork(pointRevision, input.InputRevision)) {
+                        await CalculateKeypointsAsync(input, width, height, pointRevision, fastThreshold, nonmaxSuppression);
                     }
                 }
                 if (analysisDisposed) {
@@ -363,9 +380,12 @@ public partial class MainViewModel {
                 analysisCompositionRequested = false;
                 AnalysisEdgeResult? edges = edgesResult;
                 AnalysisSegmentationResult? segmentation = segmentationResult;
+                AnalysisKeypointResult? keypoints = keypointsResult;
+                bool missingVisibleKeypoints = isKeypointAnalysisEnabled && showAnalysisKeypoints && keypoints is null;
                 bool missingVisibleEdges = isEdgesAnalysisEnabled && showAnalysisEdges && edges is null;
                 bool missingBackground = IsAnalysisSegmentationBackground && segmentation is null;
-                if (missingVisibleEdges || missingBackground || (edges is null && segmentation is null)) {
+                if (missingVisibleEdges || missingVisibleKeypoints || missingBackground ||
+                    (edges is null && segmentation is null && keypoints is null)) {
                     ReplaceAnalysisComposition(null, null);
                     RefreshAnalysisStatus();
                     continue;
@@ -374,15 +394,17 @@ public partial class MainViewModel {
                 long displayRevision = analysisDisplayRevision;
                 AnalysisResultBackground background = selectedAnalysisBackground;
                 bool showEdges = showAnalysisEdges;
+                bool showKeypoints = showAnalysisKeypoints;
                 using CancellationTokenSource cancellation = new CancellationTokenSource();
                 activeAnalysisCancellation = cancellation;
                 activeAnalysisMethod = AnalysisWorkerMethod.Composition;
                 try {
                     AnalysisStatusMessage = "Подготовка результата";
                     byte[] png = await Task.Run(() => AnalysisCompositionService.CreatePng(
-                        edges, segmentation, background, showEdges, cancellation.Token), cancellation.Token);
+                        edges, segmentation, keypoints, background, showEdges, showKeypoints, cancellation.Token), cancellation.Token);
                     if (analysisDisposed || inputRevision != AnalysisInputRevision || displayRevision != analysisDisplayRevision ||
-                        !ReferenceEquals(edges, edgesResult) || !ReferenceEquals(segmentation, segmentationResult)) {
+                        !ReferenceEquals(edges, edgesResult) || !ReferenceEquals(segmentation, segmentationResult) ||
+                        !ReferenceEquals(keypoints, keypointsResult)) {
                         continue;
                     }
                     using MemoryStream stream = new MemoryStream(png);
@@ -489,11 +511,15 @@ public partial class MainViewModel {
     private void RefreshAnalysisStatus() {
         string issue = isEdgesAnalysisEnabled && !AreSelectedAnalysisParametersValid ? CannyThresholdError
             : isSegmentationAnalysisEnabled && HasSegmentationValidationError ? SegmentationValidationError
-            : string.Join("; ", new[] { edgesFailure, segmentationFailure }).Trim(' ', ';');
+            : isKeypointAnalysisEnabled && HasFastThresholdError ? FastThresholdError
+            : string.Join("; ", new[] { edgesFailure, segmentationFailure, keypointsFailure }).Trim(' ', ';');
         if (HasAnalysisResult) {
             string methods = edgesResult is null ? string.Empty : edgesResult.Method == AnalysisEdgeMethod.Canny ? "Canny" : "Робертс";
             if (segmentationResult is not null) {
                 methods += (methods.Length == 0 ? string.Empty : " + ") + $"K-means N={segmentationResult.ClusterCount}";
+            }
+            if (keypointsResult is not null) {
+                methods += (methods.Length == 0 ? string.Empty : " + ") + $"FAST: {keypointsResult.Points.Length} точек";
             }
             AnalysisStatusMessage = $"Готово: {methods} · {AnalysisInputImage!.PixelSize.Width} × {AnalysisInputImage.PixelSize.Height}" +
                 (issue.Length == 0 ? string.Empty : " · " + issue);

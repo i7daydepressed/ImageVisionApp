@@ -19,27 +19,41 @@ public static class AnalysisCompositionService {
         AnalysisEdgeResult? edges, AnalysisSegmentationResult? segmentation,
         AnalysisResultBackground background, bool showEdges, CancellationToken cancellationToken = default) {
 
+        return CreatePng(edges, segmentation, null, background, showEdges, false, cancellationToken);
+    }
+
+    public static byte[] CreatePng(
+        AnalysisEdgeResult? edges, AnalysisSegmentationResult? segmentation, AnalysisKeypointResult? keypoints,
+        AnalysisResultBackground background, bool showEdges, bool showKeypoints,
+        CancellationToken cancellationToken = default) {
+
         cancellationToken.ThrowIfCancellationRequested();
-        if (edges is null && segmentation is null) {
+        if (edges is null && segmentation is null && keypoints is null) {
             throw new ArgumentException("Нет действительных данных для композиции");
         }
         if (background != AnalysisResultBackground.Black && background != AnalysisResultBackground.Input &&
             background != AnalysisResultBackground.Segmentation) {
             throw new ArgumentOutOfRangeException(nameof(background));
         }
-        int width = edges?.Width ?? segmentation!.Width;
-        int height = edges?.Height ?? segmentation!.Height;
+        int width = edges?.Width ?? segmentation?.Width ?? keypoints!.Width;
+        int height = edges?.Height ?? segmentation?.Height ?? keypoints!.Height;
         if (edges is not null && segmentation is not null &&
             (edges.Width != segmentation.Width || edges.Height != segmentation.Height ||
              edges.Source != segmentation.Source || edges.InputRevision != segmentation.InputRevision)) {
             throw new ArgumentException("Результаты относятся к разным входам");
+        }
+        if (keypoints is not null && (keypoints.Width != width || keypoints.Height != height ||
+            keypoints.Source != (edges?.Source ?? segmentation?.Source ?? keypoints.Source) ||
+            keypoints.InputRevision != (edges?.InputRevision ?? segmentation?.InputRevision ?? keypoints.InputRevision))) {
+            throw new ArgumentException("Точки и подложка относятся к разным входам");
         }
         if (background == AnalysisResultBackground.Segmentation && segmentation is null) {
             throw new ArgumentException("Сегментированная подложка еще не рассчитана");
         }
         // собираем PNG из готовой карты и RGB-подложки, детектор здесь заново не вызываем
         // отклик управляет белым слоем: на черном фоне получаем саму карту, без слоя остается подложка
-        ReadOnlySpan<byte> source = edges is not null ? edges.SourceRgb.Span : segmentation!.SourceRgb.Span;
+        ReadOnlySpan<byte> source = edges is not null ? edges.SourceRgb.Span
+            : segmentation is not null ? segmentation.SourceRgb.Span : keypoints!.SourceRgb.Span;
         ReadOnlySpan<byte> segmented = segmentation is not null ? segmentation.SegmentedRgb.Span : ReadOnlySpan<byte>.Empty;
         ReadOnlySpan<byte> intensities = edges is not null ? edges.Intensities.Span : ReadOnlySpan<byte>.Empty;
         byte[] rgb = new byte[checked(width * height * 3)];
@@ -59,6 +73,9 @@ public static class AnalysisCompositionService {
             }
         }
         cancellationToken.ThrowIfCancellationRequested();
+        if (showKeypoints && keypoints is not null) {
+            DrawKeypoints(rgb, width, height, keypoints.Points.Span, cancellationToken);
+        }
         using MagickImage image = new MagickImage(MagickColors.Black, (uint)width, (uint)height);
         image.ColorSpace = ColorSpace.sRGB;
         image.ImportPixels(rgb,
@@ -70,5 +87,35 @@ public static class AnalysisCompositionService {
         byte[] png = image.ToByteArray(MagickFormat.Png);
         cancellationToken.ThrowIfCancellationRequested();
         return png;
+    }
+
+    private static void DrawKeypoints(byte[] rgb, int width, int height, ReadOnlySpan<AnalysisKeypoint> points,
+        CancellationToken cancellationToken) {
+
+        // сначала все черные обводки, затем желтые кресты, чтобы соседняя обводка не стерла точку
+        DrawKeypointCrosses(rgb, width, height, points, 3, 1, 0, cancellationToken);
+        DrawKeypointCrosses(rgb, width, height, points, 2, 0, 255, cancellationToken);
+    }
+
+    private static void DrawKeypointCrosses(byte[] rgb, int width, int height, ReadOnlySpan<AnalysisKeypoint> points,
+        int radius, int halfStroke, byte redGreen, CancellationToken cancellationToken) {
+
+        foreach (AnalysisKeypoint point in points) {
+            cancellationToken.ThrowIfCancellationRequested();
+            for (int dy = -radius; dy <= radius; dy++) {
+                for (int dx = -radius; dx <= radius; dx++) {
+                    int x = point.X + dx;
+                    int y = point.Y + dy;
+                    if ((Math.Abs(dx) > halfStroke && Math.Abs(dy) > halfStroke) ||
+                        x < 0 || x >= width || y < 0 || y >= height) {
+                        continue;
+                    }
+                    int index = (y * width + x) * 3;
+                    rgb[index] = redGreen;
+                    rgb[index + 1] = redGreen;
+                    rgb[index + 2] = 0;
+                }
+            }
+        }
     }
 }

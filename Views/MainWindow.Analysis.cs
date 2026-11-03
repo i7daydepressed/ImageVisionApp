@@ -58,9 +58,21 @@ public partial class MainWindow {
 
         StackPanel methods = new StackPanel { Spacing = 8 };
         methods.Children.Add(edgeRow);
-        foreach (string name in new[] { "Ключевые точки", "Область номера" }) {
-            methods.Children.Add(new CheckBox { Content = name, IsEnabled = false });
-        }
+        CheckBox keypoints = new CheckBox { Content = "Ключевые точки" };
+        keypoints.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(MainViewModel.IsKeypointAnalysisEnabled)) {
+            Mode = BindingMode.TwoWay
+        });
+        Button keypointSettings = new Button { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
+        keypointSettings.Click += (_, _) => {
+            parametersTitle.Text = "Параметры ключевых точек";
+            parametersScroll.Content = CreateFastParametersPanel();
+        };
+        Grid keypointRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 4 };
+        keypointRow.Children.Add(keypoints);
+        Grid.SetColumn(keypointSettings, 1);
+        keypointRow.Children.Add(keypointSettings);
+        methods.Children.Add(keypointRow);
+        methods.Children.Add(new CheckBox { Content = "Область номера", IsEnabled = false });
         CheckBox segmentation = new CheckBox { Content = "Сегментация" };
         segmentation.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(MainViewModel.IsSegmentationAnalysisEnabled)) {
             Mode = BindingMode.TwoWay
@@ -139,6 +151,31 @@ public partial class MainWindow {
         error.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.HasCannyThresholdError)));
         canny.Children.Add(error);
         panel.Children.Add(canny);
+        return panel;
+    }
+
+    private static StackPanel CreateFastParametersPanel() {
+        StackPanel panel = new StackPanel { Spacing = 8 };
+        panel.Children.Add(new TextBlock { Text = "Метод: FAST 9/16" });
+        panel.Children.Add(new TextBlock { Text = "Порог FAST" });
+        TextBox threshold = new TextBox { HorizontalAlignment = HorizontalAlignment.Stretch };
+        threshold.Bind(TextBox.TextProperty, new Binding(nameof(MainViewModel.FastThresholdText)) {
+            Mode = BindingMode.TwoWay
+        });
+        panel.Children.Add(threshold);
+        panel.Children.Add(new TextBlock {
+            Text = "Целое число от 1 до 255. Порог задает минимальную разницу яркости для поиска точки",
+            TextWrapping = TextWrapping.Wrap
+        });
+        CheckBox nonmax = new CheckBox { Content = "Подавление немаксимумов" };
+        nonmax.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(MainViewModel.FastNonmaxSuppression)) {
+            Mode = BindingMode.TwoWay
+        });
+        panel.Children.Add(nonmax);
+        TextBlock error = new TextBlock { Foreground = Brushes.IndianRed, TextWrapping = TextWrapping.Wrap };
+        error.Bind(TextBlock.TextProperty, new Binding(nameof(MainViewModel.FastThresholdError)));
+        error.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.HasFastThresholdError)));
+        panel.Children.Add(error);
         return panel;
     }
 
@@ -254,7 +291,10 @@ public partial class MainWindow {
         BindAnalysisPopup(edges, ToggleButton.IsCheckedProperty, nameof(MainViewModel.ShowAnalysisEdges), BindingMode.TwoWay);
         BindAnalysisPopup(edges, IsEnabledProperty, nameof(MainViewModel.IsEdgesAnalysisEnabled));
         options.Children.Add(edges);
-        options.Children.Add(new CheckBox { Content = "Ключевые точки", IsEnabled = false });
+        CheckBox keypoints = new CheckBox { Content = "Ключевые точки" };
+        BindAnalysisPopup(keypoints, ToggleButton.IsCheckedProperty, nameof(MainViewModel.ShowAnalysisKeypoints), BindingMode.TwoWay);
+        BindAnalysisPopup(keypoints, IsEnabledProperty, nameof(MainViewModel.IsKeypointAnalysisEnabled));
+        options.Children.Add(keypoints);
         options.Children.Add(new CheckBox { Content = "Область номера", IsEnabled = false });
 
         return new Button {
