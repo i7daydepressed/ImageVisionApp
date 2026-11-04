@@ -72,7 +72,20 @@ public partial class MainWindow {
         Grid.SetColumn(keypointSettings, 1);
         keypointRow.Children.Add(keypointSettings);
         methods.Children.Add(keypointRow);
-        methods.Children.Add(new CheckBox { Content = "Область номера", IsEnabled = false });
+        CheckBox plate = new CheckBox { Content = "Область номера" };
+        plate.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(MainViewModel.IsPlateAnalysisEnabled)) {
+            Mode = BindingMode.TwoWay
+        });
+        Button plateSettings = new Button { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
+        plateSettings.Click += (_, _) => {
+            parametersTitle.Text = "Параметры поиска номера";
+            parametersScroll.Content = CreatePlateParametersPanel();
+        };
+        Grid plateRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 4 };
+        plateRow.Children.Add(plate);
+        Grid.SetColumn(plateSettings, 1);
+        plateRow.Children.Add(plateSettings);
+        methods.Children.Add(plateRow);
         CheckBox segmentation = new CheckBox { Content = "Сегментация" };
         segmentation.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(MainViewModel.IsSegmentationAnalysisEnabled)) {
             Mode = BindingMode.TwoWay
@@ -151,6 +164,20 @@ public partial class MainWindow {
         error.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.HasCannyThresholdError)));
         canny.Children.Add(error);
         panel.Children.Add(canny);
+        return panel;
+    }
+
+    private static StackPanel CreatePlateParametersPanel() {
+        StackPanel panel = new StackPanel { Spacing = 8 };
+        panel.Children.Add(new TextBlock { Text = "Метод: поиск области номера" });
+        panel.Children.Add(new TextBlock {
+            Text = "Ищет светлый номер с темными символами и отмечает найденную область зеленой рамкой",
+            TextWrapping = TextWrapping.Wrap
+        });
+        panel.Children.Add(new TextBlock {
+            Text = "Параметры фиксированы. Сильный наклон, тень и перекрытие могут привести к пропуску номера",
+            TextWrapping = TextWrapping.Wrap
+        });
         return panel;
     }
 
@@ -295,7 +322,10 @@ public partial class MainWindow {
         BindAnalysisPopup(keypoints, ToggleButton.IsCheckedProperty, nameof(MainViewModel.ShowAnalysisKeypoints), BindingMode.TwoWay);
         BindAnalysisPopup(keypoints, IsEnabledProperty, nameof(MainViewModel.IsKeypointAnalysisEnabled));
         options.Children.Add(keypoints);
-        options.Children.Add(new CheckBox { Content = "Область номера", IsEnabled = false });
+        CheckBox plate = new CheckBox { Content = "Область номера" };
+        BindAnalysisPopup(plate, ToggleButton.IsCheckedProperty, nameof(MainViewModel.ShowAnalysisPlate), BindingMode.TwoWay);
+        BindAnalysisPopup(plate, IsEnabledProperty, nameof(MainViewModel.IsPlateAnalysisEnabled));
+        options.Children.Add(plate);
 
         return new Button {
             Content = "Параметры отображения",

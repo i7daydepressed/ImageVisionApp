@@ -28,7 +28,8 @@ public partial class MainViewModel {
                 showAnalysisKeypoints = true;
                 OnPropertyChanged(nameof(ShowAnalysisKeypoints));
             }
-            if (value && !isEdgesAnalysisEnabled && !isSegmentationAnalysisEnabled && IsAnalysisBlackBackground) {
+            if (value && !isEdgesAnalysisEnabled && !isSegmentationAnalysisEnabled &&
+                !isPlateAnalysisEnabled && IsAnalysisBlackBackground) {
                 SelectedAnalysisBackground = AnalysisResultBackground.Input;
             }
             InvalidateKeypointAnalysis();

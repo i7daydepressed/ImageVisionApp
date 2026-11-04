@@ -27,16 +27,24 @@ public static class AnalysisCompositionService {
         AnalysisResultBackground background, bool showEdges, bool showKeypoints,
         CancellationToken cancellationToken = default) {
 
+        return CreatePng(edges, segmentation, keypoints, null, background, showEdges, showKeypoints, false, cancellationToken);
+    }
+
+    public static byte[] CreatePng(
+        AnalysisEdgeResult? edges, AnalysisSegmentationResult? segmentation, AnalysisKeypointResult? keypoints,
+        AnalysisPlateResult? plate, AnalysisResultBackground background, bool showEdges, bool showKeypoints,
+        bool showPlate, CancellationToken cancellationToken = default) {
+
         cancellationToken.ThrowIfCancellationRequested();
-        if (edges is null && segmentation is null && keypoints is null) {
+        if (edges is null && segmentation is null && keypoints is null && plate is null) {
             throw new ArgumentException("Нет действительных данных для композиции");
         }
         if (background != AnalysisResultBackground.Black && background != AnalysisResultBackground.Input &&
             background != AnalysisResultBackground.Segmentation) {
             throw new ArgumentOutOfRangeException(nameof(background));
         }
-        int width = edges?.Width ?? segmentation?.Width ?? keypoints!.Width;
-        int height = edges?.Height ?? segmentation?.Height ?? keypoints!.Height;
+        int width = edges?.Width ?? segmentation?.Width ?? keypoints?.Width ?? plate!.Width;
+        int height = edges?.Height ?? segmentation?.Height ?? keypoints?.Height ?? plate!.Height;
         if (edges is not null && segmentation is not null &&
             (edges.Width != segmentation.Width || edges.Height != segmentation.Height ||
              edges.Source != segmentation.Source || edges.InputRevision != segmentation.InputRevision)) {
@@ -47,13 +55,19 @@ public static class AnalysisCompositionService {
             keypoints.InputRevision != (edges?.InputRevision ?? segmentation?.InputRevision ?? keypoints.InputRevision))) {
             throw new ArgumentException("Точки и подложка относятся к разным входам");
         }
+        if (plate is not null && (plate.Width != width || plate.Height != height ||
+            plate.Source != (edges?.Source ?? segmentation?.Source ?? keypoints?.Source ?? plate.Source) ||
+            plate.InputRevision != (edges?.InputRevision ?? segmentation?.InputRevision ?? keypoints?.InputRevision ?? plate.InputRevision))) {
+            throw new ArgumentException("Рамка и подложка относятся к разным входам");
+        }
         if (background == AnalysisResultBackground.Segmentation && segmentation is null) {
             throw new ArgumentException("Сегментированная подложка еще не рассчитана");
         }
         // собираем PNG из готовой карты и RGB-подложки, детектор здесь заново не вызываем
         // отклик управляет белым слоем: на черном фоне получаем саму карту, без слоя остается подложка
         ReadOnlySpan<byte> source = edges is not null ? edges.SourceRgb.Span
-            : segmentation is not null ? segmentation.SourceRgb.Span : keypoints!.SourceRgb.Span;
+            : segmentation is not null ? segmentation.SourceRgb.Span
+            : keypoints is not null ? keypoints.SourceRgb.Span : plate!.SourceRgb.Span;
         ReadOnlySpan<byte> segmented = segmentation is not null ? segmentation.SegmentedRgb.Span : ReadOnlySpan<byte>.Empty;
         ReadOnlySpan<byte> intensities = edges is not null ? edges.Intensities.Span : ReadOnlySpan<byte>.Empty;
         byte[] rgb = new byte[checked(width * height * 3)];
@@ -76,6 +90,9 @@ public static class AnalysisCompositionService {
         if (showKeypoints && keypoints is not null) {
             DrawKeypoints(rgb, width, height, keypoints.Points.Span, cancellationToken);
         }
+        if (showPlate && plate?.Rectangle is not null) {
+            DrawPlateRectangle(rgb, width, height, plate.Rectangle, cancellationToken);
+        }
         using MagickImage image = new MagickImage(MagickColors.Black, (uint)width, (uint)height);
         image.ColorSpace = ColorSpace.sRGB;
         image.ImportPixels(rgb,
@@ -87,6 +104,28 @@ public static class AnalysisCompositionService {
         byte[] png = image.ToByteArray(MagickFormat.Png);
         cancellationToken.ThrowIfCancellationRequested();
         return png;
+    }
+
+    private static void DrawPlateRectangle(byte[] rgb, int width, int height, AnalysisPlateRectangle rectangle,
+        CancellationToken cancellationToken) {
+
+        if (!rectangle.IsWithin(width, height)) {
+            throw new ArgumentException("Рамка вышла за границы выбранного входа");
+        }
+        // зеленая полоса толщиной три пикселя проходит внутри рамки и перекрывает точки
+        for (int y = rectangle.Y; y < rectangle.Bottom; y++) {
+            cancellationToken.ThrowIfCancellationRequested();
+            for (int x = rectangle.X; x < rectangle.Right; x++) {
+                if (x >= rectangle.X + 3 && x < rectangle.Right - 3 &&
+                    y >= rectangle.Y + 3 && y < rectangle.Bottom - 3) {
+                    continue;
+                }
+                int offset = (y * width + x) * 3;
+                rgb[offset] = 0;
+                rgb[offset + 1] = 255;
+                rgb[offset + 2] = 0;
+            }
+        }
     }
 
     private static void DrawKeypoints(byte[] rgb, int width, int height, ReadOnlySpan<AnalysisKeypoint> points,
