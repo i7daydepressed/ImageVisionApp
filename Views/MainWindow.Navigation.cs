@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
+using ImageVisionApp.ViewModels;
 
 namespace ImageVisionApp.Views;
 
@@ -46,6 +47,7 @@ public partial class MainWindow {
         }
 
         if (!ReferenceEquals(pageHost.Content, page)) {
+            (DataContext as MainViewModel)?.PauseVideoPlayback();
             pageHost.Content = page;
         }
 

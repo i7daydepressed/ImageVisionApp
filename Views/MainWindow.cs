@@ -6,6 +6,7 @@ using System.ComponentModel;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
 using Avalonia.Data;
+using Avalonia.Data.Converters;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
@@ -32,17 +33,22 @@ public partial class MainWindow : Window {
         Content = CreateLayout();
         DataContextChanged += MainWindow_OnDataContextChanged;
         Closed += (_, _) => {
+            mediaWindowClosed = true;
             if (DataContext is MainViewModel viewModel) {
                 viewModel.DisposeAnalysis();
+                viewModel.DisposeMediaPreviews();
             }
         };
     }
 
     private Grid CreateLayout() {
         Grid layout = new Grid {
-            RowDefinitions = new RowDefinitions("Auto,*")// ров дефенишен -
+            RowDefinitions = new RowDefinitions("Auto,Auto,*")// ров дефенишен -
         };
         layout.Children.Add(CreateToolbar());
+        Control videoControls = CreateVideoPlaybackControls();
+        Grid.SetRow(videoControls, 1);
+        layout.Children.Add(videoControls);
 
         // осн обл
         // боковой панели оставляем 310, остальное место отдаем картинке
@@ -55,9 +61,9 @@ public partial class MainWindow : Window {
         
         workspace.Children.Add(CreateSidebar());
 
-        TabControl imageTabs = CreateImageTabs();
-        Grid.SetColumn(imageTabs, 1);
-        workspace.Children.Add(imageTabs);
+        Control mediaPreview = CreateDocumentPreview(CreateImageTabs());
+        Grid.SetColumn(mediaPreview, 1);
+        workspace.Children.Add(mediaPreview);
         
         StackPanel page = new StackPanel();
         page.Children.Add(workspace);
@@ -76,7 +82,7 @@ public partial class MainWindow : Window {
         simplePage = pageScroll;
         pageHost.Content = simplePage;
         // simplePage хранит страницу, а pageHost.Content определяет, какая страница сейчас показана
-        Grid.SetRow(pageHost, 1);
+        Grid.SetRow(pageHost, 2);
         layout.Children.Add(pageHost);
 
         return layout;
@@ -86,22 +92,29 @@ public partial class MainWindow : Window {
     private void MainWindow_OnDataContextChanged(object? sender, EventArgs e) {
         if (histogramViewModel is not null) {//// отписываемся от прежней ViewModel, чтобы она больше не обновляла эту панель
             histogramViewModel.PropertyChanged -= HistogramViewModel_OnPropertyChanged;
+            histogramViewModel.DetachVideoPlayback();
         }
 
         histogramViewModel = DataContext as MainViewModel;
 
         if (histogramViewModel is not null) {
             histogramViewModel.PropertyChanged += HistogramViewModel_OnPropertyChanged;
+            histogramViewModel.AttachVideoPlayback();
         }
 
         histogramPanel.ShowComparison(histogramViewModel?.HistogramComparison);
         advancedHistogramPanel.ShowComparison(histogramViewModel?.HistogramComparison);
+        UpdateVideoPlaybackControls();
     }
 
     // реагирует только на новую пару гистограмм и передает ее панели
     private void HistogramViewModel_OnPropertyChanged(
         object? sender,
         PropertyChangedEventArgs e) {
+        if (e.PropertyName == nameof(MainViewModel.PlaybackStatus)) {
+            UpdateVideoPlaybackControls();
+        }
+
 
         if (e.PropertyName == nameof(MainViewModel.HistogramComparison) &&
             sender is MainViewModel viewModel) {
@@ -113,8 +126,8 @@ public partial class MainWindow : Window {
 
     private Border CreateToolbar() {
         // верх панель выбора картинки
-        Button openButton = new Button { Content = "Открыть изображение" };
-        openButton.Click += OpenImageButton_OnClick;
+        Button openButton = new Button { Content = "Открыть файл" };
+        openButton.Click += OpenMediaButton_OnClick;
 
         TextBlock statusText = CreateBoundText(viewModel => viewModel.StatusMessage);
         statusText.VerticalAlignment = VerticalAlignment.Center;
@@ -144,7 +157,9 @@ public partial class MainWindow : Window {
         StackPanel advancedContent = new StackPanel();
         // сначала показываем очередь действий и предпросмотр изображения
         advancedContent.Children.Add(CreateAdvancedWorkspace());
-        advancedContent.Children.Add(CreateAdvancedToolsPanel());
+        Control tools = CreateAdvancedToolsPanel();
+        tools.Bind(IsEnabledProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
+        advancedContent.Children.Add(tools);
         // вторая панель показывает ту же пару гистограмм под инструментами
         advancedContent.Children.Add(advancedHistogramPanel);
         advancedContent.Children.Add(CreateStructuralElementCard());
@@ -170,8 +185,9 @@ public partial class MainWindow : Window {
         TabControl advancedImageTabs = CreateImageTabs();
         advancedImageTabs.SelectedIndex = 1;
 
-        Grid.SetColumn(advancedImageTabs, 1);
-        advancedWorkspace.Children.Add(advancedImageTabs);
+        Control mediaPreview = CreateDocumentPreview(advancedImageTabs);
+        Grid.SetColumn(mediaPreview, 1);
+        advancedWorkspace.Children.Add(mediaPreview);
 
         return advancedWorkspace;
     }
@@ -240,6 +256,17 @@ public partial class MainWindow : Window {
                 Content = content
             }
         };
+    }
+
+    // переключаем предпросмотр вкладки между фотосравнением и общим активным видеокадром
+    private static Grid CreateDocumentPreview(Control photoPreview) {
+        photoPreview.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
+        VideoPreviewImage frame = new() { Stretch = Stretch.Uniform, Margin = new Thickness(10) };
+        frame.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
+        frame.Bind(Image.SourceProperty, CompiledBinding.Create<MainViewModel, Bitmap?>(viewModel => viewModel.VideoPreviewFrame));
+        frame.Bind(VideoPreviewImage.RevisionProperty,
+            CompiledBinding.Create<MainViewModel, int>(viewModel => viewModel.VideoPreviewRevision));
+        return new Grid { Children = { photoPreview, frame } };
     }
 
     private static TabControl CreateImageTabs() {

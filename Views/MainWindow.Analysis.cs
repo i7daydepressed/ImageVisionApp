@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Data;
+using Avalonia.Data.Converters;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
@@ -17,7 +18,9 @@ public partial class MainWindow {
             ColumnSpacing = 12,
             Margin = new Thickness(12)
         };
-        workspace.Children.Add(CreateAnalysisMethodsCard());
+        Border methodsCard = CreateAnalysisMethodsCard();
+        methodsCard.Bind(IsEnabledProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
+        workspace.Children.Add(methodsCard);
         Border imageCard = CreateAnalysisImageCard();
         Grid.SetColumn(imageCard, 1);
         workspace.Children.Add(imageCard);
@@ -292,7 +295,7 @@ public partial class MainWindow {
         footer.Children.Add(save);
         Grid.SetRow(footer, 2);
         layout.Children.Add(footer);
-        return CreateAnalysisCard(layout);
+        return CreateAnalysisCard(CreateDocumentPreview(layout));
     }
 
     private Button CreateAnalysisDisplayButton() {

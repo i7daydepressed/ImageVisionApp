@@ -51,6 +51,7 @@ public partial class MainViewModel : ViewModelBase{
     public partial string StatusMessage { get; set; }
         = "Изображение не выбрано";
 
+    // готовим фото и передаем его вместе с метаданными и предпросмотрами на замену документа
     public void LoadImage(byte[] imageData, string fileName) {
         // сначала готовим новый документ, при ошибке прежние байты, очередь и Bitmap остаются
         byte[] nextImageData = (byte[])imageData.Clone();
@@ -71,23 +72,9 @@ public partial class MainViewModel : ViewModelBase{
             throw;
         }
 
-        Bitmap? previousOriginalImage = OriginalImage;
-        Bitmap? previousModifiedImage = ModifiedImage;
-
         // кэш и предпросмотры публикуют один подготовленный документ
-        originalImageData = nextImageData;
-        modifiedImageData = nextImageData;
-        originalHistogram = nextOriginalHistogram;
-        AdvancedSteps.Clear();
-        OriginalImage = nextOriginalImage;
-        ModifiedImage = nextModifiedImage;
-        CurrentImageInfo = nextImageInfo;
-        HistogramComparison = nextComparison;
-        StatusMessage = fileName;
-        ResetAnalysisInputAfterLoad();
-
-        previousOriginalImage?.Dispose();
-        previousModifiedImage?.Dispose();
+        CommitDocument(new MediaDocument(MediaKind.Image, fileName, null), nextImageData, nextImageInfo,
+            nextComparison, nextOriginalImage, nextModifiedImage, null);
     }
 
     private void UpdateModifiedImage(byte[] processedImageData) {

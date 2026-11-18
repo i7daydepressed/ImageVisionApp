@@ -33,7 +33,8 @@ public partial class MainViewModel {
     // это ссылка на предпросмотр документа, третья страница не освобождает этот Bitmap
     public Bitmap? AnalysisInputImage => IsOriginalAnalysisSource ? OriginalImage : ModifiedImage;
 
-    public bool HasAnalysisInput => AnalysisInputImage is not null;
+    public bool HasAnalysisInput => CurrentDocument?.Kind is MediaKind.Image &&
+        (IsOriginalAnalysisSource ? originalImageData : modifiedImageData) is not null;
     public long AnalysisInputRevision => analysisInputRevision;
 
     public string AnalysisInputDescription {
@@ -50,6 +51,10 @@ public partial class MainViewModel {
 
     // вызывается из потока интерфейса, пока источник и его версия согласованы
     public AnalysisInputSnapshot? CaptureAnalysisInput() {
+        if (CurrentDocument?.Kind is not MediaKind.Image) {
+            return null;
+        }
+
         byte[]? imageData = IsOriginalAnalysisSource ? originalImageData : modifiedImageData;
         if (imageData is null) {
             return null;

@@ -1,59 +1,111 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using ImageVisionApp.Models;
+using ImageVisionApp.Services;
 using ImageVisionApp.ViewModels;
 
 namespace ImageVisionApp.Views;
 
 public partial class MainWindow {
+    private bool openingMedia;
+    private bool mediaWindowClosed;
+
     // <IFilePickerService, реализацию FilePickerService>
-    private async void OpenImageButton_OnClick(
-        object? sender,
-        RoutedEventArgs e
-        ) {
-        IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions {
-                Title = "Открыть изображение",
+    // выбираем фото или видео и заменяем документ только после подтверждения и подготовки
+    private async void OpenMediaButton_OnClick(object? sender, RoutedEventArgs e) {
+        if (openingMedia || DataContext is not MainViewModel viewModel) {
+            return;
+        }
+
+        openingMedia = true;
+        try {
+            IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions {
+                Title = "Открыть файл",
                 AllowMultiple = false,
-                FileTypeFilter =
-                [
-                    new FilePickerFileType("Изображения") {
-                        Patterns =
-                        [
-                            "*.jpg",
-                            "*.jpeg",
-                            "*.png",
-                            "*.bmp",
-                            "*.webp"
-                        ]
+                FileTypeFilter = [
+                    new FilePickerFileType("Фото и видео") {
+                        Patterns = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp", "*.mp4", "*.mkv"]
                     }
                 ]
             });
+            if (files.Count == 0 || mediaWindowClosed || !ReferenceEquals(DataContext, viewModel)) {
+                return;
+            }
 
-        if (files.Count == 0)
-            return;
+            IStorageFile file = files[0];
+            if (viewModel.CurrentDocument is not null && !await ConfirmReplaceDocumentAsync()) {
+                return;
+            }
 
-        try {
-            await using Stream inputStream = await files[0].OpenReadAsync();
-            using MemoryStream memoryStream = new MemoryStream();
+            if (mediaWindowClosed || !ReferenceEquals(DataContext, viewModel)) {
+                return;
+            }
 
-            await inputStream.CopyToAsync(memoryStream);
-
-            if (DataContext is MainViewModel viewModel) {
-                viewModel.LoadImage(//грузим
-                    memoryStream.ToArray(),
-                    files[0].Name);
+            if (Path.GetExtension(file.Name).ToLowerInvariant() is ".mp4" or ".mkv") {
+                string sourcePath = file.TryGetLocalPath()
+                    ?? throw new InvalidDataException("Для открытия видео нужен доступный локальный путь к файлу");
+                byte[] previewPng = await Task.Run(() => VideoFirstFrameReader.ReadPng(sourcePath));
+                if (!mediaWindowClosed && ReferenceEquals(DataContext, viewModel)) {
+                    viewModel.LoadVideoFirstFrame(previewPng, file.Name, sourcePath);
+                }
+            }
+            else {
+                await using Stream inputStream = await file.OpenReadAsync();
+                using MemoryStream memoryStream = new();
+                await inputStream.CopyToAsync(memoryStream);
+                if (!mediaWindowClosed && ReferenceEquals(DataContext, viewModel)) {
+                    viewModel.LoadImage(memoryStream.ToArray(), file.Name);
+                }
             }
         }
         catch (Exception exception) {
-            if (DataContext is MainViewModel viewModel) {
-                viewModel.ShowError(
-                    $"Не удалось открыть изображение: {exception.Message}");
+            if (!mediaWindowClosed && ReferenceEquals(DataContext, viewModel)) {
+                viewModel.ShowError($"Не удалось открыть файл: {exception.Message}");
             }
         }
+        finally {
+            openingMedia = false;
+        }
+    }
+
+    // предупреждаем о сбросе перед заменой файла и возвращаем явное согласие
+    private Task<bool> ConfirmReplaceDocumentAsync() {
+        Window confirmation = new() {
+            Title = "Заменить открытый файл?",
+            Width = 440,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner
+        };
+        Button cancel = new() { Content = "Отмена", IsCancel = true };
+        cancel.Click += (_, _) => confirmation.Close(false);
+        Button open = new() { Content = "Открыть файл" };
+        open.Click += (_, _) => confirmation.Close(true);
+        confirmation.Content = new StackPanel {
+            Margin = new Thickness(16),
+            Spacing = 12,
+            Children = {
+                new TextBlock {
+                    Text = "После успешного открытия нового файла очередь действий и результаты анализа будут сброшены.",
+                    TextWrapping = TextWrapping.Wrap
+                },
+                new StackPanel {
+                    Spacing = 8,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    Orientation = Orientation.Horizontal,
+                    Children = { cancel, open }
+                }
+            }
+        };
+        return confirmation.ShowDialog<bool>(this);
     }
     // </IFilePickerService, реализацию FilePickerService>
 
