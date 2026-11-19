@@ -183,7 +183,9 @@ public partial class MainWindow {
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
         saveAdvancedButton.Click += SaveAdvancedResultButton_OnClick;
-        DisableForVideo(toolsContent);
+        DisableForVideo(addGrayscaleButton);
+        DisableForVideo(addLinearCorrectionButton);
+        DisableForVideo(addNonlinearCorrectionButton);
         DisableForVideo(saveAdvancedButton);
         // сбрасываем всю очередь; результат снова строится из исходного изображения
         Button resetAdvancedButton = new Button {

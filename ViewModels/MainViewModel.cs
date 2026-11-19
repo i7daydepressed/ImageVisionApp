@@ -146,8 +146,8 @@ public partial class MainViewModel : ViewModelBase{
         }
 
         if (IsVideoOpen) {
-            if (type is not (ImageOperationType.Brightness or ImageOperationType.Contrast)) {
-                StatusMessage = "Для видео пока доступны яркость и контрастность";
+            if (type is not (ImageOperationType.Brightness or ImageOperationType.Contrast or ImageOperationType.Rotation)) {
+                StatusMessage = "Для видео пока доступны яркость, контрастность и поворот";
                 return;
             }
 

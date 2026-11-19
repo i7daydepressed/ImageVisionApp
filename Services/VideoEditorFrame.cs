@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Media.Imaging;
@@ -10,23 +11,48 @@ namespace ImageVisionApp.Services;
 
 internal readonly record struct VideoEditorStep(ImageOperationType Type, double Parameter);
 
-internal sealed class VideoEditorPlan(long revision, VideoEditorStep[] steps) {
+internal sealed class VideoEditorPlan {
+    private readonly VideoEditorStep[] adjustmentSteps;
+    private readonly int clockwiseQuarterTurns;
     private byte[]? channelLookup;
 
-    public long Revision { get; } = revision;
-    public bool HasSteps => steps.Length != 0;
+    public long Revision { get; }
+    public bool HasSteps { get; }
+
+    // яркость и контраст меняют значение пикселя независимо от его позиции
+    // сохраняем их взаимный порядок, четверть-повороты складываем отдельно
+    public VideoEditorPlan(long revision, VideoEditorStep[] steps) {
+        Revision = revision;
+        HasSteps = steps.Length != 0;
+        List<VideoEditorStep> adjustments = new(steps.Length);
+        foreach (VideoEditorStep step in steps) {
+            if (step.Type == ImageOperationType.Rotation) {
+                clockwiseQuarterTurns = (clockwiseQuarterTurns + (int)step.Parameter / 90) % 4;
+            }
+            else {
+                adjustments.Add(step);
+            }
+        }
+        adjustmentSteps = adjustments.ToArray();
+    }
 
     // строим таблицу значений один раз на снимок очереди и применяем ее к кадру
-    public void Apply(VideoEditorFrame frame) =>
-        frame.Apply(channelLookup ??= ImageProcessingService.CreateVideoAdjustmentLookup(steps));
+    public VideoEditorGeometry Apply(VideoEditorFrame frame) {
+        if (adjustmentSteps.Length != 0) {
+            frame.Apply(channelLookup ??= ImageProcessingService.CreateVideoAdjustmentLookup(adjustmentSteps));
+        }
+        VideoEditorGeometry geometry = new(frame.Size, clockwiseQuarterTurns);
+        frame.Rotate(geometry);
+        return geometry;
+    }
 }
 
 internal sealed class VideoEditorFrame : IDisposable {
-    private readonly byte[] pixels;
-    private readonly int stride;
+    private byte[] pixels;
+    private int stride;
     private readonly int length;
 
-    public PixelSize Size { get; }
+    public PixelSize Size { get; private set; }
 
     // берем буфер только на время обработки и вывода кадра
     private VideoEditorFrame(PixelSize size) {
@@ -57,6 +83,45 @@ internal sealed class VideoEditorFrame : IDisposable {
             pixels[index + 1] = channelLookup[pixels[index + 1]];
             pixels[index + 2] = channelLookup[pixels[index + 2]];
         }
+    }
+
+    // переносим целые BGRA-пиксели на новые позиции и заменяем буфер кадра только после поворота
+    public void Rotate(VideoEditorGeometry geometry) {
+        if (geometry.ClockwiseQuarterTurns == 0) {
+            return;
+        }
+
+        PixelSize outputSize = geometry.OutputSize;
+        int outputStride = checked(outputSize.Width * 4);
+        byte[] rotated = ArrayPool<byte>.Shared.Rent(length);
+        try {
+            Span<uint> input = MemoryMarshal.Cast<byte, uint>(pixels.AsSpan(0, length));
+            Span<uint> output = MemoryMarshal.Cast<byte, uint>(rotated.AsSpan(0, length));
+            // следующий пиксель исходной строки идет вдоль столбца или обратно по строке результата
+            int nextPixel = geometry.ClockwiseQuarterTurns switch {
+                1 => outputSize.Width,
+                2 => -1,
+                _ => -outputSize.Width
+            };
+            int inputIndex = 0;
+            for (int y = 0; y < Size.Height; y++) {
+                PixelPoint start = geometry.MapPixel(new PixelPoint(0, y));
+                int outputIndex = start.Y * outputSize.Width + start.X;
+                for (int x = 0; x < Size.Width; x++) {
+                    output[outputIndex] = input[inputIndex++];
+                    outputIndex += nextPixel;
+                }
+            }
+        }
+        catch {
+            ArrayPool<byte>.Shared.Return(rotated);
+            throw;
+        }
+
+        ArrayPool<byte>.Shared.Return(pixels);
+        pixels = rotated;
+        Size = outputSize;
+        stride = outputStride;
     }
 
     // передаем готовые строки в bitmap редактора с учетом шага целевого буфера

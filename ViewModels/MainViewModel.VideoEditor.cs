@@ -23,6 +23,7 @@ public partial class MainViewModel {
     private bool processingVideoEditor;
     private VideoEditorRequest? requestedVideoEditor;
     private WriteableBitmap? videoEditorOutput;
+    private VideoEditorGeometry videoEditorOutputGeometry;
     private string? videoEditorError;
 
     public Bitmap? VideoEditorPreviewFrame => videoEditorVisible && !videoEditorWaitingForFrame
@@ -30,6 +31,10 @@ public partial class MainViewModel {
         : null;
 
     public int VideoEditorPreviewRevision { get; private set; }
+
+    internal VideoEditorGeometry? CurrentVideoEditorGeometry => VideoEditorPreviewFrame is { } frame
+        ? videoEditorPlan.HasSteps ? videoEditorOutputGeometry : new VideoEditorGeometry(frame.PixelSize, 0)
+        : null;
 
     public string? VideoEditorNotice => videoEditorError ?? (videoEditorWaitingForFrame
         ? "Ожидание видеокадра…"
@@ -131,9 +136,9 @@ public partial class MainViewModel {
                 requestedVideoEditor = null;
                 using VideoEditorFrame pixels = request.Pixels;
                 try {
-                    await Task.Run(() => request.Plan.Apply(pixels));
+                    VideoEditorGeometry geometry = await Task.Run(() => request.Plan.Apply(pixels));
                     if (IsCurrentVideoEditorRequest(request)) {
-                        PublishVideoEditorOutput(pixels, request.Frame);
+                        PublishVideoEditorOutput(pixels, geometry, request.Frame);
                     }
                 }
                 catch (Exception) {
@@ -155,8 +160,8 @@ public partial class MainViewModel {
         videoEditorPlan.Revision == request.Plan.Revision && videoEditorSource == request.Source &&
         (videoWantsToPlay || videoEditorFrame == request.Frame);
 
-    // переносим обработанные строки в переиспользуемый bitmap и обновляем привязки редактора
-    private void PublishVideoEditorOutput(VideoEditorFrame pixels, long frame) {
+    // переносим строки в bitmap и публикуем геометрию того же результата
+    private void PublishVideoEditorOutput(VideoEditorFrame pixels, VideoEditorGeometry geometry, long frame) {
         WriteableBitmap? previous = videoEditorOutput;
         WriteableBitmap next = previous?.PixelSize == pixels.Size
             ? previous
@@ -173,6 +178,7 @@ public partial class MainViewModel {
         }
 
         videoEditorOutput = next;
+        videoEditorOutputGeometry = geometry;
         videoEditorOutputFrame = frame;
         videoEditorOutputVisible = true;
         videoEditorError = null;
@@ -199,6 +205,7 @@ public partial class MainViewModel {
     private void NotifyVideoEditorPreview() {
         VideoEditorPreviewRevision++;
         OnPropertyChanged(nameof(VideoEditorPreviewFrame));
+        OnPropertyChanged(nameof(CurrentVideoEditorGeometry));
         OnPropertyChanged(nameof(VideoEditorNotice));
         OnPropertyChanged(nameof(VideoEditorPreviewRevision));
     }
@@ -211,6 +218,7 @@ public partial class MainViewModel {
         videoEditorError = null;
         WriteableBitmap? previous = videoEditorOutput;
         videoEditorOutput = null;
+        videoEditorOutputGeometry = default;
         NotifyVideoEditorPreview();
         previous?.Dispose();
     }
