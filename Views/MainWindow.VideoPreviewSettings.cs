@@ -67,6 +67,14 @@ public partial class MainWindow {
             SelectedIndex = (int)settings.Mode,
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
+        VideoArrowStep[] steps = [VideoArrowStep.OneFrame, VideoArrowStep.FiveFrames,
+            VideoArrowStep.OneSecond, VideoArrowStep.ThreeSeconds];
+        ComboBox arrowStep = new() {
+            ItemsSource = new[] { "1 кадр", "5 кадров", "1 секунда", "3 секунды" },
+            SelectedIndex = Array.IndexOf(steps, settings.ArrowStep),
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        AutomationProperties.SetName(arrowStep, "Шаг стрелок");
         AutomationProperties.SetName(mode, "Режим предпросмотра");
         AutomationProperties.SetName(workers, "Максимум обработчиков");
         AutomationProperties.SetName(budget, "Бюджет буферов предпросмотра, МиБ");
@@ -77,6 +85,7 @@ public partial class MainWindow {
         mode.SelectionChanged += (_, _) => DescribeDraftPreviewMode(mode, modeHelp, workers);
         DescribeDraftPreviewMode(mode, modeHelp, workers);
 
+        StackPanel playback = new() { Children = { BuildPreviewSettingsRow("Шаг стрелок", arrowStep) } };
         StackPanel performance = new() { Spacing = 8 };
         performance.Children.Add(BuildPreviewSettingsRow("Максимум обработчиков", workers));
         performance.Children.Add(BuildPreviewSettingsRow("Бюджет буферов, МиБ", budget));
@@ -149,9 +158,11 @@ public partial class MainWindow {
         Button apply = new() { Content = "Применить", IsDefault = true };
         cancel.Click += (_, _) => dialog.Close(null);
         apply.Click += (_, _) => {
-            if (mode.SelectedIndex is 0 or 1 && workers.SelectedIndex >= 0 && budget.SelectedIndex >= 0) {
+            if (mode.SelectedIndex is 0 or 1 && workers.SelectedIndex >= 0 && budget.SelectedIndex >= 0 &&
+                arrowStep.SelectedIndex >= 0) {
                 dialog.Close(new VideoPreviewSettings(workers.SelectedIndex, budgets[budget.SelectedIndex]) {
-                    Mode = (VideoPreviewMode)mode.SelectedIndex
+                    Mode = (VideoPreviewMode)mode.SelectedIndex,
+                    ArrowStep = steps[arrowStep.SelectedIndex]
                 });
             }
         };
@@ -165,6 +176,7 @@ public partial class MainWindow {
                         Spacing = 12,
                         Children = {
                             BuildPreviewSettingsCard("Режим предпросмотра", modeCard),
+                            BuildPreviewSettingsCard("Управление воспроизведением", playback),
                             BuildPreviewSettingsCard("Производительность", performance),
                             BuildPreviewSettingsCard("Нагрузка предпросмотра", load)
                         }

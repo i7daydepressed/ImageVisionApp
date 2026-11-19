@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using Avalonia;
 using OpenCvSharp;
 
@@ -12,6 +13,13 @@ internal static class VideoFirstFrameReader {
 
     // читает один кадр в точке перемотки и возвращает фактическое время этого кадра
     public static (byte[] Png, long Position) ReadPreview(string sourcePath, long position, long duration) {
+        var frame = ReadPreviewWithHint(sourcePath, position, duration, captureHint: false);
+        return (frame.Png, frame.Position);
+    }
+
+    // сохраняем неокругленное время и номер декодера для последующей проверки по шкале контейнера
+    public static (byte[] Png, long Position, VideoDecodedFrameHint? Hint) ReadPreviewWithHint(
+        string sourcePath, long position, long duration, bool captureHint = true) {
         if (!OperatingSystem.IsMacOS() || RuntimeInformation.ProcessArchitecture != Architecture.Arm64) {
             throw new PlatformNotSupportedException("Открытие видео в этой сборке доступно на macOS arm64");
         }
@@ -50,7 +58,26 @@ internal static class VideoFirstFrameReader {
         double timestamp = capture.Get(VideoCaptureProperties.PosMsec);
         long framePosition = double.IsFinite(timestamp) && timestamp >= 0
             ? (long)Math.Round(timestamp) : position;
-        return (previewPng, Math.Clamp(framePosition, 0, Math.Max(0, duration - 1)));
+        double decodedNumber = capture.Get(VideoCaptureProperties.PosFrames) - 1;
+        VideoDecodedFrameHint? hint = captureHint && double.IsFinite(timestamp) && timestamp >= 0 &&
+            decodedNumber >= 0 && decodedNumber < long.MaxValue && decodedNumber == Math.Truncate(decodedNumber)
+            ? new(timestamp, (long)decodedNumber, FromStart: position == 0, Fingerprint: GetBgrFingerprint(reduced ?? frame))
+            : null;
+        return (previewPng, Math.Clamp(framePosition, 0, Math.Max(0, duration - 1)), hint);
+    }
+
+    // проверяем те же цветовые пиксели, которые передаются в PNG, с одной временной строкой
+    internal static string GetBgrFingerprint(Mat frame) {
+        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        byte[] row = new byte[checked(frame.Width * 3)];
+        int stride = checked((int)frame.Step());
+        int height = frame.Height;
+        IntPtr pixels = frame.Data;
+        for (int y = 0; y < height; y++) {
+            Marshal.Copy(IntPtr.Add(pixels, checked(y * stride)), row, 0, row.Length);
+            hash.AppendData(row);
+        }
+        return Convert.ToHexString(hash.GetHashAndReset());
     }
 
     // выбирает последний действительный кадр для правой границы таймлайна

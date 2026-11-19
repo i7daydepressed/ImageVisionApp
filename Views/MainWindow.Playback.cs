@@ -93,8 +93,7 @@ public partial class MainWindow {
 
         switch (e.Key) {
             case Key.Left or Key.Right when viewModel.PlaybackStatus.CanSeek:
-                int offset = e.Key == Key.Left ? -VideoKeyboardSeekMilliseconds : VideoKeyboardSeekMilliseconds;
-                viewModel.SeekVideoByKeyboard(offset);
+                viewModel.SeekVideoByKeyboard(e.Key == Key.Left ? -1 : 1, viewModel.PreviewSettings.ArrowStep);
                 e.Handled = true;
                 break;
             case Key.Space when videoSpaceHeld || viewModel.PlaybackStatus.CanPlay:

@@ -29,6 +29,7 @@ public partial class MainViewModel {
     private bool videoWasPlaying;
     private bool videoRestarting;
     private bool videoRestartOnPlay;
+    private VideoDecodedFrameHint? videoLiveSeekHint;
     private bool videoPlaybackIdentityPending;
     private bool mediaPreviewsDisposed;
     private int videoPlaybackGeneration;
@@ -123,12 +124,17 @@ public partial class MainViewModel {
         if (videoPlayback is not { } playback || !PlaybackStatus.CanPlay) {
             return;
         }
+        bool canceledStep = CancelVideoFrameStep();
+        if (canceledStep && preparedSource is not null && videoPinnedFrame is null) {
+            RequestPreparedVideo(preparedPosition, preparedAtEnd);
+        }
         if (preparedOpening is not null || preparedStartPending || livePreviewHandoff is not null ||
             requestedVideoSeek is { KeepPosition: true }) {
             if (videoWantsToPlay) {
                 PauseVideoPlayback();
                 return;
             }
+            videoPinnedFrame = null;
             videoWantsToPlay = true;
             videoHandoffReplay = preparedOpening is not null || preparedStartPending ? preparedAtEnd :
                 livePreviewHandoff is not null ? videoRestartOnPlay : requestedVideoSeek is { RestartOnPlay: true };
@@ -146,6 +152,7 @@ public partial class MainViewModel {
             return;
         }
 
+        videoPinnedFrame = null;
         videoWantsToPlay = true;
         videoEditorPauseObservation++;
         SetVideoEditorProcessingTime(null);
@@ -159,6 +166,7 @@ public partial class MainViewModel {
     private void RestartLiveVideo(VideoPlaybackSession playback) {
         livePreviewAnchor = null;
         videoRestartOnPlay = false;
+        videoLiveSeekHint = null;
         InvalidateVideoEditorSource();
         videoRestarting = TryRestartCurrentVideo(playback);
         if (!videoRestarting) {
@@ -170,6 +178,10 @@ public partial class MainViewModel {
 
     // прекращает вывод звука и продвижение общего времени при смене вкладки
     internal void PauseVideoPlayback() {
+        bool canceledStep = CancelVideoFrameStep();
+        if (canceledStep && preparedSource is not null) {
+            RestorePausedPreparedFrame();
+        }
         videoHandoffReplay = false;
         if (preparedSource is not null) {
             PausePreparedVideo(videoPlayback);
@@ -181,6 +193,9 @@ public partial class MainViewModel {
             playback.SetPaused(true);
             RefreshVideoPlayback();
         }
+        if (canceledStep) {
+            RequestVideoEditorFrame();
+        }
         RetryDeferredVideoEditorFrame();
     }
 
@@ -190,6 +205,7 @@ public partial class MainViewModel {
             return;
         }
 
+        CancelVideoFrameStep(clearPin: true);
         long position = Math.Clamp(PlaybackStatus.Position + offset, 0, PlaybackStatus.Duration);
         if (SeekDuringPreviewModeHandoff(position, PlaybackStatus.Duration,
             preserveLivePlay: position < PlaybackStatus.Duration)) {
@@ -202,6 +218,7 @@ public partial class MainViewModel {
         bool isPlaying = PlaybackStatus.IsPlaying;
         if (isPlaying && position < PlaybackStatus.Duration) {
             livePreviewAnchor = null;
+            videoLiveSeekHint = null;
             InvalidateVideoEditorSource();
             playback.Seek(position);
             UpdatePlaybackStatus(PlaybackStatus with { Position = position });
@@ -218,6 +235,7 @@ public partial class MainViewModel {
             return;
         }
 
+        CancelVideoFrameStep(clearPin: true);
         long duration = PlaybackStatus.Duration;
         long target = Math.Clamp(position, 0, duration);
         if (SeekDuringPreviewModeHandoff(target, duration)) {
@@ -234,6 +252,7 @@ public partial class MainViewModel {
 
         videoRestartOnPlay = false;
         livePreviewAnchor = null;
+        videoLiveSeekHint = null;
         requestedVideoSeek = new VideoSeek(playback, sourcePath, target, duration, restartOnPlay);
         InvalidateVideoEditorSource();
         PauseVideoPlayback();
@@ -250,11 +269,12 @@ public partial class MainViewModel {
                 Bitmap? preparedFrame = null;
                 try {
                     long seekPosition = request.Position;
+                    VideoDecodedFrameHint? hint = null;
                     if (request.ReadFrame) {
                         VideoFileIdentity? identity = videoFileIdentity;
-                        (byte[] png, long framePosition) = await Task.Run(() => {
+                        (byte[] png, long framePosition, VideoDecodedFrameHint? decoded) = await Task.Run(() => {
                             identity?.EnsureCurrent(request.Path);
-                            var loaded = VideoFirstFrameReader.ReadPreview(request.Path, request.Position, request.Duration);
+                            var loaded = VideoFirstFrameReader.ReadPreviewWithHint(request.Path, request.Position, request.Duration);
                             identity?.EnsureCurrent(request.Path);
                             return loaded;
                         });
@@ -262,6 +282,7 @@ public partial class MainViewModel {
                             continue;
                         }
 
+                        hint = decoded;
                         using MemoryStream stream = new(png);
                         preparedFrame = new Bitmap(stream);
                         if (!request.KeepPosition) {
@@ -294,6 +315,7 @@ public partial class MainViewModel {
                     requestedVideoSeek = null;
                     if (preparedFrame is not null) {
                         SetVideoSeekPreview(preparedFrame);
+                        videoLiveSeekHint = hint;
                         preparedFrame = null;
                     }
                     videoRestartOnPlay = request.RestartOnPlay;
@@ -346,7 +368,7 @@ public partial class MainViewModel {
 
     // согласует состояние native-плеера с командами пользователя и публикует один снимок UI
     private void RefreshVideoPlayback() {
-        if (!ConfirmOpenedVideoIdentity() || WaitForVideoModeHandoff(videoPlayback)) {
+        if (!ConfirmOpenedVideoIdentity() || videoFrameStep is not null || WaitForVideoModeHandoff(videoPlayback)) {
             return;
         }
         if (videoPlayback is not { } playback) {
@@ -430,7 +452,7 @@ public partial class MainViewModel {
         else {
             string? notice = preparing ? "Подготовка воспроизведения…" :
                 PlaybackStatus.Notice is "Не удалось перейти к кадру" or VideoFileIdentity.ChangedMessage
-                    ? PlaybackStatus.Notice : preparedUnavailable;
+                    ? PlaybackStatus.Notice : videoFrameStepNotice ?? preparedUnavailable;
             UpdatePlaybackStatus(new(position, duration, videoWantsToPlay, ready && !videoRestarting,
                 duration > 0 && (playback.CanSeek || ended), notice));
         }
@@ -520,6 +542,7 @@ public partial class MainViewModel {
         if (!ReferenceEquals(previous, videoLiveFrame)) {
             previous?.Dispose();
         }
+        videoLiveSeekHint = null;
         VideoPreviewRevision++;
         OnPropertyChanged(nameof(VideoPreviewRevision));
         AcceptVideoEditorFrame(live);
@@ -527,6 +550,7 @@ public partial class MainViewModel {
 
     // при возврате к нулю убираем более старые картинки, чтобы выбрать первый кадр документа
     private void ShowFirstLiveVideoFrame() {
+        videoLiveSeekHint = null;
         WriteableBitmap? previous = videoLiveFrame;
         videoLiveFrame = null;
         SetVideoSeekPreview(null);
@@ -551,6 +575,7 @@ public partial class MainViewModel {
 
     // прекращает публикацию и освобождает один источник перед заменой файла или закрытием окна
     private void ReleaseVideoPlayback() {
+        CancelVideoFrameStep(clearPin: true);
         DetachPreparedVideo();
         CancelPreviewModeHandoff();
         videoPlaybackGeneration++;
@@ -566,6 +591,7 @@ public partial class MainViewModel {
         videoWasPlaying = false;
         videoRestarting = false;
         videoRestartOnPlay = false;
+        videoLiveSeekHint = null;
         videoPlaybackIdentityPending = false;
         VideoPlaybackSession? previous = videoPlayback;
         videoPlayback = null;

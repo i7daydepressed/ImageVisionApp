@@ -13,7 +13,16 @@ internal readonly record struct VideoPresentationTime(long Value, int Timescale)
         ((System.Int128)Value * other.Timescale).CompareTo((System.Int128)other.Value * Timescale);
 }
 
-internal readonly record struct VideoFrameReadRequest(long PositionMilliseconds, bool AtEnd = false);
+internal readonly record struct VideoFrameCursor(VideoPresentationTime Time, long Ordinal, bool AtEnd);
+internal readonly record struct VideoDecodedFrameHint(double Milliseconds, long Ordinal,
+    bool FromStart = false, string? Fingerprint = null);
+
+internal readonly record struct VideoFrameReadRequest(long PositionMilliseconds, bool AtEnd = false) {
+    public VideoFrameCursor? Anchor { get; init; }
+    public VideoDecodedFrameHint? DecodedAnchor { get; init; }
+    public int FrameOffset { get; init; }
+    public bool SingleFrame { get; init; }
+}
 
 internal readonly record struct TimedVideoInput(
     VideoPresentationTime Time, VideoPresentationTime? Until, long Ordinal, VideoEditorFrame Pixels) {

@@ -94,6 +94,7 @@ public partial class MainViewModel {
 
     // сохраняем команду Play, но до проверки нового источника останавливаем звук и прежние расчеты
     private void BeginPreparedSource(MediaDocument document, long position, bool atEnd) {
+        CancelVideoFrameStep();
         preparedInterruptedLiveSeek = requestedVideoSeek is not null || livePreviewHandoff is { Seek: true };
         requestedVideoSeek = null;
         livePreviewHandoff = null;
@@ -128,9 +129,11 @@ public partial class MainViewModel {
             }
             preparedOpening = null;
             preparedSource = source;
-            RequestPreparedVideo(preparedPosition, preparedAtEnd,
-                seekPlayer: preparedPosition > 0 || preparedInterruptedLiveSeek || videoPlayback is { Position: > 0 },
-                preservePlay: true);
+            if (!RecalculatePinnedPreparedFrame()) {
+                RequestPreparedVideo(preparedPosition, preparedAtEnd,
+                    seekPlayer: preparedPosition > 0 || preparedInterruptedLiveSeek || videoPlayback is { Position: > 0 },
+                    preservePlay: true);
+            }
         }
         catch (Exception error) {
             if (ReferenceEquals(preparedOpening, request) && ReferenceEquals(CurrentDocument, document)) {
@@ -174,12 +177,16 @@ public partial class MainViewModel {
 
     // возвращаем исходник текущей позиции и ждем опустошения резерва подготовленного режима
     private void SwitchPreparedPreviewToLive(long position, string? reason = null) {
+        CancelVideoFrameStep();
         bool wasPrepared = preparedSource is not null;
         long duration = PlaybackStatus.Duration;
         bool atEnd = duration > 0 && position >= duration ||
             wasPrepared && preparedAtEnd && position == preparedPosition;
-        bool keepOriginal = wasPrepared && position == preparedPosition && PreparedFrameCovers(new(position, 1000));
-        bool readFrame = (wasPrepared && !keepOriginal && position > 0) || preparedInterruptedLiveSeek;
+        bool keepOriginal = wasPrepared && position == preparedPosition &&
+            (videoPinnedFrame is not null && preparedFrom is not null || PreparedFrameCovers(new(position, 1000)));
+        bool keepPriorLivePin = videoPinnedFrame is not null && preparedFrom is null && videoSeekPreview is not null &&
+            position == preparedPosition;
+        bool readFrame = (wasPrepared && !keepOriginal && !keepPriorLivePin && position > 0) || preparedInterruptedLiveSeek;
         bool seek = readFrame || (wasPrepared && (preparedNeedsSeek || preparedWaitingPosition is not null)) ||
             videoPlayback is { Position: >= 0 } playback && Math.Abs(playback.Position - position) > 25;
         WriteableBitmap? retained = preparedOriginal;
@@ -198,10 +205,13 @@ public partial class MainViewModel {
         livePreviewHandoff = new(position, seek, readFrame);
         InvalidateVideoEditorSource();
         if (keepOriginal && retained is not null) {
+            if (preparedPresentedFrame is { } cursor) {
+                videoLiveSeekHint = new(cursor.Time.Milliseconds, cursor.Ordinal, FromStart: cursor.Ordinal == 0);
+            }
             SetVideoSeekPreview(retained);
         }
         else {
-            if (position == 0 && !readFrame) {
+            if (position == 0 && !readFrame && videoPinnedFrame is null) {
                 ShowFirstLiveVideoFrame();
             }
             else {
@@ -398,8 +408,13 @@ public partial class MainViewModel {
             PausePreparedVideo(playback);
             return;
         }
+        bool wasPinned = videoPinnedFrame is not null;
+        videoPinnedFrame = null;
         if (preparedAtEnd || playback.State == VLCState.Ended) {
             RequestPreparedVideo(0, atEnd: false);
+        }
+        else if (wasPinned) {
+            RequestPreparedVideo(preparedPosition, atEnd: false);
         }
         videoWantsToPlay = true;
         SetVideoEditorProcessingTime(null);
@@ -408,6 +423,10 @@ public partial class MainViewModel {
 
     // учитываем запрос пользователя отдельно от фактического состояния общего плеера
     private void RefreshPreparedVideo(VideoPlaybackSession playback) {
+        if (videoPinnedFrame is not null && preparedFrom is not null && !videoWantsToPlay) {
+            UpdatePlaybackStatus(PlaybackStatus with { Notice = videoFrameStepNotice });
+            return;
+        }
         VLCState state = playback.State;
         long duration = Math.Max(PlaybackStatus.Duration, playback.Duration);
         long target = preparedWaitingPosition ?? preparedPosition;
@@ -446,7 +465,7 @@ public partial class MainViewModel {
         }
 
         bool ready = state is VLCState.Playing or VLCState.Paused or VLCState.Ended;
-        string notice = !covered || !positioned ? "Подготовка кадра…" : DescribePreparedVideo();
+        string notice = videoFrameStepNotice ?? (!covered || !positioned ? "Подготовка кадра…" : DescribePreparedVideo());
         UpdatePlaybackStatus(new(preparedPosition, duration, videoWantsToPlay, ready || videoWantsToPlay,
             duration > 0 && (playback.CanSeek || state == VLCState.Ended), notice));
         if (ready) {
@@ -541,6 +560,7 @@ public partial class MainViewModel {
             videoEditorOutput = edited;
             preparedFrom = frame.Time;
             preparedUntil = frame.Until;
+            preparedPresentedFrame = new(frame.Time, frame.Ordinal, frame.Until is null);
             videoEditorOutputGeometry = frame.Geometry;
             videoEditorOutputVisible = edited is not null;
             videoEditorWaitingForFrame = false;

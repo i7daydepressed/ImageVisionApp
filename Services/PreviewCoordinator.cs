@@ -128,6 +128,21 @@ internal sealed class PreviewCoordinator : IAsyncDisposable {
         }
     }
 
+    // забираем первую точную пару запроса, включая кадр с нулевым интервалом до дубликата
+    public PreparedVideoFrame? TakeFirst(long expectedGeneration) {
+        lock (gate) {
+            if (disposed || generation != expectedGeneration || !ready.TryDequeue(out PreparedVideoFrame? frame)) {
+                return null;
+            }
+            if (ready.Count == 0) {
+                last = null;
+                through = null;
+            }
+            SignalProducer();
+            return frame;
+        }
+    }
+
     // снимаем готовый участок и запрещаем позднюю выдачу старого поколения
     public void Cancel() {
         lock (gate) {
@@ -255,7 +270,7 @@ internal sealed class PreviewCoordinator : IAsyncDisposable {
                     if (frame.Pixels is null || frame.Pixels.Size != request.Size || !frame.Time.IsKnown ||
                         (frame.Until is { } boundary && (!boundary.IsKnown || boundary.CompareTo(frame.Time) < 0)) ||
                         (previous is not null && (frame.Time.CompareTo(expected!.Value) != 0 || frame.Ordinal <= previousOrdinal)) ||
-                        (request.Start.AtEnd && !frame.IsLast)) {
+                        (request.Start is { AtEnd: true, SingleFrame: false } && !frame.IsLast)) {
                         throw new InvalidOperationException("Источник вернул кадр с неверным размером, меткой или порядком");
                     }
                     previous = frame.Time;
@@ -278,7 +293,7 @@ internal sealed class PreviewCoordinator : IAsyncDisposable {
                         remaining -= request.ResultBytes;
                         frame = default;
                         edited = null;
-                        if (ended) {
+                        if (ended || request.Start.SingleFrame) {
                             return;
                         }
                     }

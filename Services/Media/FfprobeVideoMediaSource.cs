@@ -21,7 +21,7 @@ internal sealed class FfprobeVideoMediaSource(
     public PixelSize FrameSize { get; } = VideoPreviewDimensions.Fit(sourceSize);
     public long ReadScratchBytes => checked((long)sourceSize.Width * sourceSize.Height * 3 +
         (sourceSize == FrameSize ? 0 : (long)FrameSize.Width * FrameSize.Height * 3) +
-        VideoEditorFrame.GetBufferBytes(FrameSize));
+        VideoEditorFrame.GetBufferBytes(FrameSize) + (long)FrameSize.Width * 3);
 
     // подтверждаем общую нулевую шкалу и размер единственной дорожки той же версии файла
     public static async Task<FfprobeVideoMediaSource> OpenAsync(string path, VideoFileIdentity? expected,
@@ -122,63 +122,152 @@ internal sealed class FfprobeVideoMediaSource(
     // перед повторным использованием готового участка проверяем ту же версию источника
     internal void EnsureCurrentFile() => identity.EnsureCurrent(path);
 
+    private readonly record struct StreamFrame(long Ordinal, VideoPresentationTime Time,
+        VideoPresentationTime? Until, bool Repeated);
+
+    // читаем первую метку и начинаем поиск только после проверки общего нуля
+    private async ValueTask<StreamFrame> ReadFirstFrameAsync(FfprobeRun probe, CancellationToken token) {
+        VideoPresentationTime time = await ReadNextTimeAsync(probe, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("В видеопотоке нет кадров");
+        if (time.Value != 0) {
+            throw new InvalidDataException("Первый кадр отсутствует на общей нулевой позиции");
+        }
+        VideoPresentationTime? until = await ReadBoundaryAsync(probe, time, token).ConfigureAwait(false);
+        return new(0, time, until, until == time);
+    }
+
+    // сдвигаем курсор меток на одну запись даже при равных времени соседних кадров
+    private async ValueTask<StreamFrame> NextFrameAsync(FfprobeRun probe, StreamFrame current, CancellationToken token) {
+        VideoPresentationTime time = current.Until!.Value;
+        VideoPresentationTime? until = await ReadBoundaryAsync(probe, time, token).ConfigureAwait(false);
+        return new(current.Ordinal + 1, time, until, current.Repeated || until == time);
+    }
+
+    // от времени берем последний кадр интервала, оставляя дубли различимыми по номеру
+    private async ValueTask<StreamFrame> FindTimeAsync(FfprobeRun probe, StreamFrame first,
+        VideoFrameReadRequest start, CancellationToken token) {
+        StreamFrame frame = first;
+        VideoPresentationTime requested = new(start.PositionMilliseconds, 1000);
+        while (frame.Until is { } next && (start.AtEnd || next.CompareTo(requested) <= 0)) {
+            frame = await NextFrameAsync(probe, frame, token).ConfigureAwait(false);
+        }
+        return frame;
+    }
+
+    // определяем номер перед первым шагом назад без сохранения общей таблицы кадров
+    private async Task<long> FindBackwardTargetAsync(VideoFrameReadRequest start, CancellationToken token) {
+        await using FfprobeRun locate = new(ffprobe, path, "V:0", "frame=pts", token);
+        StreamFrame first = await ReadFirstFrameAsync(locate, token).ConfigureAwait(false);
+        StreamFrame anchor = await FindTimeAsync(locate, first, start, token).ConfigureAwait(false);
+        return Math.Max(0, anchor.Ordinal + start.FrameOffset);
+    }
+
+    // подтверждаем опору обычной перемотки по метке, номеру и пикселям при неоднозначном индексе
+    private async Task<long> CheckDecodedAnchorAsync(VideoDecodedFrameHint hint, CancellationToken token) {
+        await using FfprobeRun locate = new(ffprobe, path, "V:0", "frame=pts", token);
+        StreamFrame frame = await ReadFirstFrameAsync(locate, token).ConfigureAwait(false);
+        while (frame.Time.Milliseconds < hint.Milliseconds - TimestampToleranceMs && frame.Until is not null) {
+            frame = await NextFrameAsync(locate, frame, token).ConfigureAwait(false);
+        }
+        if (Math.Abs(frame.Time.Milliseconds - hint.Milliseconds) > TimestampToleranceMs) {
+            throw new InvalidDataException("Не удалось подтвердить метку кадра после обычной перемотки");
+        }
+
+        bool unique = frame.Until != frame.Time;
+        if (frame.Ordinal == hint.Ordinal && (unique || hint.FromStart && frame.Ordinal == 0)) {
+            return frame.Ordinal;
+        }
+        if (hint.Fingerprint is null) {
+            throw new InvalidDataException("Не удалось подтвердить номер кадра после обычной перемотки");
+        }
+        return await MatchDecodedFingerprintAsync(locate, frame, hint, token).ConfigureAwait(false);
+    }
+
+    // сравниваем кадры одной метки по порядку и храним только номер совпадения
+    private async Task<long> MatchDecodedFingerprintAsync(FfprobeRun probe, StreamFrame frame,
+        VideoDecodedFrameHint hint, CancellationToken token) {
+        using Mat raw = new();
+        using Mat reduced = new();
+        using VideoCapture capture = StartCapture(raw, frame.Ordinal, frame.Time, allowIndex: false, token);
+        long? onlyMatch = null;
+        while (true) {
+            token.ThrowIfCancellationRequested();
+            Mat basis = PreviewBgr(raw, reduced);
+            if (VideoFirstFrameReader.GetBgrFingerprint(basis) == hint.Fingerprint) {
+                if (onlyMatch.HasValue) {
+                    throw new InvalidDataException("У нескольких кадров совпадают время и пиксели. Номер показанного кадра определить нельзя");
+                }
+                onlyMatch = frame.Ordinal;
+            }
+            if (frame.Until != frame.Time) {
+                return onlyMatch ?? throw new InvalidDataException("Не удалось подтвердить пиксели кадра после обычной перемотки");
+            }
+            frame = await NextFrameAsync(probe, frame, token).ConfigureAwait(false);
+            ReadMatchedFrame(capture, raw, frame.Ordinal, frame.Time, token);
+        }
+    }
+
     // пропускаем метки до начала участка, сверяем кадр и его порядок перед выдачей в координатор
     public async IAsyncEnumerable<TimedVideoInput> ReadFramesAsync(VideoFrameReadRequest start,
         [EnumeratorCancellation] CancellationToken cancellationToken) {
         CancellationToken token = cancellationToken;
         token.ThrowIfCancellationRequested();
         identity.EnsureCurrent(path);
+        long? anchor = start.Anchor?.Ordinal;
+        if (anchor is null && start.DecodedAnchor is { } decoded) {
+            anchor = await CheckDecodedAnchorAsync(decoded, token).ConfigureAwait(false);
+        }
+        long? target = anchor is { } number ? Math.Max(0, number + start.FrameOffset) :
+            start.FrameOffset < 0 ? await FindBackwardTargetAsync(start, token).ConfigureAwait(false) : null;
+        identity.EnsureCurrent(path);
         await using FfprobeRun probe = new(ffprobe, path, "V:0", "frame=pts", token);
-        VideoPresentationTime current = await ReadNextTimeAsync(probe, token).ConfigureAwait(false)
-            ?? throw new InvalidDataException("В видеопотоке нет кадров");
-        if (current.Value != 0) {
-            throw new InvalidDataException("Первый кадр отсутствует на общей нулевой позиции");
+        StreamFrame first = await ReadFirstFrameAsync(probe, token).ConfigureAwait(false);
+        StreamFrame selected = target is null
+            ? await FindTimeAsync(probe, first, start, token).ConfigureAwait(false)
+            : first;
+        long ordinalTarget = target ?? selected.Ordinal + start.FrameOffset;
+        while (selected.Ordinal < ordinalTarget && selected.Until is not null) {
+            selected = await NextFrameAsync(probe, selected, token).ConfigureAwait(false);
         }
-
-        VideoPresentationTime requested = new(start.PositionMilliseconds, 1000);
-        long ordinal = 0;
-        bool repeated = false;
-        VideoPresentationTime? until = await ReadBoundaryAsync(probe, current, token).ConfigureAwait(false);
-        while (until is { } next && (start.AtEnd || next.CompareTo(requested) <= 0)) {
-            repeated |= next == current;
-            ordinal++;
-            current = next;
-            until = await ReadBoundaryAsync(probe, current, token).ConfigureAwait(false);
+        if (start is { FrameOffset: 0, Anchor: { } confirmed } &&
+            (selected.Ordinal != confirmed.Ordinal || selected.Time.CompareTo(confirmed.Time) != 0)) {
+            throw new InvalidDataException("Положение выбранного кадра изменилось");
         }
-        repeated |= until == current;
 
         using Mat raw = new();
         using Mat reduced = new();
         using Mat bgra = new();
-        using VideoCapture capture = StartCapture(raw, ordinal, current, allowIndex: !repeated, token);
+        using VideoCapture capture = StartCapture(raw, selected.Ordinal, selected.Time, allowIndex: !selected.Repeated, token);
         while (true) {
             token.ThrowIfCancellationRequested();
-            if (until is null) {
+            if (selected.Until is null) {
                 // EOF должен быть согласован и по меткам, и по кадрам
                 if (capture.Grab()) {
                     throw new InvalidDataException("После последней подтвержденной метки есть еще кадры");
                 }
             }
-            Mat basis = raw;
-            if (FrameSize != sourceSize) {
-                Cv2.Resize(raw, reduced, new OpenCvSharp.Size(FrameSize.Width, FrameSize.Height),
-                    interpolation: InterpolationFlags.Area);
-                basis = reduced;
-            }
-            Cv2.CvtColor(basis, bgra, ColorConversionCodes.BGR2BGRA);
+            Cv2.CvtColor(PreviewBgr(raw, reduced), bgra, ColorConversionCodes.BGR2BGRA);
             token.ThrowIfCancellationRequested();
             identity.EnsureCurrent(path);
-            yield return new(current, until, ordinal,
+            yield return new(selected.Time, selected.Until, selected.Ordinal,
                 VideoEditorFrame.CopyBgra(bgra.Data, checked((int)bgra.Step()), FrameSize));
 
-            if (until is not { } upcoming) {
+            if (selected.Until is null || start.SingleFrame) {
                 yield break;
             }
-            ordinal++;
-            current = upcoming;
-            until = await ReadBoundaryAsync(probe, current, token).ConfigureAwait(false);
-            ReadMatchedFrame(capture, raw, ordinal, current, token);
+            selected = await NextFrameAsync(probe, selected, token).ConfigureAwait(false);
+            ReadMatchedFrame(capture, raw, selected.Ordinal, selected.Time, token);
         }
+    }
+
+    // одинаково приводим цветовой кадр к размеру показа для вывода и сверки
+    private Mat PreviewBgr(Mat raw, Mat reduced) {
+        if (FrameSize == sourceSize) {
+            return raw;
+        }
+        Cv2.Resize(raw, reduced, new OpenCvSharp.Size(FrameSize.Width, FrameSize.Height),
+            interpolation: InterpolationFlags.Area);
+        return reduced;
     }
 
     // пробуем найти уникальную метку по индексу, после расхождения читаем по порядку

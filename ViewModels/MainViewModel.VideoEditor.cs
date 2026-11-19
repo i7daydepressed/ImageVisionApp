@@ -105,8 +105,13 @@ public partial class MainViewModel {
             videoEditorError = null;
         }
         NotifyVideoEditorPreview();
+        if (videoFrameStep is not null) {
+            return;
+        }
         if (preparedSource is not null) {
-            RequestPreparedVideo(preparedPosition, preparedAtEnd);
+            if (!RecalculatePinnedPreparedFrame()) {
+                RequestPreparedVideo(preparedPosition, preparedAtEnd);
+            }
         }
         else {
             RequestVideoEditorFrame();
@@ -166,7 +171,7 @@ public partial class MainViewModel {
 
     // передаем собственный снимок только после резерва, при перегрузке держим номер актуального кадра
     private void RequestVideoEditorFrame(bool liveInput = false) {
-        if (preparedSource is not null || preparedOpening is not null || livePreviewHandoff is not null) {
+        if (preparedSource is not null || preparedOpening is not null || livePreviewHandoff is not null || videoFrameStep is not null) {
             return;
         }
         SetVideoEditorProcessingTime(null);
@@ -281,6 +286,10 @@ public partial class MainViewModel {
             return;
         }
         VideoPreviewSettings previous = PreviewSettings;
+        if (previous.ArrowStep != settings.ArrowStep && (previous with { ArrowStep = settings.ArrowStep }) == settings) {
+            PreviewSettings = settings;
+            return;
+        }
         StopVideoPreviewMonitoring(keepLast: false);
         PreviewSettings = settings;
         ResetVideoPreviewAuto();
@@ -289,7 +298,7 @@ public partial class MainViewModel {
             return;
         }
         if (preparedSource is not null) {
-            if (previous.BudgetMiB != settings.BudgetMiB) {
+            if (previous.BudgetMiB != settings.BudgetMiB && videoFrameStep is null && !RecalculatePinnedPreparedFrame()) {
                 RequestPreparedVideo(preparedPosition, preparedAtEnd, preservePlay: true);
             }
             return;
