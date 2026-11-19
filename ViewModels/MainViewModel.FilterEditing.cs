@@ -7,7 +7,7 @@ public partial class MainViewModel {
     public bool TryUpdateCustomFilterKernel(
         ImageEditStep? step, FilterKernel? kernel, out string error) {
         error = string.Empty;
-        if (originalImageData is null) {
+        if (!IsVideoOpen && originalImageData is null) {
             error = "Сначала выберите изображение";
             return false;
         }

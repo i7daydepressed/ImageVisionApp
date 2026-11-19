@@ -36,7 +36,7 @@ public partial class MainViewModel {
 
     private bool TryAddMorphologyStep(ImageOperationType type, out string error) {
         error = string.Empty;
-        if (originalImageData is null) {
+        if (!IsVideoOpen && originalImageData is null) {
             error = "Сначала выберите изображение";
             return false;
         }
@@ -47,7 +47,7 @@ public partial class MainViewModel {
             structuralElement: SelectedStructuralElement);
         AdvancedSteps.Add(step);
         try {
-            // пересчитываем всю очередь от исходника, затем готовим изображение и гистограмму
+            // для фото сразу готовим изображение и гистограмму, для видео передаем снимок очереди
             // существующий UpdateModifiedImage заменяет показанное состояние после подготовки
             ApplyAdvancedQueue();
             return true;

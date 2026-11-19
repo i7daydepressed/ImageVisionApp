@@ -20,109 +20,7 @@ public class ImageProcessingService{
         // идем по шагам в переданном порядке: каждый меняет то же изображение
         // поэтому следующий шаг получает результат предыдущего
         foreach (ImageEditStep step in steps) {
-            // Type определяет операцию, Parameter — ее значение, если оно нужно
-            switch (step.Type) {
-                case ImageOperationType.Brightness:
-                    ChangeBrightness(processedImage, step.Parameter);
-                    break;
-
-                case ImageOperationType.Saturation:
-                    ChangeSaturation(processedImage, step.Parameter);
-                    break;
-
-                case ImageOperationType.Contrast:
-                    ChangeContrast(processedImage, step.Parameter);
-                    break;
-
-                case ImageOperationType.Grayscale:
-                    ConvertToGrayscale(processedImage);
-                    break;
-
-                case ImageOperationType.LinearGrayscaleCorrection:
-                    // коррекция сначала переводит текущий результат в серый
-                    ConvertToGrayscale(processedImage);
-                    ApplyLinearCorrection(processedImage);
-                    break;
-
-                case ImageOperationType.NonlinearGrayscaleCorrection:
-                    // шаг работает и без отдельного действия градаций серого в очереди
-                    ConvertToGrayscale(processedImage);
-                    ApplyLogarithmicCorrection(processedImage);
-                    break;
-
-                case ImageOperationType.Rotation:
-                    RotateImage(processedImage, (int)step.Parameter);
-                    break;
-
-                case ImageOperationType.Erosion:
-                    // читаем снимок именно этого шага, текущий выбор редактора здесь недоступен
-                    StructuralElement element = step.ElementSnapshot
-                        ?? throw new ArgumentException("Для шага эрозии отсутствует матрица");
-                    MorphologyService.Erode(processedImage, element);
-                    break;
-
-                case ImageOperationType.Dilation:
-                    // следующий шаг получает результат предыдущего, но свой снимок матрицы
-                    StructuralElement dilationElement = step.ElementSnapshot
-                        ?? throw new ArgumentException("Для шага дилатации отсутствует матрица");
-                    MorphologyService.Dilate(processedImage, dilationElement);
-                    break;
-
-                case ImageOperationType.Opening:
-                    // один шаг выполняет два прохода с одной собственной матрицей
-                    StructuralElement openingElement = step.ElementSnapshot
-                        ?? throw new ArgumentException("Для шага открытия отсутствует матрица");
-                    MorphologyService.Open(processedImage, openingElement);
-                    break;
-
-                case ImageOperationType.Closing:
-                    StructuralElement closingElement = step.ElementSnapshot
-                        ?? throw new ArgumentException("Для шага закрытия отсутствует матрица");
-                    MorphologyService.Close(processedImage, closingElement);
-                    break;
-
-                case ImageOperationType.MorphologicalGradient:
-                    StructuralElement gradientElement = step.ElementSnapshot
-                        ?? throw new ArgumentException("Для шага градиента отсутствует матрица");
-                    MorphologyService.Gradient(processedImage, gradientElement);
-                    break;
-
-                case ImageOperationType.BlackHat:
-                    StructuralElement blackHatElement = step.ElementSnapshot
-                        ?? throw new ArgumentException("Для шага черной шляпы отсутствует матрица");
-                    MorphologyService.BlackHat(processedImage, blackHatElement);
-                    break;
-
-                // берем результат предыдущих шагов и матрицу именно этого цилиндра
-                // открытие и вычитание выполняются здесь вместе, следующий шаг получит готовую разность
-                case ImageOperationType.TopHat:
-                    StructuralElement topHatElement = step.ElementSnapshot
-                        ?? throw new ArgumentException("Для шага цилиндра отсутствует матрица");
-                    MorphologyService.TopHat(processedImage, topHatElement);
-                    break;
-
-                case ImageOperationType.Sharpen:
-                    ImageFilterService.Sharpen(processedImage);
-                    break;
-
-                case ImageOperationType.MotionBlur:
-                    ImageFilterService.MotionBlur(processedImage);
-                    break;
-
-                case ImageOperationType.Emboss:
-                    ImageFilterService.Emboss(processedImage);
-                    break;
-
-                case ImageOperationType.Median:
-                    ImageFilterService.Median(processedImage);
-                    break;
-
-                case ImageOperationType.CustomFilter:
-                    FilterKernel kernel = step.KernelSnapshot
-                        ?? throw new ArgumentException("Для пользовательского фильтра отсутствует ядро");
-                    ImageFilterService.ApplyKernel(processedImage, kernel);
-                    break;
-            }
+            ApplyOperation(processedImage, step.Type, step.Parameter, step.ElementSnapshot, step.KernelSnapshot);
         }
         // сохраняем глубину каналов Q8: палитровый PNG иначе может вернуться с 4-битным RGBA
         processedImage.Depth = 8;
@@ -137,6 +35,121 @@ public class ImageProcessingService{
     }
 
 
+    // общий выбор операции для фото и кадрового пути сохраняет порядок, каналы и правило края
+    private static void ApplyOperation(MagickImage processedImage, ImageOperationType type, double parameter,
+        StructuralElement? elementSnapshot, FilterKernel? kernelSnapshot) {
+        // Type определяет операцию, Parameter — ее значение, если оно нужно
+        switch (type) {
+            case ImageOperationType.Brightness:
+                ChangeBrightness(processedImage, parameter);
+                break;
+
+            case ImageOperationType.Saturation:
+                ChangeSaturation(processedImage, parameter);
+                break;
+
+            case ImageOperationType.Contrast:
+                ChangeContrast(processedImage, parameter);
+                break;
+
+            case ImageOperationType.Grayscale:
+                ConvertToGrayscale(processedImage);
+                break;
+
+            case ImageOperationType.LinearGrayscaleCorrection:
+                // коррекция сначала переводит текущий результат в серый
+                ConvertToGrayscale(processedImage);
+                ApplyLinearCorrection(processedImage);
+                break;
+
+            case ImageOperationType.NonlinearGrayscaleCorrection:
+                // шаг работает и без отдельного действия градаций серого в очереди
+                ConvertToGrayscale(processedImage);
+                ApplyLogarithmicCorrection(processedImage);
+                break;
+
+            case ImageOperationType.Rotation:
+                RotateImage(processedImage, (int)parameter);
+                break;
+
+            case ImageOperationType.Erosion:
+                // читаем снимок именно этого шага, текущий выбор редактора здесь недоступен
+                StructuralElement element = elementSnapshot
+                    ?? throw new ArgumentException("Для шага эрозии отсутствует матрица");
+                MorphologyService.Erode(processedImage, element);
+                break;
+
+            case ImageOperationType.Dilation:
+                // следующий шаг получает результат предыдущего, но свой снимок матрицы
+                StructuralElement dilationElement = elementSnapshot
+                    ?? throw new ArgumentException("Для шага дилатации отсутствует матрица");
+                MorphologyService.Dilate(processedImage, dilationElement);
+                break;
+
+            case ImageOperationType.Opening:
+                // один шаг выполняет два прохода с одной собственной матрицей
+                StructuralElement openingElement = elementSnapshot
+                    ?? throw new ArgumentException("Для шага открытия отсутствует матрица");
+                MorphologyService.Open(processedImage, openingElement);
+                break;
+
+            case ImageOperationType.Closing:
+                StructuralElement closingElement = elementSnapshot
+                    ?? throw new ArgumentException("Для шага закрытия отсутствует матрица");
+                MorphologyService.Close(processedImage, closingElement);
+                break;
+
+            case ImageOperationType.MorphologicalGradient:
+                StructuralElement gradientElement = elementSnapshot
+                    ?? throw new ArgumentException("Для шага градиента отсутствует матрица");
+                MorphologyService.Gradient(processedImage, gradientElement);
+                break;
+
+            case ImageOperationType.BlackHat:
+                StructuralElement blackHatElement = elementSnapshot
+                    ?? throw new ArgumentException("Для шага черной шляпы отсутствует матрица");
+                MorphologyService.BlackHat(processedImage, blackHatElement);
+                break;
+
+            // берем результат предыдущих шагов и матрицу именно этого цилиндра
+            // открытие и вычитание выполняются здесь вместе, следующий шаг получит готовую разность
+            case ImageOperationType.TopHat:
+                StructuralElement topHatElement = elementSnapshot
+                    ?? throw new ArgumentException("Для шага цилиндра отсутствует матрица");
+                MorphologyService.TopHat(processedImage, topHatElement);
+                break;
+
+            case ImageOperationType.Sharpen:
+                ImageFilterService.Sharpen(processedImage);
+                break;
+
+            case ImageOperationType.MotionBlur:
+                ImageFilterService.MotionBlur(processedImage);
+                break;
+
+            case ImageOperationType.Emboss:
+                ImageFilterService.Emboss(processedImage);
+                break;
+
+            case ImageOperationType.Median:
+                ImageFilterService.Median(processedImage);
+                break;
+
+            case ImageOperationType.CustomFilter:
+                FilterKernel kernel = kernelSnapshot
+                    ?? throw new ArgumentException("Для пользовательского фильтра отсутствует ядро");
+                ImageFilterService.ApplyKernel(processedImage, kernel);
+                break;
+        }
+    }
+
+    // последовательно применяем снимки шагов к одному рабочему видеокадру
+    internal static void ApplyVideoSteps(MagickImage image, ReadOnlySpan<VideoEditorStep> steps) {
+        foreach (VideoEditorStep step in steps) {
+            ApplyOperation(image, step.Type, step.Parameter, step.ElementSnapshot, step.KernelSnapshot);
+        }
+    }
+
     // пропускаем все значения канала через те же операции, что выполняются для фото
     internal static byte[] CreateVideoAdjustmentLookup(ReadOnlySpan<VideoEditorStep> steps) {
         byte[] ramp = new byte[256 * 3];
@@ -146,16 +159,10 @@ public class ImageProcessingService{
 
         using MagickImage sample = new(ramp, new PixelReadSettings(256, 1, StorageType.Char, PixelMapping.RGB));
         foreach (VideoEditorStep step in steps) {
-            switch (step.Type) {
-                case ImageOperationType.Brightness:
-                    ChangeBrightness(sample, step.Parameter);
-                    break;
-                case ImageOperationType.Contrast:
-                    ChangeContrast(sample, step.Parameter);
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(steps), "Операция пока недоступна для видео");
+            if (step.Type is not (ImageOperationType.Brightness or ImageOperationType.Contrast)) {
+                throw new ArgumentOutOfRangeException(nameof(steps), "Операцию нельзя свести к таблице каналов");
             }
+            ApplyOperation(sample, step.Type, step.Parameter, null, null);
         }
 
         using IPixelCollection<byte> pixels = sample.GetPixels();

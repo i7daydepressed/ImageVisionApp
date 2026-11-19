@@ -46,7 +46,7 @@ public partial class MainViewModel {
     private bool TryAddFilterStep(
         ImageOperationType type, out string error, FilterKernel? filterKernel = null) {
         error = string.Empty;
-        if (originalImageData is null) {
+        if (!IsVideoOpen && originalImageData is null) {
             error = "Сначала выберите изображение";
             return false;
         }

@@ -59,10 +59,10 @@ public partial class MainViewModel {
         }
     }
 
-    // сохраняем типы и значения в порядке очереди, без ссылок на редактируемые шаги
+    // сохраняем порядок, числовые значения и неизменяемые матрицы без ссылок на редактируемые шаги
     private void CaptureVideoEditorPlan() {
         VideoEditorStep[] steps = AdvancedSteps
-            .Select(step => new VideoEditorStep(step.Type, step.Parameter))
+            .Select(step => new VideoEditorStep(step.Type, step.Parameter, step.ElementSnapshot, step.KernelSnapshot))
             .ToArray();
         videoEditorPlan = new(videoEditorPlan.Revision + 1, steps);
         ClearVideoEditorRequest();

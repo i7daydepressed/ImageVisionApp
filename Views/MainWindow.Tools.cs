@@ -18,9 +18,6 @@ public partial class MainWindow {
         Border contrastCard = CreateContrastCard();
         Border morphologyCard = CreateMorphologyCard();
         Border filtersCard = CreateFiltersCard();
-        DisableForVideo(saturationCard);
-        DisableForVideo(morphologyCard);
-        DisableForVideo(filtersCard);
         Border[] cards = new Border[] {
             quickActionsCard, brightnessCard, saturationCard,
             contrastCard, morphologyCard, filtersCard
@@ -183,9 +180,6 @@ public partial class MainWindow {
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
         saveAdvancedButton.Click += SaveAdvancedResultButton_OnClick;
-        DisableForVideo(addGrayscaleButton);
-        DisableForVideo(addLinearCorrectionButton);
-        DisableForVideo(addNonlinearCorrectionButton);
         DisableForVideo(saveAdvancedButton);
         // сбрасываем всю очередь; результат снова строится из исходного изображения
         Button resetAdvancedButton = new Button {

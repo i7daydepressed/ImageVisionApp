@@ -146,12 +146,17 @@ public partial class MainViewModel : ViewModelBase{
         }
 
         if (IsVideoOpen) {
-            if (type is not (ImageOperationType.Brightness or ImageOperationType.Contrast or ImageOperationType.Rotation)) {
-                StatusMessage = "Для видео пока доступны яркость, контрастность и поворот";
+            if (type is not (ImageOperationType.Brightness or ImageOperationType.Saturation or ImageOperationType.Contrast or
+                             ImageOperationType.Grayscale or ImageOperationType.LinearGrayscaleCorrection or
+                             ImageOperationType.NonlinearGrayscaleCorrection or ImageOperationType.Rotation or
+                             ImageOperationType.Sharpen or ImageOperationType.MotionBlur or ImageOperationType.Emboss or
+                             ImageOperationType.Median)) {
+                StatusMessage = "Выберите отдельную команду для шага с матрицей или ядром";
                 return;
             }
 
-            if (!ImageStepParameterRules.TryValidate(type, parameter, out string error)) {
+            if (ImageStepParameterRules.CanEdit(type) &&
+                !ImageStepParameterRules.TryValidate(type, parameter, out string error)) {
                 StatusMessage = error;
                 return;
             }

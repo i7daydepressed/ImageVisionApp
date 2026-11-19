@@ -5,43 +5,58 @@ using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using ImageMagick;
 using ImageVisionApp.Models;
 
 namespace ImageVisionApp.Services;
 
-internal readonly record struct VideoEditorStep(ImageOperationType Type, double Parameter);
+internal readonly record struct VideoEditorStep(
+    ImageOperationType Type, double Parameter, StructuralElement? ElementSnapshot, FilterKernel? KernelSnapshot);
 
 internal sealed class VideoEditorPlan {
-    private readonly VideoEditorStep[] adjustmentSteps;
+    private readonly VideoEditorStep[] steps;
+    private readonly VideoEditorStep[]? adjustmentSteps;
     private readonly int clockwiseQuarterTurns;
     private byte[]? channelLookup;
 
     public long Revision { get; }
     public bool HasSteps { get; }
 
-    // яркость и контраст меняют значение пикселя независимо от его позиции
-    // сохраняем их взаимный порядок, четверть-повороты складываем отдельно
+    // яркость и контраст независимы от позиции пикселя
+    // складываем и переносим повороты только в очереди из этих трех операций
     public VideoEditorPlan(long revision, VideoEditorStep[] steps) {
         Revision = revision;
         HasSteps = steps.Length != 0;
+        this.steps = (VideoEditorStep[])steps.Clone();
         List<VideoEditorStep> adjustments = new(steps.Length);
+        bool canUseLookup = true;
         foreach (VideoEditorStep step in steps) {
             if (step.Type == ImageOperationType.Rotation) {
                 clockwiseQuarterTurns = (clockwiseQuarterTurns + (int)step.Parameter / 90) % 4;
             }
-            else {
+            else if (step.Type is ImageOperationType.Brightness or ImageOperationType.Contrast) {
                 adjustments.Add(step);
             }
+            else {
+                canUseLookup = false;
+            }
         }
-        adjustmentSteps = adjustments.ToArray();
+        if (canUseLookup) {
+            adjustmentSteps = adjustments.ToArray();
+        }
     }
 
-    // строим таблицу значений один раз на снимок очереди и применяем ее к кадру
+    // сохраняем быстрый путь трех операций, в смешанной очереди выполняем каждый шаг на своем месте
     public VideoEditorGeometry Apply(VideoEditorFrame frame) {
+        VideoEditorGeometry geometry = new(frame.Size, clockwiseQuarterTurns);
+        if (adjustmentSteps is null) {
+            frame.ApplyOperations(steps, geometry.OutputSize);
+            return geometry;
+        }
+
         if (adjustmentSteps.Length != 0) {
             frame.Apply(channelLookup ??= ImageProcessingService.CreateVideoAdjustmentLookup(adjustmentSteps));
         }
-        VideoEditorGeometry geometry = new(frame.Size, clockwiseQuarterTurns);
         frame.Rotate(geometry);
         return geometry;
     }
@@ -83,6 +98,28 @@ internal sealed class VideoEditorFrame : IDisposable {
             pixels[index + 1] = channelLookup[pixels[index + 1]];
             pixels[index + 2] = channelLookup[pixels[index + 2]];
         }
+    }
+
+    // переносим цветовые байты в рабочий MagickImage, выполняем очередь и возвращаем пиксели без кодирования
+    public void ApplyOperations(ReadOnlySpan<VideoEditorStep> steps, PixelSize outputSize) {
+        using MagickImage image = new();
+        // четвертый байт RV32 служебный, BGRP читает его как заполнение, а не как альфа-канал
+        image.ReadPixels(pixels.AsSpan(0, length),
+            new PixelReadSettings((uint)Size.Width, (uint)Size.Height, StorageType.Char, "BGRP"));
+        ImageProcessingService.ApplyVideoSteps(image, steps);
+        if (image.Width != outputSize.Width || image.Height != outputSize.Height) {
+            throw new InvalidOperationException("Размер результата не соответствует повороту видеокадра");
+        }
+
+        using IPixelCollection<byte> output = image.GetPixels();
+        byte[] result = output.ToByteArray(PixelMapping.BGRA)
+            ?? throw new InvalidOperationException("Не удалось получить пиксели видеокадра");
+        if (result.Length != length) {
+            throw new InvalidOperationException("Получен неполный буфер видеокадра");
+        }
+        result.CopyTo(pixels, 0);
+        Size = outputSize;
+        stride = checked(outputSize.Width * 4);
     }
 
     // переносим целые BGRA-пиксели на новые позиции и заменяем буфер кадра только после поворота
