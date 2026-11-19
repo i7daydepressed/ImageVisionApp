@@ -52,9 +52,10 @@ public partial class MainWindow {
             if (Path.GetExtension(file.Name).ToLowerInvariant() is ".mp4" or ".mkv") {
                 string sourcePath = file.TryGetLocalPath()
                     ?? throw new InvalidDataException("Для открытия видео нужен доступный локальный путь к файлу");
-                byte[] previewPng = await Task.Run(() => VideoFirstFrameReader.ReadPng(sourcePath));
+                (byte[] previewPng, long? fileSizeBytes) = await Task.Run(() =>
+                    (VideoFirstFrameReader.ReadPng(sourcePath), ReadVideoFileSize(sourcePath)));
                 if (!mediaWindowClosed && ReferenceEquals(DataContext, viewModel)) {
-                    viewModel.LoadVideoFirstFrame(previewPng, file.Name, sourcePath);
+                    viewModel.LoadVideoFirstFrame(previewPng, file.Name, sourcePath, fileSizeBytes);
                 }
             }
             else {
@@ -73,6 +74,16 @@ public partial class MainWindow {
         }
         finally {
             openingMedia = false;
+        }
+    }
+
+    // читаем размер исходного файла, ошибка этого поля не мешает открыть видео
+    private static long? ReadVideoFileSize(string sourcePath) {
+        try {
+            return new FileInfo(sourcePath).Length;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Security.SecurityException) {
+            return null;
         }
     }
 
@@ -172,12 +183,14 @@ public partial class MainWindow {
         }
     }
 
+    [Obsolete("Отдельное окно гистограмм отключено. Используйте встроенные панели.")]
     private async void OpenHistogramsButton_OnClick(
         object? sender,
         RoutedEventArgs e
         ) {
 
-        if (DataContext is not MainViewModel viewModel) {
+        if (DataContext is not MainViewModel viewModel ||
+            viewModel.CurrentDocument?.Kind != MediaKind.Image) {
             return;
         }
 

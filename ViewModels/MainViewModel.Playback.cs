@@ -15,6 +15,8 @@ internal readonly record struct VideoPlaybackStatus(
 
 public partial class MainViewModel {
     private readonly record struct VideoSeek(VideoPlaybackSession Session, string Path, long Position, long Duration);
+    private const int VideoTrackReadLimit = 4;
+    private const int VideoTrackReadIntervalMilliseconds = 250;
 
     private VideoPlaybackSession? videoPlayback;
     private DispatcherTimer? videoPlaybackTimer;
@@ -26,6 +28,8 @@ public partial class MainViewModel {
     private bool videoRestarting;
     private bool mediaPreviewsDisposed;
     private int videoPlaybackGeneration;
+    private int videoTrackReadsRemaining;
+    private long nextVideoTrackRead;
     private VideoSeek? requestedVideoSeek;
     private bool readingVideoSeek;
 
@@ -61,6 +65,8 @@ public partial class MainViewModel {
 
             videoPlayback = candidate;
             candidate = null;
+            videoTrackReadsRemaining = VideoTrackReadLimit;
+            nextVideoTrackRead = 0;
             videoPlaybackTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(25) };
             videoPlaybackTimer.Tick += VideoPlaybackTimer_OnTick;
             videoPlaybackTimer.Start();
@@ -260,6 +266,39 @@ public partial class MainViewModel {
                 PlaybackStatus.Notice == "Не удалось перейти к кадру" ? PlaybackStatus.Notice : null;
             UpdatePlaybackStatus(new(position, duration, videoWantsToPlay, ready && !videoRestarting,
                 duration > 0 && (playback.CanSeek || ended), notice));
+        }
+
+        if (ready) {
+            UpdateVideoInformation(playback, duration);
+        }
+    }
+
+    // дополняем сведения действующего документа длительностью и дорожками готового плеера
+    private void UpdateVideoInformation(VideoPlaybackSession playback, long duration) {
+        if (!ReferenceEquals(videoPlayback, playback) || CurrentVideoInfo is not { } currentInfo) {
+            return;
+        }
+
+        VideoInfo nextInfo = duration > 0 && currentInfo.DurationMilliseconds != duration
+            ? currentInfo with { DurationMilliseconds = duration } : currentInfo;
+        long now = Environment.TickCount64;
+        if (videoTrackReadsRemaining > 0 && now >= nextVideoTrackRead) {
+            videoTrackReadsRemaining--;
+            nextVideoTrackRead = now + VideoTrackReadIntervalMilliseconds;
+            try {
+                if (playback.TryReadVideoTracks(nextInfo) is { } infoWithTracks) {
+                    nextInfo = infoWithTracks;
+                    videoTrackReadsRemaining = 0;
+                }
+            }
+            catch (Exception) {
+                // необязательные сведения остаются неизвестными при ошибке запроса к источнику
+            }
+        }
+
+        if (nextInfo != currentInfo) {
+            CurrentVideoInfo = nextInfo;
+            OnPropertyChanged(nameof(CurrentVideoInfo));
         }
     }
 

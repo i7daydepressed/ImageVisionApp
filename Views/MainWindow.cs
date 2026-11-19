@@ -104,10 +104,11 @@ public partial class MainWindow : Window {
 
         histogramPanel.ShowComparison(histogramViewModel?.HistogramComparison);
         advancedHistogramPanel.ShowComparison(histogramViewModel?.HistogramComparison);
+        UpdateHistogramAvailability();
         UpdateVideoPlaybackControls();
     }
 
-    // реагирует только на новую пару гистограмм и передает ее панели
+    // обновляет гистограммы и общую видимость двух панелей при смене документа
     private void HistogramViewModel_OnPropertyChanged(
         object? sender,
         PropertyChangedEventArgs e) {
@@ -115,6 +116,9 @@ public partial class MainWindow : Window {
             UpdateVideoPlaybackControls();
         }
 
+        if (e.PropertyName == nameof(MainViewModel.CurrentDocument)) {
+            UpdateHistogramAvailability();
+        }
 
         if (e.PropertyName == nameof(MainViewModel.HistogramComparison) &&
             sender is MainViewModel viewModel) {
@@ -124,22 +128,38 @@ public partial class MainWindow : Window {
         }
     }
 
+    // скрываем обе встроенные панели для видео и возвращаем их для фото
+    private void UpdateHistogramAvailability() {
+        bool showPanels = histogramViewModel?.IsVideoOpen != true;
+        histogramPanel.IsVisible = showPanels;
+        advancedHistogramPanel.IsVisible = showPanels;
+    }
+
     private Border CreateToolbar() {
         // верх панель выбора картинки
         Button openButton = new Button { Content = "Открыть файл" };
         openButton.Click += OpenMediaButton_OnClick;
 
+        TextBlock fileName = CreateBoundText(viewModel => viewModel.CurrentDocument!.FileName);
+        fileName.TextTrimming = TextTrimming.CharacterEllipsis;
+        fileName.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.CurrentDocument)) { Converter = ObjectConverters.IsNotNull });
+
         TextBlock statusText = CreateBoundText(viewModel => viewModel.StatusMessage);
-        statusText.VerticalAlignment = VerticalAlignment.Center;
         statusText.TextTrimming = TextTrimming.CharacterEllipsis;
+        statusText.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.StatusMessage)) { Converter = StringConverters.IsNotNullOrEmpty });
+
+        StackPanel fileStatus = new() {
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { fileName, statusText }
+        };
 
         Grid toolbarContent = new Grid {
             ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
             ColumnSpacing = 12
         };
         toolbarContent.Children.Add(openButton);
-        Grid.SetColumn(statusText, 1);
-        toolbarContent.Children.Add(statusText);
+        Grid.SetColumn(fileStatus, 1);
+        toolbarContent.Children.Add(fileStatus);
 
         StackPanel navigation = CreatePageNavigation();
         Grid.SetColumn(navigation, 2);
@@ -239,7 +259,7 @@ public partial class MainWindow : Window {
     }
 
     private Border CreateSidebar() {
-        // первая страница показывает сведения об изображении без инструментов обработки
+        // первая страница показывает сведения об открытом файле без инструментов обработки
         return CreateScrollablePanel(CreateInformationPanel());
     }
 

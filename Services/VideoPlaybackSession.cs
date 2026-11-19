@@ -1,6 +1,7 @@
 using System;
 using Avalonia;
 using Avalonia.Media.Imaging;
+using ImageVisionApp.Models;
 using LibVLCSharp.Shared;
 
 namespace ImageVisionApp.Services;
@@ -50,6 +51,44 @@ internal sealed class VideoPlaybackSession : IDisposable {
 
     // открывает источник с паузой, сохраняя явную кнопку запуска
     public bool Prepare() => player.Play();
+
+    // берем опубликованные дорожки текущего источника после подготовки плеера
+    public VideoInfo? TryReadVideoTracks(VideoInfo info) {
+        MediaTrack[] tracks = source.Tracks;
+        int activeTrackId = player.VideoTrack;
+        MediaTrack track = Array.Find(tracks, track => track.TrackType == TrackType.Video && track.Id == activeTrackId);
+        if (track.TrackType != TrackType.Video) {
+            track = Array.Find(tracks, static track => track.TrackType == TrackType.Video);
+        }
+        if (track.TrackType != TrackType.Video) {
+            return null;
+        }
+
+        VideoTrack video = track.Data.Video;
+        string? codec = track.Codec == 0 ? null : source.CodecDescription(TrackType.Video, track.Codec);
+        return info with {
+            Width = video.Width > 0 ? video.Width : null,
+            Height = video.Height > 0 ? video.Height : null,
+            FramesPerSecond = video.FrameRateNum > 0 && video.FrameRateDen > 0
+                ? (double)video.FrameRateNum / video.FrameRateDen : null,
+            HasAudio = Array.Exists(tracks, static track => track.TrackType == TrackType.Audio),
+            Codec = string.IsNullOrWhiteSpace(codec) ? null : codec,
+            VideoBitrate = track.Bitrate > 0 ? track.Bitrate : null,
+            Orientation = DescribeOrientation(video.Orientation)
+        };
+    }
+
+    // переводим направление строк и столбцов дорожки в описание ориентации
+    private static string? DescribeOrientation(VideoOrientation orientation) => orientation switch {
+        VideoOrientation.TopLeft => "Без поворота и отражения",
+        VideoOrientation.TopRight => "Отражение по горизонтали",
+        VideoOrientation.BottomLeft => "Отражение по вертикали",
+        VideoOrientation.BottomRight => "Поворот на 180°",
+        VideoOrientation.LeftTop => "Транспонирование",
+        VideoOrientation.LeftBottom or VideoOrientation.RightTop => "Поворот на 90°",
+        VideoOrientation.RightBottom => "Отражение относительно побочной диагонали",
+        _ => null
+    };
 
     // передаёт плееру явное состояние, чтобы повторная команда не меняла его на противоположное
     public void SetPaused(bool paused) => player.SetPause(paused);

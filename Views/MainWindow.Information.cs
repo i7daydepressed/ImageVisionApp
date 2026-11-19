@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Data;
+using Avalonia.Data.Converters;
 using Avalonia.Layout;
 using Avalonia.Media;
 using ImageVisionApp.Models;
@@ -20,15 +21,58 @@ public partial class MainWindow {
             FontWeight = FontWeight.SemiBold
         });
 
-        AddFileInformation(information);
+        StackPanel photo = new() { Spacing = 8 };
+        AddFileInformation(photo);
+        photo.Children.Add(CreateSectionSeparator());
+        AddDimensionsInformation(photo);
+        photo.Children.Add(CreateSectionSeparator());
+        AddColorInformation(photo);
+        photo.Children.Add(CreateSectionSeparator());
+        AddTechnicalInformation(photo);
+        photo.Children.Add(CreateSectionSeparator());
+        AddExifInformation(photo);
+        photo.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
+
+        StackPanel video = CreateVideoInformationPanel();
+        video.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
+        information.Children.Add(photo);
+        information.Children.Add(video);
+        return information;
+    }
+
+    // показываем сведения открытого видео по мере появления данных о дорожках
+    private static StackPanel CreateVideoInformationPanel() {
+        StackPanel information = new() { Spacing = 8 };
+        TextBlock heading = CreateSectionHeading("Сведения о видео");
+        heading.Margin = new Thickness(0, 10, 0, 2);
+        information.Children.Add(heading);
+
+        TextBlock fileName = CreateBoundText(viewModel => viewModel.CurrentDocument!.FileName);
+        fileName.TextWrapping = TextWrapping.Wrap;
+        AddInformationField(information, "Имя файла:", fileName);
+        AddInformationField(information, "Размер файла:",
+            CreateBoundText(viewModel => viewModel.CurrentVideoInfo!.FormattedFileSize));
+        AddInformationField(information, "Длительность:",
+            CreateBoundText(viewModel => viewModel.CurrentVideoInfo!.FormattedDuration));
+        AddInformationField(information, "Разрешение:",
+            CreateBoundText(viewModel => viewModel.CurrentVideoInfo!.Resolution));
+        AddInformationField(information, "Частота кадров:",
+            CreateBoundText(viewModel => viewModel.CurrentVideoInfo!.FrameRateDescription));
+        AddInformationField(information, "Звук:",
+            CreateBoundText(viewModel => viewModel.CurrentVideoInfo!.AudioDescription));
+
         information.Children.Add(CreateSectionSeparator());
-        AddDimensionsInformation(information);
-        information.Children.Add(CreateSectionSeparator());
-        AddColorInformation(information);
-        information.Children.Add(CreateSectionSeparator());
-        AddTechnicalInformation(information);
-        information.Children.Add(CreateSectionSeparator());
-        AddExifInformation(information);
+        information.Children.Add(CreateSectionHeading("Подробности"));
+        AddInformationField(information, "Контейнер:", new TextBlock { Text = VideoInfo.UnknownValue });
+
+        TextBlock codec = CreateBoundText(viewModel => viewModel.CurrentVideoInfo!.CodecDescription);
+        codec.TextWrapping = TextWrapping.Wrap;
+        AddInformationField(information, "Видеокодек:", codec);
+        AddInformationField(information, "Битрейт видеодорожки:",
+            CreateBoundText(viewModel => viewModel.CurrentVideoInfo!.BitrateDescription));
+        AddInformationField(information, "Ориентация дорожки:",
+            CreateBoundText(viewModel => viewModel.CurrentVideoInfo!.OrientationDescription));
+        AddInformationField(information, "Число кадров:", new TextBlock { Text = VideoInfo.UnknownValue });
         return information;
     }
 
