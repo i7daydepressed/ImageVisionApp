@@ -137,6 +137,38 @@ public class ImageProcessingService{
     }
 
 
+    // пропускаем все значения канала через те же операции, что выполняются для фото
+    internal static byte[] CreateVideoAdjustmentLookup(ReadOnlySpan<VideoEditorStep> steps) {
+        byte[] ramp = new byte[256 * 3];
+        for (int value = 0; value < 256; value++) {
+            ramp[value * 3] = ramp[value * 3 + 1] = ramp[value * 3 + 2] = (byte)value;
+        }
+
+        using MagickImage sample = new(ramp, new PixelReadSettings(256, 1, StorageType.Char, PixelMapping.RGB));
+        foreach (VideoEditorStep step in steps) {
+            switch (step.Type) {
+                case ImageOperationType.Brightness:
+                    ChangeBrightness(sample, step.Parameter);
+                    break;
+                case ImageOperationType.Contrast:
+                    ChangeContrast(sample, step.Parameter);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(steps), "Операция пока недоступна для видео");
+            }
+        }
+
+        using IPixelCollection<byte> pixels = sample.GetPixels();
+        byte[] rgb = pixels.ToByteArray(PixelMapping.RGB)
+            ?? throw new InvalidOperationException("Не удалось получить таблицу яркости и контрастности");
+        byte[] lookup = new byte[256];
+        for (int value = 0; value < lookup.Length; value++) {
+            lookup[value] = rgb[value * 3];
+        }
+        return lookup;
+    }
+
+
     private static void ChangeBrightness(//изменить яркость
         MagickImage processedImage,
         double brightnessAdjustment

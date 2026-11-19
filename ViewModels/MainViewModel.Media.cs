@@ -47,6 +47,7 @@ public partial class MainViewModel {
         HistogramComparison = comparison;
         StatusMessage = string.Empty;
         ResetAnalysisInputAfterLoad();
+        ResetVideoEditorDocument();
 
         OnPropertyChanged(nameof(CurrentDocument));
         OnPropertyChanged(nameof(IsVideoOpen));
@@ -69,6 +70,7 @@ public partial class MainViewModel {
         OriginalImage = null;
         ModifiedImage = null;
         VideoFirstFrame = null;
+        ResetVideoEditorDocument();
         OnPropertyChanged(nameof(VideoFirstFrame));
         OnPropertyChanged(nameof(VideoPreviewFrame));
         original?.Dispose();

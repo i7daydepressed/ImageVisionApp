@@ -47,8 +47,10 @@ public partial class MainWindow {
         }
 
         if (!ReferenceEquals(pageHost.Content, page)) {
-            (DataContext as MainViewModel)?.PauseVideoPlayback();
+            MainViewModel? viewModel = DataContext as MainViewModel;
+            viewModel?.PauseVideoPlayback();
             pageHost.Content = page;
+            viewModel?.SetVideoEditorVisible(ReferenceEquals(page, editingPage));
         }
 
         // повторный щелчок по активной кнопке оставляет ее выбранной

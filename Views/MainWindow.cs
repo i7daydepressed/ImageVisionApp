@@ -92,6 +92,7 @@ public partial class MainWindow : Window {
     private void MainWindow_OnDataContextChanged(object? sender, EventArgs e) {
         if (histogramViewModel is not null) {//// отписываемся от прежней ViewModel, чтобы она больше не обновляла эту панель
             histogramViewModel.PropertyChanged -= HistogramViewModel_OnPropertyChanged;
+            histogramViewModel.SetVideoEditorVisible(false);
             histogramViewModel.DetachVideoPlayback();
         }
 
@@ -100,6 +101,7 @@ public partial class MainWindow : Window {
         if (histogramViewModel is not null) {
             histogramViewModel.PropertyChanged += HistogramViewModel_OnPropertyChanged;
             histogramViewModel.AttachVideoPlayback();
+            histogramViewModel.SetVideoEditorVisible(ReferenceEquals(pageHost.Content, editingPage));
         }
 
         histogramPanel.ShowComparison(histogramViewModel?.HistogramComparison);
@@ -178,7 +180,6 @@ public partial class MainWindow : Window {
         // сначала показываем очередь действий и предпросмотр изображения
         advancedContent.Children.Add(CreateAdvancedWorkspace());
         Control tools = CreateAdvancedToolsPanel();
-        tools.Bind(IsEnabledProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
         advancedContent.Children.Add(tools);
         // вторая панель показывает ту же пару гистограмм под инструментами
         advancedContent.Children.Add(advancedHistogramPanel);
@@ -205,7 +206,7 @@ public partial class MainWindow : Window {
         TabControl advancedImageTabs = CreateImageTabs();
         advancedImageTabs.SelectedIndex = 1;
 
-        Control mediaPreview = CreateDocumentPreview(advancedImageTabs);
+        Control mediaPreview = CreateEditorDocumentPreview(advancedImageTabs);
         Grid.SetColumn(mediaPreview, 1);
         advancedWorkspace.Children.Add(mediaPreview);
 
@@ -287,6 +288,35 @@ public partial class MainWindow : Window {
         frame.Bind(VideoPreviewImage.RevisionProperty,
             CompiledBinding.Create<MainViewModel, int>(viewModel => viewModel.VideoPreviewRevision));
         return new Grid { Children = { photoPreview, frame } };
+    }
+
+    // оставляем сравнение фото, для видео показываем один результат редактора и состояние подготовки
+    private static Grid CreateEditorDocumentPreview(Control photoPreview) {
+        photoPreview.Bind(IsVisibleProperty,
+            new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
+        VideoPreviewImage frame = new() { Stretch = Stretch.Uniform, Margin = new Thickness(10) };
+        frame.Bind(Image.SourceProperty,
+            CompiledBinding.Create<MainViewModel, Bitmap?>(viewModel => viewModel.VideoEditorPreviewFrame));
+        frame.Bind(VideoPreviewImage.RevisionProperty,
+            CompiledBinding.Create<MainViewModel, int>(viewModel => viewModel.VideoEditorPreviewRevision));
+
+        TextBlock notice = CreateBoundText(viewModel => viewModel.VideoEditorNotice);
+        notice.HorizontalAlignment = HorizontalAlignment.Center;
+        notice.VerticalAlignment = VerticalAlignment.Center;
+        notice.Bind(IsVisibleProperty,
+            new Binding(nameof(MainViewModel.VideoEditorNotice)) { Converter = ObjectConverters.IsNotNull });
+        Grid.SetRow(frame, 1);
+        Grid.SetRow(notice, 1);
+        Grid videoPreview = new() {
+            RowDefinitions = new RowDefinitions("Auto,*"),
+            Children = {
+                new TextBlock { Text = "Результат редактирования", Margin = new Thickness(10) },
+                frame,
+                notice
+            }
+        };
+        videoPreview.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
+        return new Grid { Children = { photoPreview, videoPreview } };
     }
 
     private static TabControl CreateImageTabs() {

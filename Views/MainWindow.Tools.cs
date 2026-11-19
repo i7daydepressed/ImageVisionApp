@@ -1,5 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Data;
+using Avalonia.Data.Converters;
 using Avalonia.Layout;
 using Avalonia.Media;
 using ImageVisionApp.Models;
@@ -16,6 +18,9 @@ public partial class MainWindow {
         Border contrastCard = CreateContrastCard();
         Border morphologyCard = CreateMorphologyCard();
         Border filtersCard = CreateFiltersCard();
+        DisableForVideo(saturationCard);
+        DisableForVideo(morphologyCard);
+        DisableForVideo(filtersCard);
         Border[] cards = new Border[] {
             quickActionsCard, brightnessCard, saturationCard,
             contrastCard, morphologyCard, filtersCard
@@ -178,6 +183,8 @@ public partial class MainWindow {
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
         saveAdvancedButton.Click += SaveAdvancedResultButton_OnClick;
+        DisableForVideo(toolsContent);
+        DisableForVideo(saveAdvancedButton);
         // сбрасываем всю очередь; результат снова строится из исходного изображения
         Button resetAdvancedButton = new Button {
             Content = new TextBlock { Text = "Сбросить изменения", TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center },
@@ -211,4 +218,9 @@ public partial class MainWindow {
             Child = cardContent
         };
     }
+
+    // блокируем действия, для которых нужен фото-вход
+    private static void DisableForVideo(Control control) =>
+        control.Bind(IsEnabledProperty,
+            new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
 }

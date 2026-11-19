@@ -109,8 +109,13 @@ public partial class MainViewModel : ViewModelBase{
         previousImage?.Dispose();
     }
 
-    //пересчитывает изображение по действиям из очереди и обновляет его гистограмму
+    // для фото пересчитываем изображение и гистограмму, для видео передаем снимок очереди редактору
     public void ApplyAdvancedQueue() {
+        if (IsVideoOpen) {
+            CaptureVideoEditorPlan();
+            return;
+        }
+
         if (originalImageData is null) {
             StatusMessage = "Сначала выберите изображение";
             return;
@@ -133,21 +138,33 @@ public partial class MainViewModel : ViewModelBase{
 
 
 
-    // добавляет действие в конец очереди и пересчитывает изображение по всем шагам
+    // добавляет действие в конец очереди и запрашивает новый результат по всем шагам
     public void AddAdvancedStep(ImageOperationType type, double parameter = 0) {
-        if (originalImageData is null) {
+        if (!IsVideoOpen && originalImageData is null) {
             StatusMessage = "Сначала выберите изображение";
             return;
         }
 
+        if (IsVideoOpen) {
+            if (type is not (ImageOperationType.Brightness or ImageOperationType.Contrast)) {
+                StatusMessage = "Для видео пока доступны яркость и контрастность";
+                return;
+            }
+
+            if (!ImageStepParameterRules.TryValidate(type, parameter, out string error)) {
+                StatusMessage = error;
+                return;
+            }
+        }
+
         AdvancedSteps.Add(new ImageEditStep(type, parameter));
         ApplyAdvancedQueue();
-        // цепочка здесь такая создаем ImageEditStep → добавляем в AdvancedSteps → ListBox получает новую строку → ApplyAdvancedQueue() пересчитывает картинку и гистограмму
+        // новый ImageEditStep попадает в список очереди, ApplyAdvancedQueue передает выбранному виду его новый результат
     }
 
     // убирает все действия расширенного режима и пересчитывает результат из исходного изображения
     public void ResetAdvancedQueue() {
-        if (originalImageData is null) {
+        if (!IsVideoOpen && originalImageData is null) {
             StatusMessage = "Сначала выберите изображение";
             return;
         }

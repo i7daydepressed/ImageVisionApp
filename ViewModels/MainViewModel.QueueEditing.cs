@@ -7,7 +7,7 @@ public partial class MainViewModel {
     // меняем параметр существующего объекта, его место и остальные шаги остаются прежними
     public bool TryUpdateAdvancedStepParameter(ImageEditStep? step, double value, out string error) {
         error = "";
-        if (originalImageData is null) {
+        if (!IsVideoOpen && originalImageData is null) {
             error = "Сначала выберите изображение";
             return false;
         }

@@ -14,7 +14,8 @@ internal readonly record struct VideoPlaybackStatus(
     long Position, long Duration, bool IsPlaying, bool CanPlay, bool CanSeek, string? Notice);
 
 public partial class MainViewModel {
-    private readonly record struct VideoSeek(VideoPlaybackSession Session, string Path, long Position, long Duration);
+    private readonly record struct VideoSeek(
+        VideoPlaybackSession Session, string Path, long Position, long Duration, bool RestartOnPlay);
     private const int VideoTrackReadLimit = 4;
     private const int VideoTrackReadIntervalMilliseconds = 250;
 
@@ -26,6 +27,7 @@ public partial class MainViewModel {
     private bool videoWantsToPlay;
     private bool videoWasPlaying;
     private bool videoRestarting;
+    private bool videoRestartOnPlay;
     private bool mediaPreviewsDisposed;
     private int videoPlaybackGeneration;
     private int videoTrackReadsRemaining;
@@ -41,6 +43,9 @@ public partial class MainViewModel {
     internal void AttachVideoPlayback() {
         if (!mediaPreviewsDisposed && videoPlayback is null && CurrentDocument is { Kind: MediaKind.Video, SourcePath: not null } document &&
             VideoFirstFrame is { } firstFrame) {
+            if (videoEditorWaitingForFrame) {
+                AcceptVideoEditorFrame();
+            }
             _ = PrepareVideoPlaybackAsync(document, firstFrame.PixelSize);
         }
     }
@@ -74,6 +79,7 @@ public partial class MainViewModel {
         catch (Exception) {
             if (videoPlaybackGeneration == generation && ReferenceEquals(CurrentDocument, document)) {
                 ReleaseVideoPlayback();
+                AcceptVideoEditorFrame();
                 UpdatePlaybackStatus(new(0, 0, false, false, false, "Не удалось подготовить воспроизведение"));
             }
         }
@@ -94,10 +100,13 @@ public partial class MainViewModel {
         }
 
         videoWantsToPlay = true;
-        if (playback.State == VLCState.Ended) {
+        if (playback.State == VLCState.Ended || videoRestartOnPlay) {
+            videoRestartOnPlay = false;
+            InvalidateVideoEditorSource();
             videoRestarting = playback.Restart();
             if (!videoRestarting) {
                 videoWantsToPlay = false;
+                ShowVideoEditorError("Не удалось получить видеокадр");
             }
         }
         RefreshVideoPlayback();
@@ -112,24 +121,26 @@ public partial class MainViewModel {
         }
     }
 
-    // клавиши перемещают активный плеер без паузы, а на паузе запрашивают одиночный кадр
+    // внутри ролика сохраняем состояние плеера, на паузе и у правой границы читаем подтвержденный кадр
     internal void SeekVideoByKeyboard(long offset) {
         if (videoPlayback is not { } playback || !PlaybackStatus.CanSeek) {
             return;
         }
 
         long position = Math.Clamp(PlaybackStatus.Position + offset, 0, PlaybackStatus.Duration);
-        if (PlaybackStatus.IsPlaying) {
+        bool isPlaying = PlaybackStatus.IsPlaying;
+        if (isPlaying && position < PlaybackStatus.Duration) {
+            InvalidateVideoEditorSource();
             playback.Seek(position);
             UpdatePlaybackStatus(PlaybackStatus with { Position = position });
         }
         else {
-            RequestVideoSeek(position);
+            RequestVideoSeek(position, restartOnPlay: isPlaying);
         }
     }
 
-    // принимает последнее запрошенное время и оставляет звук на паузе
-    internal void RequestVideoSeek(long position) {
+    // принимает последнее запрошенное время, у конца по стрелке сохраняет возможность повтора
+    internal void RequestVideoSeek(long position, bool restartOnPlay = false) {
         if (videoPlayback is not { } playback || CurrentDocument?.SourcePath is not { } sourcePath ||
             !PlaybackStatus.CanSeek) {
             return;
@@ -137,7 +148,14 @@ public partial class MainViewModel {
 
         long duration = PlaybackStatus.Duration;
         long target = Math.Clamp(position, 0, duration);
-        requestedVideoSeek = new VideoSeek(playback, sourcePath, target, duration);
+        if (target == duration && (videoRestartOnPlay || requestedVideoSeek is { RestartOnPlay: true })) {
+            // повтор стрелки сохраняет чтение последнего кадра и запланированный повтор
+            return;
+        }
+
+        videoRestartOnPlay = false;
+        requestedVideoSeek = new VideoSeek(playback, sourcePath, target, duration, restartOnPlay);
+        InvalidateVideoEditorSource();
         PauseVideoPlayback();
         if (!readingVideoSeek) {
             _ = ReadVideoSeeksAsync();
@@ -182,14 +200,17 @@ public partial class MainViewModel {
                     SetVideoSeekPreview(preparedFrame);
                     preparedFrame = null;
                     requestedVideoSeek = null;
+                    videoRestartOnPlay = request.RestartOnPlay;
                     UpdatePlaybackStatus(PlaybackStatus with {
                         Position = framePosition, IsPlaying = false, CanPlay = true, Notice = null
                     });
+                    AcceptVideoEditorFrame();
                 }
                 catch (Exception) {
                     if (requestedVideoSeek == request) {
                         requestedVideoSeek = null;
                         UpdatePlaybackStatus(PlaybackStatus with { CanPlay = true, Notice = "Не удалось перейти к кадру" });
+                        ShowVideoEditorError("Не удалось получить видеокадр");
                     }
                 }
                 finally {
@@ -229,6 +250,7 @@ public partial class MainViewModel {
         VLCState state = playback.State;
         if (state == VLCState.Error) {
             ReleaseVideoPlayback();
+            AcceptVideoEditorFrame();
             UpdatePlaybackStatus(PlaybackStatus with { Notice = "Не удалось воспроизвести видео" });
             return;
         }
@@ -253,6 +275,9 @@ public partial class MainViewModel {
             PublishVideoFrame(playback);
         }
         videoWasPlaying = isPlaying;
+        if (!videoWantsToPlay) {
+            KeepVideoEditorResultForPause();
+        }
 
         long duration = Math.Max(PlaybackStatus.Duration, playback.Duration);
         long position = ended ? duration : Math.Clamp(playback.Position, 0, Math.Max(0, duration));
@@ -317,6 +342,7 @@ public partial class MainViewModel {
         }
         VideoPreviewRevision++;
         OnPropertyChanged(nameof(VideoPreviewRevision));
+        AcceptVideoEditorFrame();
     }
 
     // меняет неподвижный кадр перемотки и возвращает живой кадр только после первого обновления
@@ -338,6 +364,7 @@ public partial class MainViewModel {
     // прекращает публикацию и освобождает один источник перед заменой файла или закрытием окна
     private void ReleaseVideoPlayback() {
         videoPlaybackGeneration++;
+        InvalidateVideoEditorSource();
         if (videoPlaybackTimer is not null) {
             videoPlaybackTimer.Stop();
             videoPlaybackTimer.Tick -= VideoPlaybackTimer_OnTick;
@@ -348,6 +375,7 @@ public partial class MainViewModel {
         videoWantsToPlay = false;
         videoWasPlaying = false;
         videoRestarting = false;
+        videoRestartOnPlay = false;
         VideoPlaybackSession? previous = videoPlayback;
         videoPlayback = null;
         previous?.Dispose();
