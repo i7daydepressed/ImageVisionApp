@@ -64,6 +64,7 @@ public partial class MainViewModel {
     public void DisposeMediaPreviews() {
         mediaPreviewsDisposed = true;
         ReleaseVideoPlayback();
+        videoPreviewExecutor?.Dispose();
         Bitmap? original = OriginalImage;
         Bitmap? modified = ModifiedImage;
         Bitmap? video = VideoFirstFrame;

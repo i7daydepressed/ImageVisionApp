@@ -1,5 +1,7 @@
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Data;
 using Avalonia.Layout;
 using ImageVisionApp.ViewModels;
 
@@ -38,6 +40,12 @@ public partial class MainWindow {
         navigation.Children.Add(informationPageButton);
         navigation.Children.Add(editingPageButton);
         navigation.Children.Add(analysisPageButton);
+        Button settings = new() { Content = "⚙" };
+        AutomationProperties.SetName(settings, "Настройки медиаконтейнера");
+        ToolTip.SetTip(settings, "Настройки медиаконтейнера");
+        settings.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
+        settings.Click += OpenMediaSettingsButton_OnClick;
+        navigation.Children.Add(settings);
         return navigation;
     }
 

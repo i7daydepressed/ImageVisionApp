@@ -1,5 +1,4 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Avalonia;
@@ -15,9 +14,13 @@ internal readonly record struct VideoEditorStep(
 
 internal sealed class VideoEditorPlan {
     private readonly VideoEditorStep[] steps;
-    private readonly VideoEditorStep[]? adjustmentSteps;
     private readonly int clockwiseQuarterTurns;
+    private readonly bool useLookup;
+    private readonly object lookupGate = new();
+    private readonly VideoEditorStep[]? adjustmentSteps;
     private byte[]? channelLookup;
+    private readonly int scratchBytesPerPixel;
+    private readonly int scratchExtraBytes;
 
     public long Revision { get; }
     public bool HasSteps { get; }
@@ -29,7 +32,7 @@ internal sealed class VideoEditorPlan {
         HasSteps = steps.Length != 0;
         this.steps = (VideoEditorStep[])steps.Clone();
         List<VideoEditorStep> adjustments = new(steps.Length);
-        bool canUseLookup = true;
+        useLookup = true;
         foreach (VideoEditorStep step in steps) {
             if (step.Type == ImageOperationType.Rotation) {
                 clockwiseQuarterTurns = (clockwiseQuarterTurns + (int)step.Parameter / 90) % 4;
@@ -38,27 +41,52 @@ internal sealed class VideoEditorPlan {
                 adjustments.Add(step);
             }
             else {
-                canUseLookup = false;
+                useLookup = false;
+            }
+            scratchBytesPerPixel = Math.Max(scratchBytesPerPixel, step.Type switch {
+                // градиент и шляпы одновременно держат два RGBA-входа и один RGB-выход
+                ImageOperationType.MorphologicalGradient or ImageOperationType.BlackHat or ImageOperationType.TopHat => 11,
+                ImageOperationType.Sharpen or ImageOperationType.MotionBlur or ImageOperationType.Emboss or
+                    ImageOperationType.Median or ImageOperationType.CustomFilter => 7,
+                _ => 0
+            });
+            if (step.Type == ImageOperationType.Median) {
+                scratchExtraBytes = 9;
             }
         }
-        if (canUseLookup) {
+        if (useLookup && adjustments.Count != 0) {
             adjustmentSteps = adjustments.ToArray();
         }
+    }
+
+    // оцениваем одновременно живые временные пиксели отдельно от входного кадра
+    public long GetScratchBytes(PixelSize size) {
+        long buffer = VideoEditorFrame.GetBufferBytes(size);
+        return useLookup
+            ? clockwiseQuarterTurns == 0 ? 0 : buffer
+            : buffer / 4 * Math.Max(4, scratchBytesPerPixel) + scratchExtraBytes;
     }
 
     // сохраняем быстрый путь трех операций, в смешанной очереди выполняем каждый шаг на своем месте
     public VideoEditorGeometry Apply(VideoEditorFrame frame) {
         VideoEditorGeometry geometry = new(frame.Size, clockwiseQuarterTurns);
-        if (adjustmentSteps is null) {
+        if (!useLookup) {
             frame.ApplyOperations(steps, geometry.OutputSize);
             return geometry;
         }
 
-        if (adjustmentSteps.Length != 0) {
-            frame.Apply(channelLookup ??= ImageProcessingService.CreateVideoAdjustmentLookup(adjustmentSteps));
+        if (adjustmentSteps is not null) {
+            frame.Apply(GetAdjustmentLookup(adjustmentSteps));
         }
         frame.Rotate(geometry);
         return geometry;
+    }
+
+    // один обработчик строит таблицу, при сбое следующий кадр может повторить попытку
+    private byte[] GetAdjustmentLookup(VideoEditorStep[] steps) {
+        lock (lookupGate) {
+            return channelLookup ??= ImageProcessingService.CreateVideoAdjustmentLookup(steps);
+        }
     }
 }
 
@@ -74,8 +102,11 @@ internal sealed class VideoEditorFrame : IDisposable {
         Size = size;
         stride = checked(size.Width * 4);
         length = checked(stride * size.Height);
-        pixels = ArrayPool<byte>.Shared.Rent(length);
+        pixels = GC.AllocateUninitializedArray<byte>(length);
     }
+
+    // размер плотного BGRA-кадра известен до выделения массива
+    public static long GetBufferBytes(PixelSize size) => (long)size.Width * size.Height * 4;
 
     // копируем исходные пиксели до того, как плеер перепишет свой bitmap
     public static VideoEditorFrame Capture(Bitmap source) {
@@ -117,7 +148,7 @@ internal sealed class VideoEditorFrame : IDisposable {
         if (result.Length != length) {
             throw new InvalidOperationException("Получен неполный буфер видеокадра");
         }
-        result.CopyTo(pixels, 0);
+        pixels = result;
         Size = outputSize;
         stride = checked(outputSize.Width * 4);
     }
@@ -130,32 +161,25 @@ internal sealed class VideoEditorFrame : IDisposable {
 
         PixelSize outputSize = geometry.OutputSize;
         int outputStride = checked(outputSize.Width * 4);
-        byte[] rotated = ArrayPool<byte>.Shared.Rent(length);
-        try {
-            Span<uint> input = MemoryMarshal.Cast<byte, uint>(pixels.AsSpan(0, length));
-            Span<uint> output = MemoryMarshal.Cast<byte, uint>(rotated.AsSpan(0, length));
-            // следующий пиксель исходной строки идет вдоль столбца или обратно по строке результата
-            int nextPixel = geometry.ClockwiseQuarterTurns switch {
-                1 => outputSize.Width,
-                2 => -1,
-                _ => -outputSize.Width
-            };
-            int inputIndex = 0;
-            for (int y = 0; y < Size.Height; y++) {
-                PixelPoint start = geometry.MapPixel(new PixelPoint(0, y));
-                int outputIndex = start.Y * outputSize.Width + start.X;
-                for (int x = 0; x < Size.Width; x++) {
-                    output[outputIndex] = input[inputIndex++];
-                    outputIndex += nextPixel;
-                }
+        byte[] rotated = GC.AllocateUninitializedArray<byte>(length);
+        Span<uint> input = MemoryMarshal.Cast<byte, uint>(pixels.AsSpan(0, length));
+        Span<uint> output = MemoryMarshal.Cast<byte, uint>(rotated.AsSpan(0, length));
+        // следующий пиксель исходной строки идет вдоль столбца или обратно по строке результата
+        int nextPixel = geometry.ClockwiseQuarterTurns switch {
+            1 => outputSize.Width,
+            2 => -1,
+            _ => -outputSize.Width
+        };
+        int inputIndex = 0;
+        for (int y = 0; y < Size.Height; y++) {
+            PixelPoint start = geometry.MapPixel(new PixelPoint(0, y));
+            int outputIndex = start.Y * outputSize.Width + start.X;
+            for (int x = 0; x < Size.Width; x++) {
+                output[outputIndex] = input[inputIndex++];
+                outputIndex += nextPixel;
             }
         }
-        catch {
-            ArrayPool<byte>.Shared.Return(rotated);
-            throw;
-        }
 
-        ArrayPool<byte>.Shared.Return(pixels);
         pixels = rotated;
         Size = outputSize;
         stride = outputStride;
@@ -174,7 +198,7 @@ internal sealed class VideoEditorFrame : IDisposable {
     }
 
     // освобождаем буфер после публикации результата или отмены запроса
-    public void Dispose() => ArrayPool<byte>.Shared.Return(pixels);
+    public void Dispose() => pixels = [];
 
     private sealed class CaptureBuffer : ILockedFramebuffer {
         private GCHandle handle;

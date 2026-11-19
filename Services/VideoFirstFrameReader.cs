@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using Avalonia;
 using OpenCvSharp;
 
 namespace ImageVisionApp.Services;
@@ -35,7 +36,14 @@ internal static class VideoFirstFrameReader {
             }
         }
 
-        if (!Cv2.ImEncode(".png", frame, out byte[] previewPng) || previewPng.Length == 0) {
+        PixelSize previewSize = VideoPreviewDimensions.Fit(new PixelSize(frame.Width, frame.Height));
+        using Mat? reduced = previewSize.Width == frame.Width && previewSize.Height == frame.Height ? null : new Mat();
+        if (reduced is not null) {
+            Cv2.Resize(frame, reduced, new OpenCvSharp.Size(previewSize.Width, previewSize.Height),
+                interpolation: InterpolationFlags.Area);
+        }
+
+        if (!Cv2.ImEncode(".png", reduced ?? frame, out byte[] previewPng) || previewPng.Length == 0) {
             throw new InvalidDataException("Не удалось подготовить кадр для показа");
         }
 

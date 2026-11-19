@@ -119,6 +119,7 @@ public partial class MainViewModel {
             playback.SetPaused(true);
             RefreshVideoPlayback();
         }
+        RetryDeferredVideoEditorFrame();
     }
 
     // внутри ролика сохраняем состояние плеера, на паузе и у правой границы читаем подтвержденный кадр
@@ -267,6 +268,7 @@ public partial class MainViewModel {
             videoRestarting = false;
         }
         bool ended = state == VLCState.Ended && !videoRestarting;
+        bool justEnded = ended && videoWantsToPlay;
         if (ended) {
             videoWantsToPlay = false;
         }
@@ -277,6 +279,9 @@ public partial class MainViewModel {
         videoWasPlaying = isPlaying;
         if (!videoWantsToPlay) {
             KeepVideoEditorResultForPause();
+            if (justEnded) {
+                RetryDeferredVideoEditorFrame();
+            }
         }
 
         long duration = Math.Max(PlaybackStatus.Duration, playback.Duration);

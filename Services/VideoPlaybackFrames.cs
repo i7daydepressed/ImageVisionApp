@@ -8,7 +8,6 @@ namespace ImageVisionApp.Services;
 
 // передаёт кадры из потока декодера в UI, удерживая только последний готовый кадр
 internal sealed class VideoPlaybackFrames : IDisposable {
-    private const int PreviewLongSide = 1280;
     private const int Alignment = 32;
     private readonly object frameLock = new();
     private readonly PixelSize visibleSize;
@@ -33,9 +32,9 @@ internal sealed class VideoPlaybackFrames : IDisposable {
 
         lock (frameLock) {
             // VLC может передать закодированные размеры с добавочными строками за краем изображения.
-            double scale = Math.Min(1, (double)PreviewLongSide / Math.Max(visibleSize.Width, visibleSize.Height));
-            width = PreviewDimension(visibleSize.Width, scale);
-            height = PreviewDimension(visibleSize.Height, scale);
+            PixelSize previewSize = VideoPreviewDimensions.Fit(visibleSize);
+            width = previewSize.Width;
+            height = previewSize.Height;
             stride = Align(width * 4);
             int scanlines = Align(height);
             try {
@@ -56,10 +55,6 @@ internal sealed class VideoPlaybackFrames : IDisposable {
             return 1;
         }
     }
-
-    // оставляет парные размеры при преобразовании из цветовых форматов 4:2:0
-    private static int PreviewDimension(int input, double scale) =>
-        Math.Max(1, (int)Math.Round(input * scale) & ~1);
 
     // округляет шаг строки и объём буфера до нативной границы
     private static int Align(int value) => (value + Alignment - 1) & ~(Alignment - 1);

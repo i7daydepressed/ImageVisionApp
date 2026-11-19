@@ -1,18 +1,15 @@
 using System;
 using System.Linq;
-using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Threading;
 using ImageVisionApp.Models;
 using ImageVisionApp.Services;
 
 namespace ImageVisionApp.ViewModels;
 
 public partial class MainViewModel {
-    private sealed record VideoEditorRequest(
-        MediaDocument Document, VideoEditorPlan Plan, long Source, long Frame, VideoEditorFrame Pixels);
-
     private VideoEditorPlan videoEditorPlan = new(0, []);
     private long videoEditorSource;
     private long videoEditorFrame;
@@ -20,17 +17,19 @@ public partial class MainViewModel {
     private bool videoEditorWaitingForFrame;
     private bool videoEditorVisible;
     private bool videoEditorOutputVisible;
-    private bool processingVideoEditor;
-    private VideoEditorRequest? requestedVideoEditor;
+    private bool videoEditorFrameDeferred;
+    private VideoPreviewExecutor? videoPreviewExecutor;
     private WriteableBitmap? videoEditorOutput;
     private VideoEditorGeometry videoEditorOutputGeometry;
     private string? videoEditorError;
+    private string? videoEditorLatestFailure;
 
     public Bitmap? VideoEditorPreviewFrame => videoEditorVisible && !videoEditorWaitingForFrame
         ? videoEditorPlan.HasSteps ? videoEditorOutputVisible ? videoEditorOutput : null : VideoPreviewFrame
         : null;
 
     public int VideoEditorPreviewRevision { get; private set; }
+    internal VideoPreviewSettings PreviewSettings { get; private set; } = VideoPreviewSettings.Default;
 
     internal VideoEditorGeometry? CurrentVideoEditorGeometry => VideoEditorPreviewFrame is { } frame
         ? videoEditorPlan.HasSteps ? videoEditorOutputGeometry : new VideoEditorGeometry(frame.PixelSize, 0)
@@ -53,7 +52,7 @@ public partial class MainViewModel {
         }
         else {
             videoEditorSource++;
-            ClearVideoEditorRequest();
+            InvalidateVideoEditorRequests();
             videoEditorOutputVisible = false;
             NotifyVideoEditorPreview();
         }
@@ -65,7 +64,7 @@ public partial class MainViewModel {
             .Select(step => new VideoEditorStep(step.Type, step.Parameter, step.ElementSnapshot, step.KernelSnapshot))
             .ToArray();
         videoEditorPlan = new(videoEditorPlan.Revision + 1, steps);
-        ClearVideoEditorRequest();
+        InvalidateVideoEditorRequests();
         videoEditorOutputVisible = false;
         if (!videoEditorWaitingForFrame) {
             videoEditorError = null;
@@ -80,18 +79,19 @@ public partial class MainViewModel {
         videoEditorWaitingForFrame = true;
         videoEditorOutputVisible = false;
         videoEditorError = null;
-        ClearVideoEditorRequest();
+        InvalidateVideoEditorRequests();
         NotifyVideoEditorPreview();
     }
 
     // связываем очередь с исходным кадром, который только что принял путь предпросмотра
     private void AcceptVideoEditorFrame() {
         videoEditorFrame++;
-        bool updatePreview = videoEditorWaitingForFrame || !videoEditorPlan.HasSteps || videoEditorError is not null;
+        videoEditorLatestFailure = null;
+        bool updatePreview = videoEditorWaitingForFrame || !videoEditorPlan.HasSteps;
         videoEditorWaitingForFrame = false;
-        videoEditorError = null;
         if (videoEditorVisible && IsVideoOpen) {
             if (updatePreview) {
+                videoEditorError = null;
                 NotifyVideoEditorPreview();
             }
             RequestVideoEditorFrame();
@@ -100,65 +100,99 @@ public partial class MainViewModel {
 
     // на паузе оставляем видимым только результат последнего принятого кадра
     private void KeepVideoEditorResultForPause() {
-        if (videoEditorOutputVisible && videoEditorOutputFrame != videoEditorFrame) {
+        if (videoEditorLatestFailure is { } failure) {
+            ShowVideoEditorError(failure);
+        }
+        else if (videoEditorOutputVisible && videoEditorOutputFrame != videoEditorFrame) {
             videoEditorOutputVisible = false;
             NotifyVideoEditorPreview();
         }
     }
 
-    // готовим собственную копию пикселей и заменяем только ожидающий запрос
+    // передаем собственный снимок только после резерва, при перегрузке держим номер актуального кадра
     private void RequestVideoEditorFrame() {
         if (!videoEditorVisible || videoEditorWaitingForFrame || !videoEditorPlan.HasSteps ||
             CurrentDocument is not { Kind: MediaKind.Video } document || VideoPreviewFrame is not { } bitmap) {
+            videoEditorFrameDeferred = false;
             return;
         }
 
-        ClearVideoEditorRequest();
-        try {
-            VideoEditorFrame pixels = VideoEditorFrame.Capture(bitmap);
-            requestedVideoEditor = new(document, videoEditorPlan, videoEditorSource, videoEditorFrame, pixels);
+        VideoEditorPlan plan = videoEditorPlan;
+        VideoPreviewFrameKey key = new(document, videoEditorSource, plan.Revision, videoEditorFrame);
+        VideoPreviewExecutor executor = videoPreviewExecutor ??= new(PreviewSettings,
+            action => Dispatcher.UIThread.Post(action, DispatcherPriority.Background),
+            DrainVideoEditorResult, RetryDeferredVideoEditorFrame);
+        VideoPreviewAdmission admission = executor.TrySubmit(key, bitmap.PixelSize, plan.GetScratchBytes(bitmap.PixelSize),
+            () => VideoEditorFrame.Capture(bitmap), plan.Apply);
+        videoEditorFrameDeferred = admission == VideoPreviewAdmission.Deferred;
+        if (admission == VideoPreviewAdmission.TooLarge) {
+            HandleVideoEditorFrameFailure(key, "Бюджета буферов предпросмотра недостаточно для обработки кадра");
         }
-        catch (Exception) {
-            ShowVideoEditorError("Не удалось скопировать видеокадр для обработки");
-            return;
-        }
-
-        if (!processingVideoEditor) {
-            _ = ProcessVideoEditorRequestsAsync();
+        else if (admission == VideoPreviewAdmission.CaptureFailed) {
+            HandleVideoEditorFrameFailure(key, "Не удалось скопировать видеокадр для обработки");
         }
     }
 
-    // обрабатываем кадры по одному, берем последнюю копию и проверяем ее актуальность перед выводом
-    private async Task ProcessVideoEditorRequestsAsync() {
-        processingVideoEditor = true;
+    // получаем результат общей очереди и выводим только подходящий кадр или актуальную ошибку
+    private void DrainVideoEditorResult(VideoPreviewFrameKey key, VideoEditorFrame? pixels,
+        VideoEditorGeometry geometry, Exception? error) {
+        if (!IsCurrentVideoEditorRequest(key)) {
+            return;
+        }
+        if (error is not null) {
+            HandleVideoEditorFrameFailure(key, "Не удалось обработать видеокадр");
+            return;
+        }
+
         try {
-            while (requestedVideoEditor is { } request) {
-                requestedVideoEditor = null;
-                using VideoEditorFrame pixels = request.Pixels;
-                try {
-                    VideoEditorGeometry geometry = await Task.Run(() => request.Plan.Apply(pixels));
-                    if (IsCurrentVideoEditorRequest(request)) {
-                        PublishVideoEditorOutput(pixels, geometry, request.Frame);
-                    }
-                }
-                catch (Exception) {
-                    if (IsCurrentVideoEditorRequest(request)) {
-                        ShowVideoEditorError("Не удалось обработать видеокадр");
-                    }
-                }
+            if (pixels is not null) {
+                PublishVideoEditorOutput(pixels, geometry, key.Frame);
             }
         }
-        finally {
-            processingVideoEditor = false;
+        catch (Exception) {
+            HandleVideoEditorFrameFailure(key, "Не удалось показать обработанный видеокадр");
+        }
+    }
+
+    // сохраняем единичный сбой текущего кадра для паузы, во время показа оставляем удачный результат
+    private void HandleVideoEditorFrameFailure(VideoPreviewFrameKey key, string message) {
+        if (key.Frame == videoEditorFrame) {
+            videoEditorLatestFailure = message;
+        }
+        if (!videoWantsToPlay || !videoEditorOutputVisible) {
+            ShowVideoEditorError(message);
+        }
+        else if (key.Frame == videoEditorFrame && videoEditorError != message) {
+            videoEditorError = message;
+            NotifyVideoEditorPreview();
         }
     }
 
     // в живом потоке допускаем пропуски кадров, на паузе нужен последний подтвержденный
-    private bool IsCurrentVideoEditorRequest(VideoEditorRequest request) =>
+    private bool IsCurrentVideoEditorRequest(VideoPreviewFrameKey key) =>
         videoEditorVisible && !videoEditorWaitingForFrame &&
-        ReferenceEquals(CurrentDocument, request.Document) &&
-        videoEditorPlan.Revision == request.Plan.Revision && videoEditorSource == request.Source &&
-        (videoWantsToPlay || videoEditorFrame == request.Frame);
+        ReferenceEquals(CurrentDocument, key.Document) &&
+        videoEditorPlan.Revision == key.Plan && videoEditorSource == key.Source &&
+        (videoWantsToPlay || videoEditorFrame == key.Frame);
+
+    // на паузе забираем актуальный кадр после освобождения памяти, даже если VLC больше не обновляет его
+    private void RetryDeferredVideoEditorFrame() {
+        if (videoEditorFrameDeferred && !videoWantsToPlay) {
+            RequestVideoEditorFrame();
+        }
+    }
+
+    // меняем настройки окна и пересылаем текущий кадр, если его результат еще не показан
+    internal void ApplyVideoPreviewSettings(VideoPreviewSettings settings) {
+        if (settings == PreviewSettings) {
+            return;
+        }
+        PreviewSettings = settings;
+        videoPreviewExecutor?.Configure(settings);
+        if (!videoEditorOutputVisible || videoEditorOutputFrame != videoEditorFrame) {
+            RequestVideoEditorFrame();
+        }
+    }
 
     // переносим строки в bitmap и публикуем геометрию того же результата
     private void PublishVideoEditorOutput(VideoEditorFrame pixels, VideoEditorGeometry geometry, long frame) {
@@ -181,24 +215,35 @@ public partial class MainViewModel {
         videoEditorOutputGeometry = geometry;
         videoEditorOutputFrame = frame;
         videoEditorOutputVisible = true;
-        videoEditorError = null;
-        NotifyVideoEditorPreview();
-        if (!ReferenceEquals(previous, next)) {
-            previous?.Dispose();
+        if (frame == videoEditorFrame) {
+            videoEditorLatestFailure = null;
+        }
+        videoEditorError = videoEditorLatestFailure;
+        try {
+            NotifyVideoEditorPreview();
+        }
+        finally {
+            if (!ReferenceEquals(previous, next)) {
+                previous?.Dispose();
+            }
         }
     }
 
     // сообщаем об ошибке редактора отдельно от состояния исходного плеера
     private void ShowVideoEditorError(string message) {
+        if (videoEditorError == message && !videoEditorOutputVisible) {
+            return;
+        }
         videoEditorOutputVisible = false;
         videoEditorError = message;
         NotifyVideoEditorPreview();
     }
 
-    // освобождаем только ожидающий снимок, запущенный расчет владеет своим буфером
-    private void ClearVideoEditorRequest() {
-        requestedVideoEditor?.Pixels.Dispose();
-        requestedVideoEditor = null;
+    // снимаем ожидающий повтор и запрещаем выдачу кадров прошлого документа, источника или плана
+    private void InvalidateVideoEditorRequests() {
+        videoEditorFrameDeferred = false;
+        videoEditorLatestFailure = null;
+        videoPreviewExecutor?.Invalidate();
     }
 
     // обновляем источник, статус и отрисовку переиспользуемого изображения
@@ -212,6 +257,7 @@ public partial class MainViewModel {
 
     // освобождаем результат старого документа и возвращаем пустой план
     private void ResetVideoEditorDocument() {
+        InvalidateVideoEditorRequests();
         videoEditorPlan = new(videoEditorPlan.Revision + 1, []);
         videoEditorWaitingForFrame = false;
         videoEditorOutputVisible = false;
