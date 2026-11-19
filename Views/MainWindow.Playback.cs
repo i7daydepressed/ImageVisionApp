@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -7,6 +8,7 @@ using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
+using Avalonia.VisualTree;
 using ImageVisionApp.Models;
 using ImageVisionApp.ViewModels;
 
@@ -35,6 +37,7 @@ public partial class MainWindow {
     private readonly TextBlock videoNotice = new() { VerticalAlignment = VerticalAlignment.Center };
     private bool updatingVideoTimeline;
     private bool videoSpaceHeld;
+    private bool videoPreviewUpHeld;
     private MediaDocument? videoDragDocument;
 
     // создаёт один таймлайн над страницами, который не пересоздаётся при навигации
@@ -50,7 +53,10 @@ public partial class MainWindow {
         videoPlayButton.Click += (_, _) => (DataContext as MainViewModel)?.ToggleVideoPlayback();
         AddHandler(KeyDownEvent, VideoPlayback_OnKeyDown, RoutingStrategies.Tunnel);
         AddHandler(KeyUpEvent, VideoPlayback_OnKeyUp, RoutingStrategies.Tunnel);
-        Deactivated += (_, _) => videoSpaceHeld = false;
+        Deactivated += (_, _) => {
+            videoSpaceHeld = false;
+            videoPreviewUpHeld = false;
+        };
         videoTimeline.ValueChanged += VideoTimeline_OnValueChanged;
         videoTimeline.AddHandler(PointerPressedEvent, VideoTimeline_OnPointerPressed, RoutingStrategies.Tunnel);
         videoTimeline.AddHandler(PointerReleasedEvent, (_, _) => FinishVideoSeek(), RoutingStrategies.Bubble, true);
@@ -73,6 +79,18 @@ public partial class MainWindow {
             return;
         }
 
+        if (IsVideoPreviewUpKey(e)) {
+            if (viewModel.IsVideoOpen && editingPage is not null && ReferenceEquals(pageHost.Content, editingPage) &&
+                !UsesUpForInput(e.Source)) {
+                if (!videoPreviewUpHeld) {
+                    videoPreviewUpHeld = true;
+                    viewModel.VideoEditorPreviewTabIndex = viewModel.VideoEditorPreviewTabIndex == 0 ? 1 : 0;
+                }
+                e.Handled = true;
+            }
+            return;
+        }
+
         switch (e.Key) {
             case Key.Left or Key.Right when viewModel.PlaybackStatus.CanSeek:
                 int offset = e.Key == Key.Left ? -VideoKeyboardSeekMilliseconds : VideoKeyboardSeekMilliseconds;
@@ -89,13 +107,27 @@ public partial class MainWindow {
         }
     }
 
-    // завершает одиночное нажатие пробела, чтобы удержание не переключало плеер несколько раз
+    // завершает удержание клавиш, чтобы каждое нажатие переключало состояние только один раз
     private void VideoPlayback_OnKeyUp(object? sender, KeyEventArgs e) {
         if (e.Key == Key.Space && videoSpaceHeld) {
             videoSpaceHeld = false;
             e.Handled = true;
         }
+        if (videoPreviewUpHeld && IsVideoPreviewUpKey(e)) {
+            videoPreviewUpHeld = false;
+            e.Handled = true;
+        }
     }
+
+    // используем физическую стрелку, если платформа сообщила положение клавиши
+    private static bool IsVideoPreviewUpKey(KeyEventArgs e) =>
+        e.PhysicalKey == PhysicalKey.ArrowUp || (e.PhysicalKey == PhysicalKey.None && e.Key == Key.Up);
+
+    // оставляем стрелку полям ввода, ползункам и спискам, включая их вложенные элементы
+    private static bool UsesUpForInput(object? source) =>
+        source is Visual visual && visual.GetSelfAndVisualAncestors().Any(control =>
+            control is TextBox or NumericUpDown or RangeBase or ComboBoxItem or ListBoxItem or TreeView or TreeViewItem or
+                MenuItem or RadioButton or (SelectingItemsControl and not TabControl and not TabStrip));
 
     // запоминает начало жеста на ползунке или дорожке, оставляя подготовку кадра до отпускания
     private void VideoTimeline_OnPointerPressed(object? sender, PointerPressedEventArgs e) {

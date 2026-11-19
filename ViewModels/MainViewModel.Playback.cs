@@ -108,7 +108,7 @@ public partial class MainViewModel {
             videoRestarting = playback.Restart();
             if (!videoRestarting) {
                 videoWantsToPlay = false;
-                ShowVideoEditorError("Не удалось получить видеокадр");
+                ShowVideoEditorSourceError("Не удалось получить видеокадр");
             }
         }
         RefreshVideoPlayback();
@@ -214,7 +214,7 @@ public partial class MainViewModel {
                     if (requestedVideoSeek == request) {
                         requestedVideoSeek = null;
                         UpdatePlaybackStatus(PlaybackStatus with { CanPlay = true, Notice = "Не удалось перейти к кадру" });
-                        ShowVideoEditorError("Не удалось получить видеокадр");
+                        ShowVideoEditorSourceError("Не удалось получить видеокадр");
                     }
                 }
                 finally {

@@ -290,39 +290,67 @@ public partial class MainWindow : Window {
         return new Grid { Children = { photoPreview, frame } };
     }
 
-    // оставляем сравнение фото, рядом с результатом видео показываем статус или время расчета
+    // у видео свои виды с независимыми кадрами, выбор не отправляет команды плееру
     private static Grid CreateEditorDocumentPreview(Control photoPreview) {
         photoPreview.Bind(IsVisibleProperty,
             new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
+
+        VideoPreviewImage original = new() { Stretch = Stretch.Uniform, Margin = new Thickness(10) };
+        original.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoEditorSourceReady)));
+        original.Bind(Image.SourceProperty,
+            CompiledBinding.Create<MainViewModel, Bitmap?>(viewModel => viewModel.VideoPreviewFrame));
+        original.Bind(VideoPreviewImage.RevisionProperty,
+            CompiledBinding.Create<MainViewModel, int>(viewModel => viewModel.VideoPreviewRevision));
+        Grid originalPreview = new() {
+            Children = { original, CreateEditorPreviewNotice(viewModel => viewModel.VideoEditorSourceNotice) }
+        };
+
         VideoPreviewImage frame = new() { Stretch = Stretch.Uniform, Margin = new Thickness(10) };
         frame.Bind(Image.SourceProperty,
             CompiledBinding.Create<MainViewModel, Bitmap?>(viewModel => viewModel.VideoEditorPreviewFrame));
         frame.Bind(VideoPreviewImage.RevisionProperty,
             CompiledBinding.Create<MainViewModel, int>(viewModel => viewModel.VideoEditorPreviewRevision));
 
-        TextBlock notice = CreateBoundText(viewModel => viewModel.VideoEditorNotice);
-        notice.HorizontalAlignment = HorizontalAlignment.Center;
-        notice.VerticalAlignment = VerticalAlignment.Center;
-        notice.Bind(IsVisibleProperty,
-            new Binding(nameof(MainViewModel.VideoEditorNotice)) { Converter = ObjectConverters.IsNotNull });
-        TextBlock processingTime = CreateBoundText(viewModel => viewModel.VideoEditorProcessingTime);
-        processingTime.Margin = new Thickness(10, 0, 10, 10);
-        processingTime.Bind(IsVisibleProperty,
-            new Binding(nameof(MainViewModel.VideoEditorProcessingTime)) { Converter = ObjectConverters.IsNotNull });
-        Grid.SetRow(frame, 1);
-        Grid.SetRow(notice, 1);
-        Grid.SetRow(processingTime, 2);
-        Grid videoPreview = new() {
-            RowDefinitions = new RowDefinitions("Auto,*,Auto"),
+        Grid editedPreview = new() {
             Children = {
-                new TextBlock { Text = "Результат редактирования", Margin = new Thickness(10) },
                 frame,
-                notice,
-                processingTime
+                CreateEditorPreviewNotice(viewModel => viewModel.VideoEditorNotice)
             }
+        };
+        TabControl videoTabs = new() {
+            ItemsPanel = new FuncTemplate<Panel?>(() => new WrapPanel {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Center
+            }),
+            Items = {
+                new TabItem { Header = "Оригинал", Content = originalPreview },
+                new TabItem { Header = "Изменённое", Content = editedPreview }
+            },
+            SelectedIndex = 1
+        };
+        videoTabs.Bind(SelectingItemsControl.SelectedIndexProperty,
+            new Binding(nameof(MainViewModel.VideoEditorPreviewTabIndex)) { Mode = BindingMode.TwoWay });
+        TextBlock processingTime = CreateBoundText(viewModel => viewModel.VideoEditorVisibleProcessingTime);
+        processingTime.Margin = new Thickness(10, 0);
+        processingTime.VerticalAlignment = VerticalAlignment.Center;
+        processingTime.Bind(IsVisibleProperty,
+            new Binding(nameof(MainViewModel.VideoEditorVisibleProcessingTime)) { Converter = ObjectConverters.IsNotNull });
+        Grid.SetRow(processingTime, 1);
+        Grid videoPreview = new() {
+            RowDefinitions = new RowDefinitions("*,30"),
+            Children = { videoTabs, processingTime }
         };
         videoPreview.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
         return new Grid { Children = { photoPreview, videoPreview } };
+    }
+
+    // центрируем статус поверх его вида и скрываем подпись при пустом сообщении
+    private static TextBlock CreateEditorPreviewNotice(Expression<Func<MainViewModel, string?>> expression) {
+        TextBlock notice = CreateBoundText(expression);
+        notice.HorizontalAlignment = HorizontalAlignment.Center;
+        notice.VerticalAlignment = VerticalAlignment.Center;
+        notice.Bind(IsVisibleProperty, CompiledBinding.Create(expression, converter: ObjectConverters.IsNotNull));
+        return notice;
     }
 
     private static TabControl CreateImageTabs() {

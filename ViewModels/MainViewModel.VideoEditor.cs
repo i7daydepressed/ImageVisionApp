@@ -29,14 +29,29 @@ public partial class MainViewModel {
     private VideoPreviewExecutor? videoPreviewExecutor;
     private WriteableBitmap? videoEditorOutput;
     private VideoEditorGeometry videoEditorOutputGeometry;
+    private string? videoEditorSourceError;
     private string? videoEditorError;
     private string? videoEditorLatestFailure;
+    private int videoEditorPreviewTabIndex = 1;
 
     public Bitmap? VideoEditorPreviewFrame => videoEditorVisible && !videoEditorWaitingForFrame
         ? videoEditorPlan.HasSteps ? videoEditorOutputVisible ? videoEditorOutput : null : VideoPreviewFrame
         : null;
 
     public int VideoEditorPreviewRevision { get; private set; }
+    public int VideoEditorPreviewTabIndex {
+        get => videoEditorPreviewTabIndex;
+        set {
+            if ((value is 0 or 1) && SetProperty(ref videoEditorPreviewTabIndex, value)) {
+                OnPropertyChanged(nameof(VideoEditorVisibleProcessingTime));
+            }
+        }
+    }
+
+    public bool IsVideoEditorSourceReady => !videoEditorWaitingForFrame;
+    public string? VideoEditorSourceNotice => videoEditorSourceError ??
+        (videoEditorWaitingForFrame ? "Ожидание видеокадра…" : null);
+
     internal long VideoEditorChainInput { get; private set; }
     internal VideoPreviewSettings PreviewSettings { get; private set; } = VideoPreviewSettings.Default;
     private VideoPreviewSettings RuntimePreviewSettings => PreviewSettings.MaximumWorkers == 0
@@ -46,11 +61,11 @@ public partial class MainViewModel {
         ? videoEditorPlan.HasSteps ? videoEditorOutputGeometry : new VideoEditorGeometry(frame.PixelSize, 0)
         : null;
 
-    public string? VideoEditorNotice => videoEditorError ?? (videoEditorWaitingForFrame
-        ? "Ожидание видеокадра…"
-        : videoEditorPlan.HasSteps && !videoEditorOutputVisible ? "Подготовка результата…" : null);
+    public string? VideoEditorNotice => VideoEditorSourceNotice ?? videoEditorError ??
+        (videoEditorPlan.HasSteps && !videoEditorOutputVisible ? "Подготовка результата…" : null);
 
     public string? VideoEditorProcessingTime { get; private set; }
+    public string? VideoEditorVisibleProcessingTime => VideoEditorPreviewTabIndex == 1 ? VideoEditorProcessingTime : null;
 
     // останавливаем запросы вне редактора, при возврате берем текущий подтвержденный кадр
     internal void SetVideoEditorVisible(bool visible) {
@@ -93,8 +108,10 @@ public partial class MainViewModel {
         videoEditorSource++;
         videoEditorWaitingForFrame = true;
         videoEditorOutputVisible = false;
+        videoEditorSourceError = null;
         videoEditorError = null;
         InvalidateVideoEditorRequests();
+        NotifyVideoEditorSource();
         NotifyVideoEditorPreview();
     }
 
@@ -108,13 +125,17 @@ public partial class MainViewModel {
             videoEditorObservation = videoPreviewMeasurements.Id;
             videoEditorOfferedAt = now;
         }
-        bool updatePreview = videoEditorWaitingForFrame || !videoEditorPlan.HasSteps;
+        bool updateSource = videoEditorWaitingForFrame || videoEditorSourceError is not null;
         videoEditorWaitingForFrame = false;
+        videoEditorSourceError = null;
+        if (updateSource) {
+            NotifyVideoEditorSource();
+        }
         if (videoEditorVisible && IsVideoOpen) {
             if (live && videoEditorPlan.HasSteps) {
                 VideoEditorChainInput++;
             }
-            if (updatePreview) {
+            if (updateSource || !videoEditorPlan.HasSteps) {
                 videoEditorError = null;
                 NotifyVideoEditorPreview();
             }
@@ -393,6 +414,19 @@ public partial class MainViewModel {
         NotifyVideoEditorPreview();
     }
 
+    // показываем ошибку получения кадра в обоих видах редактора
+    private void ShowVideoEditorSourceError(string message) {
+        videoEditorSourceError = message;
+        OnPropertyChanged(nameof(VideoEditorSourceNotice));
+        OnPropertyChanged(nameof(VideoEditorNotice));
+    }
+
+    // оригинал становится видимым после подтверждения кадра общим плеером
+    private void NotifyVideoEditorSource() {
+        OnPropertyChanged(nameof(IsVideoEditorSourceReady));
+        OnPropertyChanged(nameof(VideoEditorSourceNotice));
+    }
+
     // снимаем ожидающий повтор и запрещаем выдачу кадров прошлого документа, источника или плана
     private void InvalidateVideoEditorRequests() {
         SetVideoEditorProcessingTime(null);
@@ -424,6 +458,7 @@ public partial class MainViewModel {
         if (VideoEditorProcessingTime != text) {
             VideoEditorProcessingTime = text;
             OnPropertyChanged(nameof(VideoEditorProcessingTime));
+            OnPropertyChanged(nameof(VideoEditorVisibleProcessingTime));
         }
     }
 
@@ -436,10 +471,12 @@ public partial class MainViewModel {
         ResetVideoPreviewAuto();
         videoEditorWaitingForFrame = false;
         videoEditorOutputVisible = false;
+        videoEditorSourceError = null;
         videoEditorError = null;
         WriteableBitmap? previous = videoEditorOutput;
         videoEditorOutput = null;
         videoEditorOutputGeometry = default;
+        NotifyVideoEditorSource();
         NotifyVideoEditorPreview();
         previous?.Dispose();
     }

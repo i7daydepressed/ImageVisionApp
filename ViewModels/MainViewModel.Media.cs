@@ -35,6 +35,7 @@ public partial class MainViewModel {
 
         ReleaseVideoPlayback();
         CurrentDocument = document;
+        VideoEditorPreviewTabIndex = 1;
         CurrentVideoInfo = videoInfo;
         originalImageData = imageData;
         modifiedImageData = imageData;
