@@ -376,7 +376,7 @@ public partial class MainViewModel {
                 RefreshPreparedBeforePlayer();
             }
             else {
-                RetryVideoEditorAfterPreparedBudget();
+                RetryVideoEditorAfterBudget();
             }
             return;
         }
@@ -429,7 +429,7 @@ public partial class MainViewModel {
         if (requestedVideoSeek is null && (isPlaying || videoWasPlaying)) {
             PublishVideoFrame(playback, live);
         }
-        RetryVideoEditorAfterPreparedBudget(live);
+        RetryVideoEditorAfterBudget(live);
         videoWasPlaying = isPlaying;
         if (!videoWantsToPlay) {
             KeepVideoEditorResultForPause();
@@ -571,6 +571,7 @@ public partial class MainViewModel {
             PlaybackStatus = status;
             OnPropertyChanged(nameof(PlaybackStatus));
         }
+        RefreshVideoAnalysisInput();
     }
 
     // прекращает публикацию и освобождает один источник перед заменой файла или закрытием окна

@@ -107,7 +107,7 @@ public partial class MainViewModel {
     public bool HasCannyThresholdError => !TryGetCannyThresholds(out _, out _);
     private bool AreSelectedAnalysisParametersValid => IsRobertsEdgeMethod || !HasCannyThresholdError;
     private bool HasEnabledAnalysisMethods => isEdgesAnalysisEnabled || isSegmentationAnalysisEnabled ||
-        isKeypointAnalysisEnabled || isPlateAnalysisEnabled;
+        isKeypointAnalysisEnabled || !IsVideoOpen && isPlateAnalysisEnabled;
     private bool AreAllAnalysisParametersValid => (!isEdgesAnalysisEnabled || AreSelectedAnalysisParametersValid) &&
         (!isSegmentationAnalysisEnabled || !HasSegmentationValidationError) &&
         (!isKeypointAnalysisEnabled || !HasFastThresholdError);
@@ -175,7 +175,7 @@ public partial class MainViewModel {
         AreAllAnalysisParametersValid && !analysisWorkerRunning;
     public bool HasAnalysisResult => analysisResultImage is not null && analysisResultPng is not null;
     public bool IsAnalysisResultEmpty => !HasAnalysisResult;
-    public bool CanSaveAnalysisResult => !analysisDisposed && HasAnalysisResult && !analysisWorkerRunning;
+    public bool CanSaveAnalysisResult => !analysisDisposed && !IsVideoOpen && HasAnalysisResult && !analysisWorkerRunning;
     public Bitmap? AnalysisResultImage => analysisResultImage;
     public AnalysisEdgeResult? EdgesResult => edgesResult;
     public long AnalysisResultRevision => analysisResultRevision;
@@ -187,6 +187,10 @@ public partial class MainViewModel {
     public async Task RunSelectedAnalysisAsync() {
         Dispatcher.UIThread.VerifyAccess();
         if (!CanRunAnalysis) {
+            return;
+        }
+        if (IsVideoOpen) {
+            await RunVideoAnalysisAsync();
             return;
         }
         analysisDebounce?.Stop();
@@ -207,6 +211,7 @@ public partial class MainViewModel {
             return;
         }
         analysisDisposed = true;
+        ClearVideoAnalysis();
         analysisDebounce?.Stop();
         if (analysisDebounce is not null) {
             analysisDebounce.Tick -= AnalysisDebounce_OnTick;
@@ -284,7 +289,7 @@ public partial class MainViewModel {
     }
 
     private void ScheduleAutoAnalysis() {
-        if (analysisDisposed || !isAutoAnalysisEnabled || !HasAnalysisInput ||
+        if (analysisDisposed || IsVideoOpen || !isAutoAnalysisEnabled || !HasAnalysisInput ||
             !HasEnabledAnalysisMethods || !AreAllAnalysisParametersValid || !HasMissingAnalysisResults) {
             return;
         }
@@ -298,7 +303,7 @@ public partial class MainViewModel {
 
     private void AnalysisDebounce_OnTick(object? sender, EventArgs e) {
         analysisDebounce?.Stop();
-        if (analysisDisposed || !isAutoAnalysisEnabled || !HasAnalysisInput ||
+        if (analysisDisposed || IsVideoOpen || !isAutoAnalysisEnabled || !HasAnalysisInput ||
             !HasEnabledAnalysisMethods || !AreAllAnalysisParametersValid || !HasMissingAnalysisResults) {
             return;
         }
@@ -309,6 +314,11 @@ public partial class MainViewModel {
 
     private void RequestAnalysisComposition() {
         analysisDisplayRevision++;
+        if (IsVideoOpen) {
+            ClearVideoAnalysis();
+            NotifyAnalysisControls();
+            return;
+        }
         ReplaceAnalysisComposition(null, null);
         analysisCompositionRequested = !analysisDisposed;
         if (analysisCompositionRequested) {
@@ -321,7 +331,7 @@ public partial class MainViewModel {
         revision == edgesWorkRevision && inputRevision == AnalysisInputRevision;
 
     private async Task ProcessAnalysisRequestsAsync() {
-        if (analysisWorkerRunning || analysisDisposed) {
+        if (analysisWorkerRunning || analysisDisposed || IsVideoOpen) {
             return;
         }
         analysisWorkerRunning = true;
@@ -329,7 +339,7 @@ public partial class MainViewModel {
         try {
             // один цикл забирает последнюю потребность, флаги не создают очередь отдельных Task
             // версии методов защищают параметры, версия входа общая, версия показа отделяет смену подложки и видимости
-            while (!analysisDisposed && (analysisRunRequested || analysisCompositionRequested)) {
+            while (!analysisDisposed && !IsVideoOpen && (analysisRunRequested || analysisCompositionRequested)) {
                 bool calculate = analysisRunRequested;
                 bool force = analysisForceRunRequested;
                 analysisRunRequested = false;
@@ -385,7 +395,7 @@ public partial class MainViewModel {
                         await CalculatePlateAsync(input, width, height, plateRevision);
                     }
                 }
-                if (analysisDisposed) {
+                if (analysisDisposed || IsVideoOpen) {
                     break;
                 }
 
@@ -542,8 +552,14 @@ public partial class MainViewModel {
                 methods += (methods.Length == 0 ? string.Empty : " + ") +
                     (plateResult.Rectangle is null ? "Номер не найден" : "Найден кандидат на номер");
             }
-            AnalysisStatusMessage = $"Готово: {methods} · {AnalysisInputImage!.PixelSize.Width} × {AnalysisInputImage.PixelSize.Height}" +
+            Bitmap? input = AnalysisInputImage;
+            string frameTime = IsVideoOpen && requestedAnalysisFrame is { } frame
+                ? $" · {FormatVideoAnalysisTime(frame.Position)}" : string.Empty;
+            AnalysisStatusMessage = $"Готово: {methods} · {input?.PixelSize.Width} × {input?.PixelSize.Height}{frameTime}" +
                 (issue.Length == 0 ? string.Empty : " · " + issue);
+        }
+        else if (IsVideoOpen) {
+            RefreshVideoAnalysisStatus();
         }
         else {
             AnalysisStatusMessage = !HasAnalysisInput ? "Откройте изображение"

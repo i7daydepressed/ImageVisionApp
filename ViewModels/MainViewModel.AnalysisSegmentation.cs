@@ -48,8 +48,10 @@ public partial class MainViewModel {
             if (!TryGetSegmentationClusterCount(out int count)) {
                 return "Введите целое N от 2 до 20";
             }
-            if (HasAnalysisInput) {
-                long pixels = (long)AnalysisInputImage!.PixelSize.Width * AnalysisInputImage.PixelSize.Height;
+            var size = IsVideoOpen && TryResolveVideoAnalysisInput(out VideoAnalysisInput video)
+                ? video.Key.Geometry.OutputSize : AnalysisInputImage?.PixelSize;
+            if (size is { } inputSize) {
+                long pixels = (long)inputSize.Width * inputSize.Height;
                 if (pixels < count) {
                     return $"Число пикселей входа: {pixels}; для N={count} их недостаточно";
                 }

@@ -1,4 +1,6 @@
+using System;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Data;
@@ -19,7 +21,6 @@ public partial class MainWindow {
             Margin = new Thickness(12)
         };
         Border methodsCard = CreateAnalysisMethodsCard();
-        methodsCard.Bind(IsEnabledProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
         workspace.Children.Add(methodsCard);
         Border imageCard = CreateAnalysisImageCard();
         Grid.SetColumn(imageCard, 1);
@@ -44,16 +45,27 @@ public partial class MainWindow {
         };
         Grid.SetRow(parametersScroll, 3);
         layout.Children.Add(parametersScroll);
+        IDisposable? parametersTitleVisibility = null;
+
+        // вместе с фото-параметрами скрываем их заголовок даже при смене открытого файла
+        void ShowParameters(string title, StackPanel panel, bool photoOnly = false) {
+            parametersTitleVisibility?.Dispose();
+            parametersTitleVisibility = null;
+            parametersTitle.Text = title;
+            if (photoOnly) {
+                Binding photoVisibility = new(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not };
+                parametersTitleVisibility = parametersTitle.Bind(IsVisibleProperty, photoVisibility);
+                panel.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
+            }
+            parametersScroll.Content = panel;
+        }
 
         CheckBox edges = new CheckBox { Content = "Границы" };
         edges.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(MainViewModel.IsEdgesAnalysisEnabled)) {
             Mode = BindingMode.TwoWay
         });
         Button settings = new Button { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
-        settings.Click += (_, _) => {
-            parametersTitle.Text = "Параметры границ";
-            parametersScroll.Content = CreateEdgeParametersPanel();
-        };
+        settings.Click += (_, _) => ShowParameters("Параметры границ", CreateEdgeParametersPanel());
         Grid edgeRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 4 };
         edgeRow.Children.Add(edges);
         Grid.SetColumn(settings, 1);
@@ -66,10 +78,7 @@ public partial class MainWindow {
             Mode = BindingMode.TwoWay
         });
         Button keypointSettings = new Button { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
-        keypointSettings.Click += (_, _) => {
-            parametersTitle.Text = "Параметры ключевых точек";
-            parametersScroll.Content = CreateFastParametersPanel();
-        };
+        keypointSettings.Click += (_, _) => ShowParameters("Параметры ключевых точек", CreateFastParametersPanel());
         Grid keypointRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 4 };
         keypointRow.Children.Add(keypoints);
         Grid.SetColumn(keypointSettings, 1);
@@ -80,24 +89,19 @@ public partial class MainWindow {
             Mode = BindingMode.TwoWay
         });
         Button plateSettings = new Button { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
-        plateSettings.Click += (_, _) => {
-            parametersTitle.Text = "Параметры поиска номера";
-            parametersScroll.Content = CreatePlateParametersPanel();
-        };
+        plateSettings.Click += (_, _) => ShowParameters("Параметры поиска номера", CreatePlateParametersPanel(), photoOnly: true);
         Grid plateRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 4 };
         plateRow.Children.Add(plate);
         Grid.SetColumn(plateSettings, 1);
         plateRow.Children.Add(plateSettings);
+        plateRow.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
         methods.Children.Add(plateRow);
         CheckBox segmentation = new CheckBox { Content = "Сегментация" };
         segmentation.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(MainViewModel.IsSegmentationAnalysisEnabled)) {
             Mode = BindingMode.TwoWay
         });
         Button segmentationSettings = new Button { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
-        segmentationSettings.Click += (_, _) => {
-            parametersTitle.Text = "Параметры сегментации";
-            parametersScroll.Content = CreateSegmentationParametersPanel();
-        };
+        segmentationSettings.Click += (_, _) => ShowParameters("Параметры сегментации", CreateSegmentationParametersPanel());
         Grid segmentationRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 4 };
         segmentationRow.Children.Add(segmentation);
         Grid.SetColumn(segmentationSettings, 1);
@@ -112,6 +116,7 @@ public partial class MainWindow {
         layout.Children.Add(methodsScroll);
 
         CheckBox automatic = new CheckBox { Content = "Автоанализ" };
+        automatic.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
         automatic.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(MainViewModel.IsAutoAnalysisEnabled)) {
             Mode = BindingMode.TwoWay
         });
@@ -231,10 +236,19 @@ public partial class MainWindow {
 
     private Border CreateAnalysisImageCard() {
         Grid layout = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), RowSpacing = 8 };
-        Image inputImage = new Image { Stretch = Stretch.Uniform };
+        VideoPreviewImage inputImage = new() { Stretch = Stretch.Uniform };
         inputImage.Bind(Image.SourceProperty,
             CompiledBinding.Create<MainViewModel, Bitmap?>(viewModel => viewModel.AnalysisInputImage));
-        Border inputPreview = CreateAnalysisPreview(inputImage);
+        inputImage.Bind(VideoPreviewImage.RevisionProperty,
+            CompiledBinding.Create<MainViewModel, int>(viewModel => viewModel.VideoAnalysisInputRevision));
+        TextBlock pendingInput = new() {
+            Text = "Выполните анализ, чтобы получить редакторский кадр",
+            TextWrapping = TextWrapping.Wrap,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        pendingInput.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoAnalysisEditedInputPending)));
+        Border inputPreview = CreateAnalysisPreview(new Grid { Children = { inputImage, pendingInput } });
 
         Image resultImage = new Image { Stretch = Stretch.Uniform };
         resultImage.Bind(Image.SourceProperty,
@@ -273,8 +287,16 @@ public partial class MainWindow {
         Grid header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 8 };
         header.Children.Add(tabs);
         Button displayButton = CreateAnalysisDisplayButton();
+        displayButton.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
         Grid.SetColumn(displayButton, 1);
         header.Children.Add(displayButton);
+        ComboBox videoSource = new() { ItemsSource = new[] { "Оригинал", "Результат редактирования" } };
+        AutomationProperties.SetName(videoSource, "Кадр для анализа");
+        videoSource.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
+        videoSource.Bind(SelectingItemsControl.SelectedIndexProperty,
+            new Binding(nameof(MainViewModel.SelectedVideoAnalysisSourceIndex)) { Mode = BindingMode.TwoWay });
+        Grid.SetColumn(videoSource, 1);
+        header.Children.Add(videoSource);
         layout.Children.Add(header);
 
         StackPanel descriptions = new StackPanel { Spacing = 4 };
@@ -289,13 +311,14 @@ public partial class MainWindow {
         Grid footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 8 };
         footer.Children.Add(descriptions);
         Button save = new Button { Content = "Сохранить результат", VerticalAlignment = VerticalAlignment.Center };
+        save.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
         save.Bind(IsEnabledProperty, new Binding(nameof(MainViewModel.CanSaveAnalysisResult)));
         save.Click += SaveAnalysisResultButton_OnClick;
         Grid.SetColumn(save, 1);
         footer.Children.Add(save);
         Grid.SetRow(footer, 2);
         layout.Children.Add(footer);
-        return CreateAnalysisCard(CreateDocumentPreview(layout));
+        return CreateAnalysisCard(layout);
     }
 
     private Button CreateAnalysisDisplayButton() {

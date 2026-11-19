@@ -222,7 +222,8 @@ public partial class MainViewModel {
         EnsureVideoPlaybackTimer();
     }
 
-    private bool HasLivePreviewWork => readingVideoSeek || videoPreviewExecutor is { Metrics.ReservedBytes: > 0 };
+    private bool HasLivePreviewWork => videoAnalysisApplyingPlan || HasLivePreviewSourceWork;
+    private bool HasLivePreviewSourceWork => readingVideoSeek || videoPreviewExecutor is { Metrics.ReservedBytes: > 0 };
 
     // начинаем новые расчеты только после возврата буферов другого режима
     private bool WaitForVideoModeHandoff(VideoPlaybackSession? playback) {

@@ -93,6 +93,7 @@ public partial class MainWindow : Window {
         if (histogramViewModel is not null) {//// отписываемся от прежней ViewModel, чтобы она больше не обновляла эту панель
             histogramViewModel.PropertyChanged -= HistogramViewModel_OnPropertyChanged;
             histogramViewModel.SetVideoEditorVisible(false);
+            histogramViewModel.SetVideoAnalysisVisible(false);
             histogramViewModel.DetachVideoPlayback();
         }
 
@@ -102,6 +103,7 @@ public partial class MainWindow : Window {
             histogramViewModel.PropertyChanged += HistogramViewModel_OnPropertyChanged;
             histogramViewModel.AttachVideoPlayback();
             histogramViewModel.SetVideoEditorVisible(ReferenceEquals(pageHost.Content, editingPage));
+            histogramViewModel.SetVideoAnalysisVisible(ReferenceEquals(pageHost.Content, analysisPage));
         }
 
         histogramPanel.ShowComparison(histogramViewModel?.HistogramComparison);

@@ -18,7 +18,7 @@ public partial class MainViewModel {
     private bool videoEditorVisible;
     private bool videoEditorOutputVisible;
     private bool videoEditorFrameDeferred;
-    private bool videoEditorWaitingForPreparedBudget;
+    private bool videoEditorWaitingForBudget;
     private readonly VideoPreviewMeasurements videoPreviewMeasurements = new();
     private readonly VideoPreviewAutoController videoPreviewAuto = new(Environment.ProcessorCount);
     private long videoEditorObservation;
@@ -178,12 +178,12 @@ public partial class MainViewModel {
         if (!videoEditorVisible || videoEditorWaitingForFrame || !videoEditorPlan.HasSteps ||
             CurrentDocument is not { Kind: MediaKind.Video } document || VideoPreviewFrame is not { } bitmap) {
             videoEditorFrameDeferred = false;
-            videoEditorWaitingForPreparedBudget = false;
+            videoEditorWaitingForBudget = false;
             return;
         }
 
-        videoEditorWaitingForPreparedBudget = PreparedVideo is { ReservedBytes: > 0 };
-        if (videoEditorWaitingForPreparedBudget) {
+        videoEditorWaitingForBudget = IsLiveVideoEditorBudgetHeld;
+        if (videoEditorWaitingForBudget) {
             EnsureVideoPlaybackTimer();
             return;
         }
@@ -270,10 +270,12 @@ public partial class MainViewModel {
         }
     }
 
-    // после освобождения резерва прежнего режима берем актуальный кадр нового документа
-    private void RetryVideoEditorAfterPreparedBudget(bool liveInput = false) {
-        if (videoEditorWaitingForPreparedBudget && PreparedVideo is not { ReservedBytes: > 0 }) {
-            videoEditorWaitingForPreparedBudget = false;
+    private bool IsLiveVideoEditorBudgetHeld => videoAnalysisApplyingPlan || PreparedVideo is { ReservedBytes: > 0 };
+
+    // после освобождения буферов другой ветви берем актуальный кадр
+    private void RetryVideoEditorAfterBudget(bool liveInput = false) {
+        if (videoEditorWaitingForBudget && !IsLiveVideoEditorBudgetHeld) {
+            videoEditorWaitingForBudget = false;
             RequestVideoEditorFrame(liveInput);
         }
     }
@@ -482,7 +484,7 @@ public partial class MainViewModel {
         SetVideoEditorProcessingTime(null);
         StopVideoEditorLiveInput();
         videoEditorFrameDeferred = false;
-        videoEditorWaitingForPreparedBudget = false;
+        videoEditorWaitingForBudget = false;
         videoEditorLatestFailure = null;
         videoPreviewExecutor?.Invalidate();
         StopVideoPreviewMonitoring(keepLast: false);
@@ -495,6 +497,7 @@ public partial class MainViewModel {
         OnPropertyChanged(nameof(CurrentVideoEditorGeometry));
         OnPropertyChanged(nameof(VideoEditorNotice));
         OnPropertyChanged(nameof(VideoEditorPreviewRevision));
+        RefreshVideoAnalysisInput();
     }
 
     // обнуляем накопленные входы и пропуски для новой цепочки или файла

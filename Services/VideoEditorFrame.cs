@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Avalonia;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
@@ -67,9 +68,12 @@ internal sealed class VideoEditorPlan {
             : buffer / 4 * Math.Max(4, scratchBytesPerPixel) + scratchExtraBytes;
     }
 
+    // определяем размеры и поворот результата без чтения пикселей
+    public VideoEditorGeometry GetGeometry(PixelSize inputSize) => new(inputSize, clockwiseQuarterTurns);
+
     // сохраняем быстрый путь трех операций, в смешанной очереди выполняем каждый шаг на своем месте
     public VideoEditorGeometry Apply(VideoEditorFrame frame) {
-        VideoEditorGeometry geometry = new(frame.Size, clockwiseQuarterTurns);
+        VideoEditorGeometry geometry = GetGeometry(frame.Size);
         if (!useLookup) {
             frame.ApplyOperations(steps, geometry.OutputSize);
             return geometry;
@@ -150,6 +154,23 @@ internal sealed class VideoEditorFrame : IDisposable {
             pixels[index + 1] = channelLookup[pixels[index + 1]];
             pixels[index + 2] = channelLookup[pixels[index + 2]];
         }
+    }
+
+    // меняем порядок каналов BGRA на RGB, не включая четвертый байт в анализ
+    public byte[] CopyRgb(CancellationToken token) {
+        byte[] rgb = new byte[checked(Size.Width * Size.Height * 3)];
+        int rowLength = Size.Width * 3;
+        for (int y = 0; y < Size.Height; y++) {
+            token.ThrowIfCancellationRequested();
+            int output = y * rowLength;
+            int input = y * stride;
+            for (int x = 0; x < Size.Width; x++, input += 4, output += 3) {
+                rgb[output] = pixels[input + 2];
+                rgb[output + 1] = pixels[input + 1];
+                rgb[output + 2] = pixels[input];
+            }
+        }
+        return rgb;
     }
 
     // переносим цветовые байты в рабочий MagickImage, выполняем очередь и возвращаем пиксели без кодирования
