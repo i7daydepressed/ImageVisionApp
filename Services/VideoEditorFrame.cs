@@ -123,6 +123,26 @@ internal sealed class VideoEditorFrame : IDisposable {
         }
     }
 
+    // оставляем неизмененный кадр и даем редактору отдельный буфер того же размера
+    public VideoEditorFrame Copy() {
+        VideoEditorFrame copy = new(Size);
+        pixels.AsSpan().CopyTo(copy.pixels);
+        return copy;
+    }
+
+    // переносим пиксели независимого источника в принадлежащий редактору кадр
+    public static VideoEditorFrame CopyBgra(IntPtr source, int rowBytes, PixelSize size) {
+        int stride = checked(size.Width * 4);
+        if (source == IntPtr.Zero || rowBytes < stride || size.Width <= 0 || size.Height <= 0) {
+            throw new ArgumentException("Неверный буфер BGRA видеокадра", nameof(source));
+        }
+        VideoEditorFrame frame = new(size);
+        for (int row = 0; row < size.Height; row++) {
+            Marshal.Copy(IntPtr.Add(source, checked(row * rowBytes)), frame.pixels, row * stride, stride);
+        }
+        return frame;
+    }
+
     // заменяем три цветовых канала по таблице, четвертый байт оставляем прежним
     public void Apply(byte[] channelLookup) {
         for (int index = 0; index < length; index += 4) {

@@ -22,10 +22,12 @@ public partial class MainWindow {
             return;
         }
 
+        MediaDocument? document = viewModel.CurrentDocument;
         mediaSettingsOpen = true;
         try {
             VideoPreviewSettings? settings = await ShowVideoPreviewSettingsAsync(viewModel);
-            if (settings is { } applied && !mediaWindowClosed && ReferenceEquals(DataContext, viewModel)) {
+            if (settings is { } applied && !mediaWindowClosed && ReferenceEquals(DataContext, viewModel) &&
+                ReferenceEquals(viewModel.CurrentDocument, document)) {
                 viewModel.ApplyVideoPreviewSettings(applied);
             }
         }
@@ -60,8 +62,20 @@ public partial class MainWindow {
             SelectedIndex = Array.IndexOf(budgets, settings.BudgetMiB),
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
+        ComboBox mode = new() {
+            ItemsSource = new[] { "Живой предпросмотр", "С подготовкой участка" },
+            SelectedIndex = (int)settings.Mode,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        AutomationProperties.SetName(mode, "Режим предпросмотра");
         AutomationProperties.SetName(workers, "Максимум обработчиков");
         AutomationProperties.SetName(budget, "Бюджет буферов предпросмотра, МиБ");
+
+        TextBlock modeHelp = new() { TextWrapping = TextWrapping.Wrap };
+        TextBlock actualMode = new() { TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold };
+        StackPanel modeCard = new() { Spacing = 8, Children = { mode, modeHelp, actualMode } };
+        mode.SelectionChanged += (_, _) => DescribeDraftPreviewMode(mode, modeHelp, workers);
+        DescribeDraftPreviewMode(mode, modeHelp, workers);
 
         StackPanel performance = new() { Spacing = 8 };
         performance.Children.Add(BuildPreviewSettingsRow("Максимум обработчиков", workers));
@@ -72,12 +86,14 @@ public partial class MainWindow {
         IBrush rowDivider = new SolidColorBrush(Color.FromArgb(64, 128, 128, 128));
         TextBlock intervalP95 = new();
         TextBlock peakReserve = new();
+        TextBlock preparedReserve = new();
         (string Label, TextBlock Value)[] rows = [
             ("Исходная частота", new TextBlock()),
             ("Расчётный интервал", new TextBlock()),
             ("Всего кадров в исходном ролике", new TextBlock()),
-            ("Применённый режим", new TextBlock()),
+            ("Настройка числа обработчиков", new TextBlock()),
             ("Действующий предел обработчиков", new TextBlock()),
+            ("Готовый запас", preparedReserve),
             ("Занято работ / пик наблюдения", new TextBlock()),
             ("Новых кадров на входе очереди обработки", new TextBlock()),
             ("Выдано в предпросмотр", new TextBlock()),
@@ -113,15 +129,19 @@ public partial class MainWindow {
                 Child = BuildPreviewSettingsRow(label, value)
             };
             if (ReferenceEquals(value, peakReserve)) {
-                ToolTip.SetTip(row, "Максимум фактического резерва для открытого файла при выбранном бюджете. " +
+                ToolTip.SetTip(row, "При подготовке пик считается с начала текущего запроса. " +
+                    "Для живого режима пик считается за время действия бюджета для открытого файла. " +
                     "При снижении бюджета ещё занятые буферы могут временно превышать лимит.");
+            }
+            if (ReferenceEquals(value, preparedReserve)) {
+                row.Bind(IsVisibleProperty, preparedReserve.GetObservable(IsVisibleProperty));
             }
             load.Children.Add(row);
         }
         DispatcherTimer refresh = new() { Interval = TimeSpan.FromMilliseconds(333) };
-        refresh.Tick += (_, _) => UpdatePreviewLoad(viewModel, status, rows);
+        refresh.Tick += (_, _) => UpdatePreviewLoad(viewModel, status, actualMode, preparedReserve, rows);
         dialog.Opened += (_, _) => {
-            UpdatePreviewLoad(viewModel, status, rows);
+            UpdatePreviewLoad(viewModel, status, actualMode, preparedReserve, rows);
             refresh.Start();
         };
         dialog.Closed += (_, _) => refresh.Stop();
@@ -129,8 +149,10 @@ public partial class MainWindow {
         Button apply = new() { Content = "Применить", IsDefault = true };
         cancel.Click += (_, _) => dialog.Close(null);
         apply.Click += (_, _) => {
-            if (workers.SelectedIndex >= 0 && budget.SelectedIndex >= 0) {
-                dialog.Close(new VideoPreviewSettings(workers.SelectedIndex, budgets[budget.SelectedIndex]));
+            if (mode.SelectedIndex is 0 or 1 && workers.SelectedIndex >= 0 && budget.SelectedIndex >= 0) {
+                dialog.Close(new VideoPreviewSettings(workers.SelectedIndex, budgets[budget.SelectedIndex]) {
+                    Mode = (VideoPreviewMode)mode.SelectedIndex
+                });
             }
         };
         dialog.Content = new StackPanel {
@@ -142,6 +164,7 @@ public partial class MainWindow {
                     Content = new StackPanel {
                         Spacing = 12,
                         Children = {
+                            BuildPreviewSettingsCard("Режим предпросмотра", modeCard),
                             BuildPreviewSettingsCard("Производительность", performance),
                             BuildPreviewSettingsCard("Нагрузка предпросмотра", load)
                         }
@@ -156,6 +179,15 @@ public partial class MainWindow {
             }
         };
         return dialog.ShowDialog<VideoPreviewSettings?>(this);
+    }
+
+    // поясняем выбранный черновик, рабочий режим меняется только по кнопке применения
+    private static void DescribeDraftPreviewMode(ComboBox mode, TextBlock description, ComboBox workers) {
+        bool isPrepared = mode.SelectedIndex == (int)VideoPreviewMode.Prepared;
+        description.Text = isPrepared
+            ? "Кадры заранее обрабатывает один последовательный обработчик. Показ и звук ждут готового кадра."
+            : "Показ идёт вместе со звуком. При нагрузке редактор может пропускать кадры.";
+        workers.IsEnabled = !isPrepared;
     }
 
     // используем оформление карточек редактора и одинаковые отступы внутри формы
@@ -184,10 +216,21 @@ public partial class MainWindow {
     }
 
     // показываем измеренное окно и текущие ресурсы отдельно от черновика и свойств исходника
-    private static void UpdatePreviewLoad(MainViewModel viewModel, TextBlock status,
-        (string Label, TextBlock Value)[] rows) {
+    private static void UpdatePreviewLoad(MainViewModel viewModel, TextBlock status, TextBlock actualMode,
+        TextBlock preparedReserve, (string Label, TextBlock Value)[] rows) {
         var (settings, effective, resources, peakActive, window, state) = viewModel.ReadVideoPreviewState();
-        status.Text = state;
+        bool isPrepared = viewModel.ActiveVideoPreviewMode == VideoPreviewMode.Prepared;
+        PreparedVideoWindow? prepared = viewModel.PreparedVideo;
+        string mode = isPrepared ? "С подготовкой участка" : "Живой предпросмотр";
+        string? modeNotice = viewModel.VideoPreviewModeNotice;
+        actualMode.Text = modeNotice is null ? $"Сейчас · {mode}" : $"Сейчас · {mode}\n{modeNotice}";
+        preparedReserve.IsVisible = isPrepared;
+        status.Text = isPrepared ? "Живые замеры доступны в режиме «Живой предпросмотр»." : state;
+        if (isPrepared) {
+            window = null;
+        }
+        long reservedBytes = resources.ReservedBytes + (prepared?.ReservedBytes ?? 0);
+        long peakBytes = isPrepared ? prepared?.PeakReservedBytes ?? 0 : resources.BudgetPeakReservedBytes;
         double? sourceRate = viewModel.CurrentVideoInfo?.FramesPerSecond;
         bool knownRate = sourceRate is > 0 && double.IsFinite(sourceRate.Value);
         bool hasChain = viewModel.IsVideoOpen && viewModel.AdvancedSteps.Count != 0;
@@ -195,21 +238,22 @@ public partial class MainWindow {
             knownRate ? $"{sourceRate:0.###} кадр/с" : "Не определено",
             knownRate ? $"{1000.0 / sourceRate:0.##} мс" : "Не определено",
             viewModel.CurrentVideoInfo?.FrameCount?.ToString() ?? VideoInfo.UnknownValue,
-            settings.MaximumWorkers == 0 ? "Авто" : $"Вручную · {settings.MaximumWorkers}",
-            effective.ToString(),
-            $"{resources.Active} / {peakActive?.ToString() ?? "—"}",
+            isPrepared ? "Последовательно" : settings.MaximumWorkers == 0 ? "Авто" : $"Вручную · {settings.MaximumWorkers}",
+            isPrepared ? "1" : effective.ToString(),
+            isPrepared ? viewModel.PreparedVideoBufferDescription : "—",
+            isPrepared ? "—" : $"{resources.Active} / {peakActive?.ToString() ?? "—"}",
             FormatPreviewRate(window?.InputRate),
             FormatPreviewRate(window?.OutputRate),
             FormatPreviewDrops(window),
-            hasChain ? viewModel.VideoEditorChainInput.ToString() : "—",
-            hasChain ? resources.ChainDropped.ToString() : "—",
+            hasChain && !isPrepared ? viewModel.VideoEditorChainInput.ToString() : "—",
+            hasChain && !isPrepared ? resources.ChainDropped.ToString() : "—",
             FormatPreviewPercentile(window?.IntervalP95Ms),
             FormatPreviewPercentile(window?.LatencyP95Ms),
             window?.ReplacedPending.ToString() ?? "—",
             window?.Superseded.ToString() ?? "—",
             window?.BudgetWaiting.ToString() ?? "—",
-            $"{resources.ReservedBytes / (1024.0 * 1024):0.##} / {settings.BudgetMiB} МиБ",
-            viewModel.IsVideoOpen ? $"{resources.BudgetPeakReservedBytes / (1024.0 * 1024):0.##} МиБ" : "—"
+            $"{reservedBytes / (1024.0 * 1024):0.##} / {settings.BudgetMiB} МиБ",
+            viewModel.IsVideoOpen ? $"{peakBytes / (1024.0 * 1024):0.##} МиБ" : "—"
         ];
         for (int i = 0; i < rows.Length; i++) {
             var (label, value) = rows[i];

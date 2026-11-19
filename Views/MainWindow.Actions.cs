@@ -52,10 +52,14 @@ public partial class MainWindow {
             if (Path.GetExtension(file.Name).ToLowerInvariant() is ".mp4" or ".mkv") {
                 string sourcePath = file.TryGetLocalPath()
                     ?? throw new InvalidDataException("Для открытия видео нужен доступный локальный путь к файлу");
-                (byte[] previewPng, long? fileSizeBytes) = await Task.Run(() =>
-                    (VideoFirstFrameReader.ReadPng(sourcePath), ReadVideoFileSize(sourcePath)));
+                (byte[] previewPng, long? fileSizeBytes, VideoFileIdentity? identity) = await Task.Run(() => {
+                    VideoFileIdentity? current = VideoFileIdentity.TryCapture(sourcePath);
+                    byte[] png = VideoFirstFrameReader.ReadPng(sourcePath);
+                    current?.EnsureCurrent(sourcePath);
+                    return (png, current?.Length ?? ReadVideoFileSize(sourcePath), current);
+                });
                 if (!mediaWindowClosed && ReferenceEquals(DataContext, viewModel)) {
-                    viewModel.LoadVideoFirstFrame(previewPng, file.Name, sourcePath, fileSizeBytes);
+                    viewModel.LoadVideoFirstFrame(previewPng, file.Name, sourcePath, fileSizeBytes, identity);
                 }
             }
             else {
