@@ -8,6 +8,7 @@ public sealed record VideoInfo {
     public uint? Width { get; init; }
     public uint? Height { get; init; }
     public double? FramesPerSecond { get; init; }
+    public long? FrameCount { get; init; }
     public bool? HasAudio { get; init; }
     public string? Codec { get; init; }
     public uint? VideoBitrate { get; init; }

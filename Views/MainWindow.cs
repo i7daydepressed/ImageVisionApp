@@ -290,7 +290,7 @@ public partial class MainWindow : Window {
         return new Grid { Children = { photoPreview, frame } };
     }
 
-    // оставляем сравнение фото, для видео показываем один результат редактора и состояние подготовки
+    // оставляем сравнение фото, рядом с результатом видео показываем статус или время расчета
     private static Grid CreateEditorDocumentPreview(Control photoPreview) {
         photoPreview.Bind(IsVisibleProperty,
             new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
@@ -305,14 +305,20 @@ public partial class MainWindow : Window {
         notice.VerticalAlignment = VerticalAlignment.Center;
         notice.Bind(IsVisibleProperty,
             new Binding(nameof(MainViewModel.VideoEditorNotice)) { Converter = ObjectConverters.IsNotNull });
+        TextBlock processingTime = CreateBoundText(viewModel => viewModel.VideoEditorProcessingTime);
+        processingTime.Margin = new Thickness(10, 0, 10, 10);
+        processingTime.Bind(IsVisibleProperty,
+            new Binding(nameof(MainViewModel.VideoEditorProcessingTime)) { Converter = ObjectConverters.IsNotNull });
         Grid.SetRow(frame, 1);
         Grid.SetRow(notice, 1);
+        Grid.SetRow(processingTime, 2);
         Grid videoPreview = new() {
-            RowDefinitions = new RowDefinitions("Auto,*"),
+            RowDefinitions = new RowDefinitions("Auto,*,Auto"),
             Children = {
                 new TextBlock { Text = "Результат редактирования", Margin = new Thickness(10) },
                 frame,
-                notice
+                notice,
+                processingTime
             }
         };
         videoPreview.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));

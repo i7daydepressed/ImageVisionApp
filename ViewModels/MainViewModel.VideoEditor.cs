@@ -18,6 +18,14 @@ public partial class MainViewModel {
     private bool videoEditorVisible;
     private bool videoEditorOutputVisible;
     private bool videoEditorFrameDeferred;
+    private readonly VideoPreviewMeasurements videoPreviewMeasurements = new();
+    private readonly VideoPreviewAutoController videoPreviewAuto = new(Environment.ProcessorCount);
+    private long videoEditorObservation;
+    private long videoEditorOfferedAt;
+    private long videoEditorPauseObservation = 1;
+    private long videoEditorLiveInput;
+    private long videoEditorLiveRevision;
+    private int? videoPreviewPeakAtStop;
     private VideoPreviewExecutor? videoPreviewExecutor;
     private WriteableBitmap? videoEditorOutput;
     private VideoEditorGeometry videoEditorOutputGeometry;
@@ -29,7 +37,10 @@ public partial class MainViewModel {
         : null;
 
     public int VideoEditorPreviewRevision { get; private set; }
+    internal long VideoEditorChainInput { get; private set; }
     internal VideoPreviewSettings PreviewSettings { get; private set; } = VideoPreviewSettings.Default;
+    private VideoPreviewSettings RuntimePreviewSettings => PreviewSettings.MaximumWorkers == 0
+        ? new VideoPreviewSettings(videoPreviewAuto.Workers, PreviewSettings.BudgetMiB) : PreviewSettings;
 
     internal VideoEditorGeometry? CurrentVideoEditorGeometry => VideoEditorPreviewFrame is { } frame
         ? videoEditorPlan.HasSteps ? videoEditorOutputGeometry : new VideoEditorGeometry(frame.PixelSize, 0)
@@ -38,6 +49,8 @@ public partial class MainViewModel {
     public string? VideoEditorNotice => videoEditorError ?? (videoEditorWaitingForFrame
         ? "Ожидание видеокадра…"
         : videoEditorPlan.HasSteps && !videoEditorOutputVisible ? "Подготовка результата…" : null);
+
+    public string? VideoEditorProcessingTime { get; private set; }
 
     // останавливаем запросы вне редактора, при возврате берем текущий подтвержденный кадр
     internal void SetVideoEditorVisible(bool visible) {
@@ -65,6 +78,8 @@ public partial class MainViewModel {
             .ToArray();
         videoEditorPlan = new(videoEditorPlan.Revision + 1, steps);
         InvalidateVideoEditorRequests();
+        ResetVideoEditorChainTotals();
+        ResetVideoPreviewAuto();
         videoEditorOutputVisible = false;
         if (!videoEditorWaitingForFrame) {
             videoEditorError = null;
@@ -84,17 +99,26 @@ public partial class MainViewModel {
     }
 
     // связываем очередь с исходным кадром, который только что принял путь предпросмотра
-    private void AcceptVideoEditorFrame() {
+    private void AcceptVideoEditorFrame(bool live = false) {
         videoEditorFrame++;
         videoEditorLatestFailure = null;
+        videoEditorObservation = 0;
+        long now = Environment.TickCount64;
+        if (live && videoPreviewMeasurements.RecordInput(videoEditorFrame, now)) {
+            videoEditorObservation = videoPreviewMeasurements.Id;
+            videoEditorOfferedAt = now;
+        }
         bool updatePreview = videoEditorWaitingForFrame || !videoEditorPlan.HasSteps;
         videoEditorWaitingForFrame = false;
         if (videoEditorVisible && IsVideoOpen) {
+            if (live && videoEditorPlan.HasSteps) {
+                VideoEditorChainInput++;
+            }
             if (updatePreview) {
                 videoEditorError = null;
                 NotifyVideoEditorPreview();
             }
-            RequestVideoEditorFrame();
+            RequestVideoEditorFrame(live);
         }
     }
 
@@ -110,18 +134,36 @@ public partial class MainViewModel {
     }
 
     // передаем собственный снимок только после резерва, при перегрузке держим номер актуального кадра
-    private void RequestVideoEditorFrame() {
+    private void RequestVideoEditorFrame(bool liveInput = false) {
+        SetVideoEditorProcessingTime(null);
         if (!videoEditorVisible || videoEditorWaitingForFrame || !videoEditorPlan.HasSteps ||
             CurrentDocument is not { Kind: MediaKind.Video } document || VideoPreviewFrame is not { } bitmap) {
             videoEditorFrameDeferred = false;
             return;
         }
 
+        if (liveInput && videoEditorLiveInput == 0) {
+            videoEditorLiveInput = ++videoEditorLiveRevision;
+            videoPreviewExecutor?.SetLiveInput(videoEditorLiveInput);
+        }
         VideoEditorPlan plan = videoEditorPlan;
-        VideoPreviewFrameKey key = new(document, videoEditorSource, plan.Revision, videoEditorFrame);
-        VideoPreviewExecutor executor = videoPreviewExecutor ??= new(PreviewSettings,
-            action => Dispatcher.UIThread.Post(action, DispatcherPriority.Background),
-            DrainVideoEditorResult, RetryDeferredVideoEditorFrame);
+        VideoPreviewFrameKey key = new(document, videoEditorSource, plan.Revision, videoEditorFrame) {
+            Observation = liveInput ? videoEditorObservation : 0,
+            OfferedAt = videoEditorOfferedAt,
+            PauseObservation = videoWantsToPlay ? 0 : videoEditorPauseObservation,
+            LiveInput = liveInput ? videoEditorLiveInput : 0,
+            InputGroup = liveInput && videoEditorObservation != 0 ? videoPreviewMeasurements.InputGroup : 0
+        };
+        if (videoPreviewExecutor is null) {
+            videoPreviewExecutor = new(RuntimePreviewSettings,
+                action => Dispatcher.UIThread.Post(action, DispatcherPriority.Background),
+                DrainVideoEditorResult, RetryDeferredVideoEditorFrame);
+            videoPreviewExecutor.SetLiveInput(videoEditorLiveInput);
+            if (videoPreviewMeasurements.IsActive) {
+                videoPreviewExecutor.BeginObservation(videoPreviewMeasurements.InputGroup);
+            }
+        }
+        VideoPreviewExecutor executor = videoPreviewExecutor;
         VideoPreviewAdmission admission = executor.TrySubmit(key, bitmap.PixelSize, plan.GetScratchBytes(bitmap.PixelSize),
             () => VideoEditorFrame.Capture(bitmap), plan.Apply);
         videoEditorFrameDeferred = admission == VideoPreviewAdmission.Deferred;
@@ -146,7 +188,7 @@ public partial class MainViewModel {
 
         try {
             if (pixels is not null) {
-                PublishVideoEditorOutput(pixels, geometry, key.Frame);
+                PublishVideoEditorOutput(pixels, geometry, key);
             }
         }
         catch (Exception) {
@@ -187,15 +229,122 @@ public partial class MainViewModel {
         if (settings == PreviewSettings) {
             return;
         }
+        StopVideoPreviewMonitoring(keepLast: false);
         PreviewSettings = settings;
-        videoPreviewExecutor?.Configure(settings);
+        ResetVideoPreviewAuto();
         if (!videoEditorOutputVisible || videoEditorOutputFrame != videoEditorFrame) {
-            RequestVideoEditorFrame();
+            RequestVideoEditorFrame(liveInput: videoEditorLiveInput != 0);
         }
     }
 
-    // переносим строки в bitmap и публикуем геометрию того же результата
-    private void PublishVideoEditorOutput(VideoEditorFrame pixels, VideoEditorGeometry geometry, long frame) {
+    // возвращаем действующие параметры и последнее завершенное окно для открытого диалога
+    internal (VideoPreviewSettings Settings, int Effective, VideoPreviewExecutorMetrics Resources,
+        int? PeakActive, VideoPreviewMeasurements.Window? Window, string Status) ReadVideoPreviewState() {
+        VideoPreviewMeasurements.Window? window = videoPreviewMeasurements.Last;
+        VideoPreviewExecutorMetrics resources = videoPreviewExecutor?.Metrics ?? default;
+        int? peakActive = videoPreviewMeasurements.IsActive ? resources.PeakActive : videoPreviewPeakAtStop;
+        string duration = window is { } sample ? $" · последний замер {sample.DurationMs / 1000.0:0.##} с" : "";
+        string status = !IsVideoOpen || mediaPreviewsDisposed ? "Видео не открыто" :
+            !videoEditorVisible ? "Вкладка «Редактирование» не активна" :
+            !videoEditorPlan.HasSteps ? "В очереди нет операций" :
+            videoEditorWaitingForFrame ? "Ожидание подтвержденного кадра" :
+            !videoPreviewMeasurements.IsActive ? videoWantsToPlay ? $"Ожидание живого кадра{duration}" :
+                window is null ? "Пауза · нет измерений" : $"Пауза{duration}" :
+            window is null ? "Измеряем живой предпросмотр…" : $"Живой предпросмотр{duration}";
+        if (videoPreviewAuto.IsTrial) {
+            status += " · проба «Авто»";
+        }
+        return (PreviewSettings, RuntimePreviewSettings.EffectiveWorkers, resources, peakActive, window, status);
+    }
+
+    // на подтвержденном живом просмотре собираем окно, а для режима «Авто» сравниваем рабочие пределы
+    private void UpdateVideoPreviewMonitoring(bool live) {
+        if (!live || !videoEditorVisible || videoEditorWaitingForFrame || !videoEditorPlan.HasSteps ||
+            VideoPreviewFrame is not { } bitmap) {
+            StopVideoEditorLiveInput();
+            if (videoPreviewMeasurements.IsActive) {
+                StopVideoPreviewMonitoring(keepLast: true);
+            }
+            return;
+        }
+
+        long now = Environment.TickCount64;
+        int previousLimit = RuntimePreviewSettings.EffectiveWorkers;
+        if (PreviewSettings.MaximumWorkers == 0) {
+            int capacity = GetVideoPreviewCapacity(bitmap.PixelSize);
+            videoPreviewAuto.FitCapacity(capacity);
+            if (previousLimit == videoPreviewAuto.Workers &&
+                TryCompleteVideoPreviewMeasurement(now, out var window)) {
+                videoPreviewAuto.Observe(window, capacity, now);
+            }
+        }
+        else {
+            TryCompleteVideoPreviewMeasurement(now, out _);
+        }
+
+        if (!videoPreviewMeasurements.IsActive || previousLimit != RuntimePreviewSettings.EffectiveWorkers) {
+            videoPreviewMeasurements.Start(now, settleMs: 750);
+            videoEditorObservation = 0;
+            videoPreviewExecutor?.BeginObservation(videoPreviewMeasurements.InputGroup);
+            videoPreviewExecutor?.Configure(RuntimePreviewSettings);
+        }
+    }
+
+    // закрываем группу входов в момент снимка счетчиков, до обработки следующего кадра
+    private bool TryCompleteVideoPreviewMeasurement(long now, out VideoPreviewMeasurements.Window window) {
+        window = default;
+        if (!videoPreviewMeasurements.IsDue(now)) {
+            return false;
+        }
+        VideoPreviewExecutorMetrics metrics =
+            videoPreviewExecutor?.AdvanceInputGroup(videoPreviewMeasurements.InputGroup + 1) ?? default;
+        return videoPreviewMeasurements.TryComplete(now, metrics, out window);
+    }
+
+    // не смешиваем отмену живого потока с вытеснением кадров при перегрузке
+    private void StopVideoEditorLiveInput() {
+        if (videoEditorLiveInput != 0) {
+            videoEditorLiveInput = 0;
+            videoPreviewExecutor?.SetLiveInput(0);
+        }
+    }
+
+    // закрываем измерение, восстанавливая принятый предел после прерванной пробы
+    private void StopVideoPreviewMonitoring(bool keepLast) {
+        videoEditorObservation = 0;
+        videoPreviewPeakAtStop = keepLast && videoPreviewMeasurements.Last is not null
+            ? videoPreviewExecutor?.Metrics.PeakActive : null;
+        videoPreviewMeasurements.Stop(keepLast);
+        int previousLimit = RuntimePreviewSettings.EffectiveWorkers;
+        videoPreviewAuto.CancelTrial();
+        if (!keepLast) {
+            videoPreviewExecutor?.BeginObservation(0);
+        }
+        else {
+            videoPreviewExecutor?.AdvanceInputGroup(0);
+        }
+        if (previousLimit != RuntimePreviewSettings.EffectiveWorkers) {
+            videoPreviewExecutor?.Configure(RuntimePreviewSettings);
+        }
+    }
+
+    // новая цепочка и примененные настройки заново подбирают число обработчиков
+    private void ResetVideoPreviewAuto() {
+        videoPreviewAuto.Reset();
+        if (PreviewSettings.MaximumWorkers == 0 && videoEditorPlan.HasSteps && VideoPreviewFrame is { } bitmap) {
+            videoPreviewAuto.FitCapacity(GetVideoPreviewCapacity(bitmap.PixelSize));
+        }
+        videoPreviewExecutor?.Configure(RuntimePreviewSettings);
+    }
+
+    // считаем, сколько активных кадров с рабочими буферами помещается в бюджет
+    private int GetVideoPreviewCapacity(PixelSize size) {
+        long bytes = VideoEditorFrame.GetBufferBytes(size) + videoEditorPlan.GetScratchBytes(size);
+        return (int)Math.Min(4, PreviewSettings.BudgetBytes / bytes);
+    }
+
+    // переносим строки в bitmap и измеряем выдачу после обновления привязок
+    private void PublishVideoEditorOutput(VideoEditorFrame pixels, VideoEditorGeometry geometry, VideoPreviewFrameKey key) {
         WriteableBitmap? previous = videoEditorOutput;
         WriteableBitmap next = previous?.PixelSize == pixels.Size
             ? previous
@@ -213,14 +362,18 @@ public partial class MainViewModel {
 
         videoEditorOutput = next;
         videoEditorOutputGeometry = geometry;
-        videoEditorOutputFrame = frame;
+        videoEditorOutputFrame = key.Frame;
         videoEditorOutputVisible = true;
-        if (frame == videoEditorFrame) {
+        if (key.Frame == videoEditorFrame) {
             videoEditorLatestFailure = null;
         }
         videoEditorError = videoEditorLatestFailure;
         try {
             NotifyVideoEditorPreview();
+            videoPreviewMeasurements.RecordOutput(key.Observation, key.Frame, key.OfferedAt, Environment.TickCount64);
+            if (!videoWantsToPlay && key.PauseObservation == videoEditorPauseObservation && IsCurrentVideoEditorRequest(key)) {
+                SetVideoEditorProcessingTime(pixels.ProcessingTime);
+            }
         }
         finally {
             if (!ReferenceEquals(previous, next)) {
@@ -231,6 +384,7 @@ public partial class MainViewModel {
 
     // сообщаем об ошибке редактора отдельно от состояния исходного плеера
     private void ShowVideoEditorError(string message) {
+        SetVideoEditorProcessingTime(null);
         if (videoEditorError == message && !videoEditorOutputVisible) {
             return;
         }
@@ -241,9 +395,12 @@ public partial class MainViewModel {
 
     // снимаем ожидающий повтор и запрещаем выдачу кадров прошлого документа, источника или плана
     private void InvalidateVideoEditorRequests() {
+        SetVideoEditorProcessingTime(null);
+        StopVideoEditorLiveInput();
         videoEditorFrameDeferred = false;
         videoEditorLatestFailure = null;
         videoPreviewExecutor?.Invalidate();
+        StopVideoPreviewMonitoring(keepLast: false);
     }
 
     // обновляем источник, статус и отрисовку переиспользуемого изображения
@@ -255,10 +412,28 @@ public partial class MainViewModel {
         OnPropertyChanged(nameof(VideoEditorPreviewRevision));
     }
 
+    // обнуляем накопленные входы и пропуски для новой цепочки или файла
+    private void ResetVideoEditorChainTotals() {
+        VideoEditorChainInput = 0;
+        videoPreviewExecutor?.ResetChainDrops();
+    }
+
+    // выводим время расчета только рядом с актуальным результатом на паузе
+    private void SetVideoEditorProcessingTime(TimeSpan? elapsed) {
+        string? text = elapsed is { } time ? $"Время пересчёта кадра: {time.TotalMilliseconds:0.##} мс" : null;
+        if (VideoEditorProcessingTime != text) {
+            VideoEditorProcessingTime = text;
+            OnPropertyChanged(nameof(VideoEditorProcessingTime));
+        }
+    }
+
     // освобождаем результат старого документа и возвращаем пустой план
     private void ResetVideoEditorDocument() {
         InvalidateVideoEditorRequests();
+        ResetVideoEditorChainTotals();
+        videoPreviewExecutor?.ResetBudgetPeak();
         videoEditorPlan = new(videoEditorPlan.Revision + 1, []);
+        ResetVideoPreviewAuto();
         videoEditorWaitingForFrame = false;
         videoEditorOutputVisible = false;
         videoEditorError = null;

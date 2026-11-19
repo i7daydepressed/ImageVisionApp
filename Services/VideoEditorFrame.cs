@@ -96,6 +96,7 @@ internal sealed class VideoEditorFrame : IDisposable {
     private readonly int length;
 
     public PixelSize Size { get; private set; }
+    public TimeSpan? ProcessingTime { get; set; }
 
     // берем буфер только на время обработки и вывода кадра
     private VideoEditorFrame(PixelSize size) {

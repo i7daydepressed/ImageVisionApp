@@ -100,6 +100,8 @@ public partial class MainViewModel {
         }
 
         videoWantsToPlay = true;
+        videoEditorPauseObservation++;
+        SetVideoEditorProcessingTime(null);
         if (playback.State == VLCState.Ended || videoRestartOnPlay) {
             videoRestartOnPlay = false;
             InvalidateVideoEditorSource();
@@ -115,6 +117,7 @@ public partial class MainViewModel {
     // прекращает вывод звука и продвижение общего времени при смене вкладки
     internal void PauseVideoPlayback() {
         videoWantsToPlay = false;
+        StopVideoEditorLiveInput();
         if (videoPlayback is { } playback) {
             playback.SetPaused(true);
             RefreshVideoPlayback();
@@ -273,8 +276,10 @@ public partial class MainViewModel {
             videoWantsToPlay = false;
         }
 
+        bool live = isPlaying && videoWantsToPlay && requestedVideoSeek is null && !videoRestarting;
+        UpdateVideoPreviewMonitoring(live);
         if (requestedVideoSeek is null && (isPlaying || videoWasPlaying)) {
-            PublishVideoFrame(playback);
+            PublishVideoFrame(playback, live);
         }
         videoWasPlaying = isPlaying;
         if (!videoWantsToPlay) {
@@ -333,7 +338,7 @@ public partial class MainViewModel {
     }
 
     // показывает новый живой кадр и освобождает старое изображение после обновления привязок
-    private void PublishVideoFrame(VideoPlaybackSession playback) {
+    private void PublishVideoFrame(VideoPlaybackSession playback, bool live) {
         WriteableBitmap? previous = videoLiveFrame;
         if (!playback.CopyFrame(ref videoLiveFrame, ref videoLiveRevision)) {
             return;
@@ -347,7 +352,7 @@ public partial class MainViewModel {
         }
         VideoPreviewRevision++;
         OnPropertyChanged(nameof(VideoPreviewRevision));
-        AcceptVideoEditorFrame();
+        AcceptVideoEditorFrame(live);
     }
 
     // меняет неподвижный кадр перемотки и возвращает живой кадр только после первого обновления
