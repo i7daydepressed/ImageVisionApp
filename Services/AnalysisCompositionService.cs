@@ -1,5 +1,6 @@
 using System;
 using System.Threading;
+using Avalonia;
 using ImageMagick;
 using ImageVisionApp.Models;
 
@@ -104,6 +105,82 @@ public static class AnalysisCompositionService {
         byte[] png = image.ToByteArray(MagickFormat.Png);
         cancellationToken.ThrowIfCancellationRequested();
         return png;
+    }
+
+    // рисуем готовые слои в координатах заданной видеоподложки и возвращаем пиксели для интерфейса
+    internal static VideoEditorFrame ComposeVideoFrame(VideoAnalysisFrameKey backdrop,
+        VideoEditorFrame? image, AnalysisSegmentationResult? segmentation, AnalysisEdgeResult? edges,
+        AnalysisKeypointResult? keypoints, CancellationToken token) {
+
+        PixelSize size = backdrop.Geometry.OutputSize;
+        byte[] rgb;
+        if (segmentation is not null) {
+            VideoEditorGeometry transform = GetLayerTransform(segmentation.VideoFrame, segmentation.Width, segmentation.Height, backdrop);
+            if (transform.ClockwiseQuarterTurns != 0) {
+                throw new ArgumentException("Сегментированная подложка должна иметь собственную геометрию");
+            }
+            rgb = segmentation.SegmentedRgb.ToArray();
+        }
+        else if (image is not null) {
+            if (image.Size != size) {
+                throw new ArgumentException("Размер видеоподложки не соответствует кадру");
+            }
+            rgb = image.CopyRgb(token);
+        }
+        else {
+            rgb = new byte[checked(size.Width * size.Height * 3)];
+        }
+
+        if (edges is not null) {
+            VideoEditorGeometry transform = GetLayerTransform(edges.VideoFrame, edges.Width, edges.Height, backdrop);
+            BlendVideoEdges(rgb, size.Width, edges.Intensities.Span, transform, token);
+        }
+        if (keypoints is not null) {
+            VideoEditorGeometry transform = GetLayerTransform(keypoints.VideoFrame, keypoints.Width, keypoints.Height, backdrop);
+            ReadOnlySpan<AnalysisKeypoint> points = keypoints.Points.Span;
+            if (transform.ClockwiseQuarterTurns != 0) {
+                AnalysisKeypoint[] mapped = new AnalysisKeypoint[points.Length];
+                for (int i = 0; i < mapped.Length; i++) {
+                    token.ThrowIfCancellationRequested();
+                    PixelPoint pixel = transform.MapPixel(new(points[i].X, points[i].Y));
+                    mapped[i] = new(pixel.X, pixel.Y);
+                }
+                DrawKeypoints(rgb, size.Width, size.Height, mapped, token);
+            }
+            else {
+                DrawKeypoints(rgb, size.Width, size.Height, points, token);
+            }
+        }
+        return VideoEditorFrame.FromRgb(size, rgb, token);
+    }
+
+    // проверяем, что слой относится к тому же кадру, а его растр можно повернуть на подложку
+    private static VideoEditorGeometry GetLayerTransform(VideoAnalysisFrameKey? layer, int width, int height,
+        VideoAnalysisFrameKey backdrop) {
+        if (layer is not { } source || !source.IsSameFrame(backdrop) || source.Geometry.OutputSize != new PixelSize(width, height)) {
+            throw new ArgumentException("Слой и подложка относятся к разным кадрам или размерам");
+        }
+        return source.Geometry.RelativeTo(backdrop.Geometry);
+    }
+
+    // накладываем белый отклик границ и переносим каждый пиксель карты без интерполяции
+    private static void BlendVideoEdges(byte[] rgb, int outputWidth, ReadOnlySpan<byte> intensities,
+        VideoEditorGeometry transform, CancellationToken token) {
+        PixelSize size = transform.InputSize;
+        for (int y = 0; y < size.Height; y++) {
+            token.ThrowIfCancellationRequested();
+            for (int x = 0; x < size.Width; x++) {
+                int strength = intensities[y * size.Width + x];
+                if (strength == 0) {
+                    continue;
+                }
+                PixelPoint pixel = transform.MapPixel(new(x, y));
+                int first = (pixel.Y * outputWidth + pixel.X) * 3;
+                for (int i = first; i < first + 3; i++) {
+                    rgb[i] = (byte)((rgb[i] * (255 - strength) + 255 * strength + 127) / 255);
+                }
+            }
+        }
     }
 
     private static void DrawPlateRectangle(byte[] rgb, int width, int height, AnalysisPlateRectangle rectangle,

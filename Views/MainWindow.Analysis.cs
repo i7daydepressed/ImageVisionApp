@@ -85,7 +85,7 @@ public partial class MainWindow {
         keypointRow.Children.Add(keypointSettings);
         methods.Children.Add(keypointRow);
         CheckBox plate = new CheckBox { Content = "Область номера" };
-        plate.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(MainViewModel.IsPlateAnalysisEnabled)) {
+        plate.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(MainViewModel.IsPlateAnalysisSelected)) {
             Mode = BindingMode.TwoWay
         });
         Button plateSettings = new Button { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
@@ -94,8 +94,10 @@ public partial class MainWindow {
         plateRow.Children.Add(plate);
         Grid.SetColumn(plateSettings, 1);
         plateRow.Children.Add(plateSettings);
-        plateRow.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
-        methods.Children.Add(plateRow);
+        plateRow.Bind(IsEnabledProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
+        TextBlock plateAvailability = new() { Text = "Пока только для фото", FontSize = 12, Margin = new Thickness(20, 0, 0, 0) };
+        plateAvailability.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
+        methods.Children.Add(new StackPanel { Children = { plateRow, plateAvailability } });
         CheckBox segmentation = new CheckBox { Content = "Сегментация" };
         segmentation.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(MainViewModel.IsSegmentationAnalysisEnabled)) {
             Mode = BindingMode.TwoWay
@@ -141,6 +143,8 @@ public partial class MainWindow {
         method.Bind(SelectingItemsControl.SelectedIndexProperty,
             new Binding(nameof(MainViewModel.SelectedEdgeMethodIndex)) { Mode = BindingMode.TwoWay });
         panel.Children.Add(method);
+        panel.Children.Add(CreateVideoAnalysisSourcePicker(
+            "Источник границ", nameof(MainViewModel.SelectedVideoEdgeSourceIndex)));
 
         TextBlock robertsHint = new TextBlock {
             Text = "Для Робертса дополнительные параметры не требуются",
@@ -192,6 +196,9 @@ public partial class MainWindow {
     private static StackPanel CreateFastParametersPanel() {
         StackPanel panel = new StackPanel { Spacing = 8 };
         panel.Children.Add(new TextBlock { Text = "Метод: FAST 9/16" });
+        TextBlock fastInput = new() { Text = "Вход FAST на видео: оригинал", TextWrapping = TextWrapping.Wrap };
+        fastInput.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
+        panel.Children.Add(fastInput);
         panel.Children.Add(new TextBlock { Text = "Порог FAST" });
         TextBox threshold = new TextBox { HorizontalAlignment = HorizontalAlignment.Stretch };
         threshold.Bind(TextBox.TextProperty, new Binding(nameof(MainViewModel.FastThresholdText)) {
@@ -217,6 +224,14 @@ public partial class MainWindow {
     private static StackPanel CreateSegmentationParametersPanel() {
         StackPanel panel = new StackPanel { Spacing = 8 };
         panel.Children.Add(new TextBlock { Text = "Метод: K-means" });
+        panel.Children.Add(CreateVideoAnalysisSourcePicker(
+            "Источник сегментации", nameof(MainViewModel.SelectedVideoSegmentationSourceIndex)));
+        TextBlock videoHint = new() {
+            Text = "На видео K-means выполняется только для подложки «Сегментация». Галочка слева выбирает эту подложку.",
+            TextWrapping = TextWrapping.Wrap
+        };
+        videoHint.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
+        panel.Children.Add(videoHint);
         panel.Children.Add(new TextBlock { Text = "Число кластеров N" });
         TextBox clusters = new TextBox { PlaceholderText = "4", HorizontalAlignment = HorizontalAlignment.Stretch };
         clusters.Bind(TextBox.TextProperty, new Binding(nameof(MainViewModel.SegmentationClusterCountText)) {
@@ -234,6 +249,19 @@ public partial class MainWindow {
         return panel;
     }
 
+    // показываем отдельно выбранный источник вычисления для каждого видео-метода
+    private static StackPanel CreateVideoAnalysisSourcePicker(string label, string selectedProperty) {
+        ComboBox source = new() {
+            ItemsSource = new[] { "Оригинал", "Результат редактирования" },
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        AutomationProperties.SetName(source, label);
+        source.Bind(SelectingItemsControl.SelectedIndexProperty, new Binding(selectedProperty) { Mode = BindingMode.TwoWay });
+        StackPanel panel = new() { Spacing = 4, Children = { new TextBlock { Text = label }, source } };
+        panel.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
+        return panel;
+    }
+
     private Border CreateAnalysisImageCard() {
         Grid layout = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), RowSpacing = 8 };
         VideoPreviewImage inputImage = new() { Stretch = Stretch.Uniform };
@@ -242,7 +270,7 @@ public partial class MainWindow {
         inputImage.Bind(VideoPreviewImage.RevisionProperty,
             CompiledBinding.Create<MainViewModel, int>(viewModel => viewModel.VideoAnalysisInputRevision));
         TextBlock pendingInput = new() {
-            Text = "Выполните анализ, чтобы получить редакторский кадр",
+            Text = "Готовится редакторский кадр",
             TextWrapping = TextWrapping.Wrap,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
@@ -250,9 +278,11 @@ public partial class MainWindow {
         pendingInput.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoAnalysisEditedInputPending)));
         Border inputPreview = CreateAnalysisPreview(new Grid { Children = { inputImage, pendingInput } });
 
-        Image resultImage = new Image { Stretch = Stretch.Uniform };
+        VideoPreviewImage resultImage = new() { Stretch = Stretch.Uniform };
         resultImage.Bind(Image.SourceProperty,
             CompiledBinding.Create<MainViewModel, Bitmap?>(viewModel => viewModel.AnalysisResultImage));
+        resultImage.Bind(VideoPreviewImage.RevisionProperty,
+            CompiledBinding.Create<MainViewModel, int>(viewModel => viewModel.VideoAnalysisInputRevision));
         TextBlock empty = new TextBlock {
             Text = "Результатов анализа нет",
             Foreground = Brushes.LightGray,
@@ -277,26 +307,30 @@ public partial class MainWindow {
             SelectedIndex = 0,
             HorizontalAlignment = HorizontalAlignment.Left
         };
+        Button videoDisplay = CreateVideoAnalysisDisplayButton();
+        videoDisplay.IsVisible = false;
         tabs.SelectionChanged += (_, e) => {
             if (!ReferenceEquals(e.Source, tabs)) {
                 return;
             }
-            inputPreview.IsVisible = tabs.SelectedIndex != 1;
-            resultPreview.IsVisible = tabs.SelectedIndex == 1;
+            bool result = tabs.SelectedIndex == 1;
+            inputPreview.IsVisible = !result;
+            resultPreview.IsVisible = result;
+            videoDisplay.IsVisible = result;
+            (DataContext as MainViewModel)?.SetVideoAnalysisResultTabSelected(result);
         };
+        tabs.DataContextChanged += (_, _) =>
+            (tabs.DataContext as MainViewModel)?.SetVideoAnalysisResultTabSelected(tabs.SelectedIndex == 1);
         Grid header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 8 };
         header.Children.Add(tabs);
         Button displayButton = CreateAnalysisDisplayButton();
         displayButton.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
         Grid.SetColumn(displayButton, 1);
         header.Children.Add(displayButton);
-        ComboBox videoSource = new() { ItemsSource = new[] { "Оригинал", "Результат редактирования" } };
-        AutomationProperties.SetName(videoSource, "Кадр для анализа");
-        videoSource.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
-        videoSource.Bind(SelectingItemsControl.SelectedIndexProperty,
-            new Binding(nameof(MainViewModel.SelectedVideoAnalysisSourceIndex)) { Mode = BindingMode.TwoWay });
-        Grid.SetColumn(videoSource, 1);
-        header.Children.Add(videoSource);
+        Border videoDisplayHost = new() { Child = videoDisplay };
+        videoDisplayHost.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
+        Grid.SetColumn(videoDisplayHost, 1);
+        header.Children.Add(videoDisplayHost);
         layout.Children.Add(header);
 
         StackPanel descriptions = new StackPanel { Spacing = 4 };
@@ -319,6 +353,41 @@ public partial class MainWindow {
         Grid.SetRow(footer, 2);
         layout.Children.Add(footer);
         return CreateAnalysisCard(layout);
+    }
+
+    // меняем показ вкладки и подложку результата независимо от вычислительных источников методов
+    private Button CreateVideoAnalysisDisplayButton() {
+        StackPanel options = new() { Spacing = 6, Width = 264 };
+        options.Children.Add(new TextBlock { Text = "Что показывать во «Входе»", FontWeight = FontWeight.SemiBold });
+        options.Children.Add(CreateVideoAnalysisDisplayChoice("Оригинал", "VideoAnalysisInput", 0,
+            nameof(MainViewModel.SelectedVideoAnalysisSourceIndex), (viewModel, value) => viewModel.SelectedVideoAnalysisSourceIndex = value));
+        options.Children.Add(CreateVideoAnalysisDisplayChoice("Результат редактирования", "VideoAnalysisInput", 1,
+            nameof(MainViewModel.SelectedVideoAnalysisSourceIndex), (viewModel, value) => viewModel.SelectedVideoAnalysisSourceIndex = value));
+        options.Children.Add(new Separator());
+        options.Children.Add(new TextBlock { Text = "Подложка результата", FontWeight = FontWeight.SemiBold });
+        string[] backgrounds = ["Оригинал", "Результат редактирования", "Сегментация", "Без изображения"];
+        for (int i = 0; i < backgrounds.Length; i++) {
+            options.Children.Add(CreateVideoAnalysisDisplayChoice(backgrounds[i], "VideoAnalysisBackground", i,
+                nameof(MainViewModel.SelectedVideoAnalysisBackgroundIndex),
+                (viewModel, value) => viewModel.SelectedVideoAnalysisBackgroundIndex = value));
+        }
+        return CreateAnalysisDisplayFlyout(options);
+    }
+
+    // синхронизируем отметку одного варианта, выбор передаем только при щелчке пользователя
+    private RadioButton CreateVideoAnalysisDisplayChoice(string title, string group, int index, string property,
+        Action<MainViewModel, int> select) {
+        RadioButton option = new() { Content = title, GroupName = group };
+        option.Bind(ToggleButton.IsCheckedProperty, new Binding($"DataContext.{property}") {
+            Source = this, Mode = BindingMode.OneWay,
+            Converter = new FuncValueConverter<int, bool>(value => value == index)
+        });
+        option.Click += (_, _) => {
+            if (DataContext is MainViewModel viewModel) {
+                select(viewModel, index);
+            }
+        };
+        return option;
     }
 
     private Button CreateAnalysisDisplayButton() {
@@ -353,9 +422,15 @@ public partial class MainWindow {
         BindAnalysisPopup(plate, IsEnabledProperty, nameof(MainViewModel.IsPlateAnalysisEnabled));
         options.Children.Add(plate);
 
+        return CreateAnalysisDisplayFlyout(options);
+    }
+
+    // помещаем параметры обеих ветвей в одинаковую прокручиваемую панель
+    private static Button CreateAnalysisDisplayFlyout(Panel options) {
         return new Button {
             Content = "Параметры отображения",
             Flyout = new Flyout {
+                Placement = PlacementMode.BottomEdgeAlignedRight,
                 Content = new ScrollViewer {
                     Content = options, MaxHeight = 400,
                     VerticalScrollBarVisibility = ScrollBarVisibility.Auto,

@@ -5,6 +5,7 @@ namespace ImageVisionApp.Models;
 public sealed class AnalysisEdgeResult {
     public AnalysisImageSource Source { get; }
     public long InputRevision { get; }
+    internal VideoAnalysisFrameKey? VideoFrame { get; }
     public int Width { get; }
     public int Height { get; }
     public AnalysisEdgeMethod Method { get; }
@@ -37,6 +38,7 @@ public sealed class AnalysisEdgeResult {
         CannyUpperThreshold = cannyUpperThreshold;
         Source = input.Source;
         InputRevision = input.InputRevision;
+        VideoFrame = input.Video?.Key;
         Width = width;
         Height = height;
         // сервис передает владение свежими массивами, наружу доступны только чтение и копирование

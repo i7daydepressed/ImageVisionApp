@@ -32,6 +32,12 @@ public sealed class AnalysisInputSnapshot {
 
 internal readonly record struct VideoAnalysisFrameKey(MediaDocument Document, AnalysisImageSource Source,
     long SourceRevision, long Frame, int PreviewRevision, long PlanRevision, long Position,
-    VideoFrameCursor? Cursor, VideoEditorGeometry Geometry);
+    VideoFrameCursor? Cursor, VideoEditorGeometry Geometry) {
+    // связываем разные источники и повороты по идентичности исходного кадра
+    public bool IsSameFrame(VideoAnalysisFrameKey other) =>
+        ReferenceEquals(Document, other.Document) && SourceRevision == other.SourceRevision &&
+        Frame == other.Frame && PreviewRevision == other.PreviewRevision && Position == other.Position &&
+        Cursor == other.Cursor && Geometry.InputSize == other.Geometry.InputSize;
+}
 
 internal sealed record VideoAnalysisCapture(VideoAnalysisFrameKey Key, VideoEditorFrame Pixels, VideoEditorPlan? Plan);

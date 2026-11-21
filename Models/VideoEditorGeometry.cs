@@ -7,6 +7,10 @@ internal readonly record struct VideoEditorGeometry(PixelSize InputSize, int Clo
         ? InputSize
         : new PixelSize(InputSize.Height, InputSize.Width);
 
+    // отсчитываем поворот к подложке от текущей системы координат слоя
+    public VideoEditorGeometry RelativeTo(VideoEditorGeometry target) =>
+        new(OutputSize, (target.ClockwiseQuarterTurns - ClockwiseQuarterTurns + 4) % 4);
+
     // переводим индекс пикселя предпросмотра, который уже ориентирован декодером
     // начало координат в левом верхнем углу, x растет вправо, y вниз
     public PixelPoint MapPixel(PixelPoint input) => ClockwiseQuarterTurns switch {

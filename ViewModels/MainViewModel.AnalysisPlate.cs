@@ -21,6 +21,7 @@ public partial class MainViewModel {
             if (!SetProperty(ref isPlateAnalysisEnabled, value)) {
                 return;
             }
+            OnPropertyChanged(nameof(IsPlateAnalysisSelected));
             if (value && !showAnalysisPlate) {
                 showAnalysisPlate = true;
                 OnPropertyChanged(nameof(ShowAnalysisPlate));
@@ -30,6 +31,15 @@ public partial class MainViewModel {
                 SelectedAnalysisBackground = AnalysisResultBackground.Input;
             }
             InvalidatePlateAnalysis();
+        }
+    }
+
+    public bool IsPlateAnalysisSelected {
+        get => !IsVideoOpen && isPlateAnalysisEnabled;
+        set {
+            if (!IsVideoOpen) {
+                IsPlateAnalysisEnabled = value;
+            }
         }
     }
 

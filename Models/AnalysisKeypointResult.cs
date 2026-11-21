@@ -7,6 +7,7 @@ public readonly record struct AnalysisKeypoint(int X, int Y);
 public sealed class AnalysisKeypointResult {
     public AnalysisImageSource Source { get; }
     public long InputRevision { get; }
+    internal VideoAnalysisFrameKey? VideoFrame { get; }
     public int Width { get; }
     public int Height { get; }
     public int Threshold { get; }
@@ -19,6 +20,7 @@ public sealed class AnalysisKeypointResult {
 
         Source = input.Source;
         InputRevision = input.InputRevision;
+        VideoFrame = input.Video?.Key;
         Width = width;
         Height = height;
         Threshold = threshold;

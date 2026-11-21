@@ -173,6 +173,32 @@ internal sealed class VideoEditorFrame : IDisposable {
         return rgb;
     }
 
+    // собираем непрозрачный BGRA-кадр предпросмотра из рассчитанного RGB
+    public static VideoEditorFrame FromRgb(PixelSize size, ReadOnlySpan<byte> rgb, CancellationToken token) {
+        if (rgb.Length != checked(size.Width * size.Height * 3)) {
+            throw new ArgumentException("Размер кадра не соответствует RGB-данным", nameof(rgb));
+        }
+        VideoEditorFrame frame = new(size);
+        try {
+            int input = 0;
+            int output = 0;
+            for (int y = 0; y < size.Height; y++) {
+                token.ThrowIfCancellationRequested();
+                for (int x = 0; x < size.Width; x++, input += 3, output += 4) {
+                    frame.pixels[output] = rgb[input + 2];
+                    frame.pixels[output + 1] = rgb[input + 1];
+                    frame.pixels[output + 2] = rgb[input];
+                    frame.pixels[output + 3] = 255;
+                }
+            }
+            return frame;
+        }
+        catch {
+            frame.Dispose();
+            throw;
+        }
+    }
+
     // переносим цветовые байты в рабочий MagickImage, выполняем очередь и возвращаем пиксели без кодирования
     public void ApplyOperations(ReadOnlySpan<VideoEditorStep> steps, PixelSize outputSize) {
         using MagickImage image = new();

@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
@@ -12,6 +11,10 @@ namespace ImageVisionApp.ViewModels;
 
 public partial class MainViewModel {
     private readonly record struct VideoAnalysisInput(VideoAnalysisFrameKey Key, Bitmap Bitmap, VideoEditorPlan? Plan);
+    private readonly record struct VideoAnalysisRequest(VideoAnalysisFrameKey Original, VideoAnalysisFrameKey Edited,
+        VideoFrameAnalysisSettings Settings, AnalysisImageSource EdgeSource, AnalysisImageSource SegmentationSource,
+        long EdgesRevision, long SegmentationRevision, long KeypointsRevision);
+
     private readonly record struct PhotoAnalysisSettings(bool Edges, bool Segmentation, bool Keypoints,
         AnalysisEdgeMethod Method, string Lower, string Upper, string Clusters, string Fast, bool Nonmax,
         AnalysisResultBackground Background, bool ShowEdges, bool ShowKeypoints);
@@ -20,49 +23,78 @@ public partial class MainViewModel {
     private bool videoAnalysisApplyingPlan;
     private bool observedVideoAnalysisPlaying;
     private VideoAnalysisFrameKey? observedAnalysisFrame;
-    private VideoAnalysisFrameKey? requestedAnalysisFrame;
+    private VideoAnalysisFrameKey? observedEditedAnalysisFrame;
+    private VideoAnalysisRequest? videoAnalysisRequest;
+    private AnalysisImageSource videoAnalysisDisplayedSource;
+    private AnalysisImageSource videoEdgeSource;
+    private AnalysisImageSource videoSegmentationSource;
+    private VideoAnalysisFrameKey? videoAnalysisEditedKey;
     private WriteableBitmap? videoAnalysisEditedInput;
     private string? videoAnalysisFailure;
     private PhotoAnalysisSettings? photoAnalysisBeforeVideo;
 
     public int VideoAnalysisInputRevision { get; private set; }
     public int SelectedVideoAnalysisSourceIndex {
-        get => IsOriginalAnalysisSource ? 0 : 1;
+        get => (int)videoAnalysisDisplayedSource;
         set {
-            if (value is 0 or 1) {
-                SelectedAnalysisSource = value == 0 ? AnalysisImageSource.Original : AnalysisImageSource.Edited;
+            if (!IsVideoOpen || value is < 0 or > 1 ||
+                !SetProperty(ref videoAnalysisDisplayedSource, (AnalysisImageSource)value)) {
+                return;
+            }
+            NotifyVideoAnalysisInput();
+            RefreshVideoAnalysisComposition();
+        }
+    }
+
+    public int SelectedVideoEdgeSourceIndex {
+        get => (int)videoEdgeSource;
+        set {
+            if (IsVideoOpen && value is 0 or 1 && SetProperty(ref videoEdgeSource, (AnalysisImageSource)value)) {
+                InvalidateEdgeAnalysis();
             }
         }
     }
 
-    public bool IsVideoAnalysisEditedInputPending => IsVideoOpen && videoAnalysisEditedInput is null &&
-        TryResolveVideoAnalysisInput(out VideoAnalysisInput input) && input.Plan is not null;
-
-    internal VideoAnalysisFrameKey? AnalyzedVideoFrame => HasAnalysisResult ? requestedAnalysisFrame : null;
-    private bool HasAnalysisVideoMethods => isEdgesAnalysisEnabled || isSegmentationAnalysisEnabled || isKeypointAnalysisEnabled;
-
-    // показываем актуальный исходник или фактический результат полного плана
-    private Bitmap? AnalysisVideoInputImage {
-        get {
-            if (!TryResolveVideoAnalysisInput(out VideoAnalysisInput input)) {
-                return null;
+    public int SelectedVideoSegmentationSourceIndex {
+        get => (int)videoSegmentationSource;
+        set {
+            if (IsVideoOpen && value is 0 or 1 && SetProperty(ref videoSegmentationSource, (AnalysisImageSource)value)) {
+                InvalidateSegmentationAnalysis();
             }
-            return input.Plan is null ? input.Bitmap : videoAnalysisEditedInput;
         }
     }
 
-    // показываем время снимка на шкале приложения и размеры выбранных пикселей
+    public bool IsVideoAnalysisEditedInputPending => IsVideoOpen && videoAnalysisDisplayedSource == AnalysisImageSource.Edited &&
+        HasVideoAnalysisInput && !TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Edited, out _) && videoAnalysisEditedFailure is null;
+
+    private bool HasAnalysisVideoMethods => isEdgesAnalysisEnabled || IsSegmentationAnalysisEnabled || isKeypointAnalysisEnabled;
+    private bool HasVideoAnalysisInput => TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Original, out _);
+    private bool HasVideoAnalysisResult => edgesResult is not null || segmentationResult is not null || keypointsResult is not null;
+    internal VideoAnalysisFrameKey? AnalyzedVideoFrame =>
+        edgesResult?.VideoFrame ?? segmentationResult?.VideoFrame ?? keypointsResult?.VideoFrame;
+
+    // оставляем подтвержденный оригинал видимым до готовности выбранного редакторского кадра
+    private Bitmap? AnalysisVideoInputImage =>
+        TryResolveReadyVideoAnalysisInput(videoAnalysisDisplayedSource, out VideoAnalysisInput input) ||
+        TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Original, out input) ? input.Bitmap : null;
+
+    // описываем то, что показано во «Входе», независимо от вычислительных источников
     private string DescribeVideoAnalysisInput() {
-        string name = IsOriginalAnalysisSource ? "Оригинал" : "Результат редактирования";
-        if (!TryResolveVideoAnalysisInput(out VideoAnalysisInput input)) {
-            return name;
+        if (TryResolveReadyVideoAnalysisInput(videoAnalysisDisplayedSource, out VideoAnalysisInput input) ||
+            TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Original, out input)) {
+            string name = input.Key.Source == AnalysisImageSource.Original ? "Оригинал" : "Результат редактирования";
+            var size = input.Key.Geometry.OutputSize;
+            return $"Вход: {name} · {size.Width} × {size.Height} · {FormatVideoAnalysisTime(input.Key.Position)}";
         }
-        var size = input.Key.Geometry.OutputSize;
-        return $"{name} · {size.Width} × {size.Height} · {FormatVideoAnalysisTime(input.Key.Position)}";
+        return "Вход: ожидание видеокадра";
     }
 
-    // проверяем, что исходный снимок соответствует остановленному плееру, а подготовленная пара актуальна
-    private bool TryResolveVideoAnalysisInput(out VideoAnalysisInput input) {
+    // отличаем готовые пиксели от плана, для которого предстоит подготовить кадр
+    private bool TryResolveReadyVideoAnalysisInput(AnalysisImageSource source, out VideoAnalysisInput input) =>
+        TryResolveVideoAnalysisInput(source, out input) && input.Plan is null;
+
+    // связываем источник с текущей паузой и используем подготовленную или сохраненную редакторскую пару
+    private bool TryResolveVideoAnalysisInput(AnalysisImageSource source, out VideoAnalysisInput input) {
         input = default;
         if (mediaPreviewsDisposed || CurrentDocument is not { Kind: MediaKind.Video } document ||
             videoWantsToPlay || PlaybackStatus.IsPlaying || videoPlayback?.State is not (VLCState.Paused or VLCState.Ended) ||
@@ -72,194 +104,230 @@ public partial class MainViewModel {
             return false;
         }
 
+        bool edited = source == AnalysisImageSource.Edited;
+        VideoEditorGeometry geometry = edited ? videoEditorPlan.GetGeometry(original.PixelSize) : new(original.PixelSize, 0);
+        VideoFrameCursor? cursor = preparedSource is not null ? preparedPresentedFrame : videoPinnedFrame;
+        VideoAnalysisFrameKey originalKey = new(document, AnalysisImageSource.Original, videoEditorSource, videoEditorFrame,
+            VideoPreviewRevision, 0, PlaybackStatus.Position, cursor, new(original.PixelSize, 0));
+        VideoAnalysisFrameKey key = edited ? GetVideoAnalysisEditedKey(originalKey) : originalKey;
         Bitmap bitmap = original;
         VideoEditorPlan? plan = null;
-        VideoEditorGeometry geometry = new(original.PixelSize, 0);
-        long planRevision = 0;
-        if (IsEditedAnalysisSource) {
-            planRevision = videoEditorPlan.Revision;
-            if (videoEditorPlan.HasSteps) {
-                geometry = videoEditorPlan.GetGeometry(original.PixelSize);
-                if (preparedSource is not null) {
-                    if (!videoEditorOutputVisible || videoEditorOutput is not { } edited ||
-                        preparedFrom is null || preparedPresentedFrame is null ||
-                        videoEditorOutputGeometry != geometry || edited.PixelSize != geometry.OutputSize) {
-                        return false;
-                    }
-                    bitmap = edited;
+        if (edited && videoEditorPlan.HasSteps) {
+            if (preparedSource is not null) {
+                if (!videoEditorOutputVisible || videoEditorOutput is not { } output ||
+                    preparedFrom is null || preparedPresentedFrame is null ||
+                    videoEditorOutputGeometry != geometry || output.PixelSize != geometry.OutputSize) {
+                    return false;
                 }
-                else {
-                    if (HasLivePreviewSourceWork || PreparedVideo is { ReservedBytes: > 0 }) {
-                        return false;
-                    }
-                    plan = videoEditorPlan;
-                }
+                bitmap = output;
+            }
+            else if (SameVideoAnalysisFrame(videoAnalysisEditedKey, key) && videoAnalysisEditedInput is { } cached) {
+                bitmap = cached;
+            }
+            else if (!HasLivePreviewSourceWork && PreparedVideo is not { ReservedBytes: > 0 }) {
+                plan = videoEditorPlan;
+            }
+            else {
+                return false;
             }
         }
 
-        VideoFrameCursor? cursor = preparedSource is not null ? preparedPresentedFrame : videoPinnedFrame;
-        VideoAnalysisFrameKey key = new(document, SelectedAnalysisSource, videoEditorSource, videoEditorFrame,
-            VideoPreviewRevision, planRevision, PlaybackStatus.Position, cursor, geometry);
         input = new(key, bitmap, plan);
         return true;
     }
 
-    // фиксируем пиксели под UI до передачи владения фоновому вычислению
-    private AnalysisInputSnapshot? CaptureVideoAnalysisInput() {
-        if (!TryResolveVideoAnalysisInput(out VideoAnalysisInput input)) {
-            return null;
-        }
-        if (input.Plan is { } plan &&
-            VideoEditorFrame.GetBufferBytes(input.Bitmap.PixelSize) + plan.GetScratchBytes(input.Bitmap.PixelSize) > PreviewSettings.BudgetBytes) {
-            throw new InvalidOperationException("Бюджета буферов недостаточно для редакторского кадра");
-        }
-        return new(SelectedAnalysisSource, AnalysisInputRevision,
+    // выводим штамп результата очереди из исходной позы и текущей версии плана
+    private VideoAnalysisFrameKey GetVideoAnalysisEditedKey(VideoAnalysisFrameKey original) => original with {
+        Source = AnalysisImageSource.Edited,
+        PlanRevision = videoEditorPlan.Revision,
+        Geometry = videoEditorPlan.GetGeometry(original.Geometry.InputSize)
+    };
+
+    // общий снимок по умолчанию дает физический оригинал независимо от режима просмотра
+    private AnalysisInputSnapshot? CaptureVideoAnalysisInput() =>
+        TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Original, out VideoAnalysisInput input)
+            ? CaptureVideoAnalysisInput(input) : null;
+
+    // копируем готовые пиксели на UI, пока общий bitmap принадлежит подтвержденному кадру
+    private AnalysisInputSnapshot CaptureVideoAnalysisInput(VideoAnalysisInput input) =>
+        new(input.Key.Source, AnalysisInputRevision,
             new VideoAnalysisCapture(input.Key, VideoEditorFrame.Capture(input.Bitmap), input.Plan));
+
+    // готовим редакторский вход лишь для методов текущего ручного запроса, которым он нужен
+    private bool NeedsEditedVideoAnalysisInput(VideoAnalysisRequest request) =>
+        IsCurrentAnalysisLayer(request.Original) && SameVideoAnalysisFrame(request.Edited, GetVideoAnalysisEditedKey(request.Original)) &&
+        (request.Settings.EdgeMethod is not null && request.EdgesRevision == edgesWorkRevision && request.EdgeSource == AnalysisImageSource.Edited ||
+         request.Settings.Clusters is not null && request.SegmentationRevision == segmentationWorkRevision &&
+         request.SegmentationSource == AnalysisImageSource.Edited);
+
+    // просим общий подготовитель отдать актуальные пиксели, оставляя интерфейс и исходные методы доступными
+    private async Task WaitForVideoAnalysisEditedInputAsync(VideoAnalysisRequest request, CancellationToken token) {
+        while (NeedsEditedVideoAnalysisInput(request)) {
+            token.ThrowIfCancellationRequested();
+            if (TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Edited, out _)) {
+                return;
+            }
+            if (videoAnalysisEditedFailure is { } error) {
+                videoAnalysisFailure = error;
+                return;
+            }
+            await Task.Delay(25, token);
+        }
     }
 
-    // выполняем один запрос на снимке, оставляя общий плеер и его звук в текущем состоянии
+    // запускаем методы с двумя подтвержденными входами и публикуем каждый по его собственной версии
     private async Task RunVideoAnalysisAsync() {
-        analysisWorkerRunning = true;
-        NotifyAnalysisControls();
-        VideoAnalysisFrameKey? startedFrame = null;
-        try {
-            AnalysisInputSnapshot input = CaptureVideoAnalysisInput()
-                ?? throw new InvalidOperationException("Нет подтвержденного кадра для анализа");
-            VideoAnalysisCapture capture = input.Video!;
-            using VideoEditorFrame pixels = capture.Pixels;
-            ClearVideoAnalysis();
-            startedFrame = requestedAnalysisFrame = capture.Key;
-            long revision = AnalysisInputRevision;
-            TryGetCannyThresholds(out double lower, out double upper);
-            TryGetSegmentationClusterCount(out int clusters);
-            TryGetFastThreshold(out int threshold);
-            VideoFrameAnalysisSettings settings = new(isEdgesAnalysisEnabled ? selectedEdgeMethod : null, lower, upper,
-                isSegmentationAnalysisEnabled ? clusters : null, isKeypointAnalysisEnabled ? threshold : null, fastNonmaxSuppression);
+        if (!TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Original, out VideoAnalysisInput original)) {
+            return;
+        }
+        TryGetCannyThresholds(out double lower, out double upper);
+        TryGetSegmentationClusterCount(out int clusters);
+        TryGetFastThreshold(out int threshold);
+        VideoFrameAnalysisSettings settings = new(isEdgesAnalysisEnabled ? selectedEdgeMethod : null, lower, upper,
+            IsSegmentationAnalysisEnabled ? clusters : null, isKeypointAnalysisEnabled ? threshold : null, fastNonmaxSuppression);
+        VideoAnalysisRequest request = new(original.Key, GetVideoAnalysisEditedKey(original.Key), settings,
+            videoEdgeSource, videoSegmentationSource, edgesWorkRevision, segmentationWorkRevision, keypointsWorkRevision);
 
-            using CancellationTokenSource cancellation = new();
-            activeAnalysisCancellation = cancellation;
-            try {
-                AnalysisStatusMessage = $"Анализ кадра · {FormatVideoAnalysisTime(capture.Key.Position)}";
-                if (capture.Plan is { } plan) {
-                    await ApplyVideoAnalysisPlanAsync(capture, plan, cancellation.Token);
-                }
-                VideoFrameAnalysisResult result = await Task.Run(
-                    () => VideoFrameAnalysisService.Analyze(input, settings, cancellation.Token), cancellation.Token);
-                if (cancellation.IsCancellationRequested || analysisDisposed || revision != AnalysisInputRevision ||
-                    !SameVideoAnalysisFrame(requestedAnalysisFrame, capture.Key) ||
-                    !TryResolveVideoAnalysisInput(out VideoAnalysisInput current) ||
-                    !SameVideoAnalysisFrame(current.Key, capture.Key)) {
-                    return;
-                }
-                PublishVideoAnalysis(result, capture);
+        analysisWorkerRunning = true;
+        videoAnalysisFailure = null;
+        videoAnalysisRequest = request;
+        using CancellationTokenSource cancellation = new();
+        activeAnalysisCancellation = cancellation;
+        try {
+            RefreshVideoAnalysisStatus();
+            if (NeedsEditedVideoAnalysisInput(request)) {
+                RefreshVideoAnalysisComposition();
+                await WaitForVideoAnalysisEditedInputAsync(request, cancellation.Token);
             }
-            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) {
-                // старый снимок остается у работника до выхода, но не попадает в интерфейс
+            if (!TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Original, out original) ||
+                !SameVideoAnalysisFrame(original.Key, request.Original)) {
+                return;
             }
-            finally {
-                activeAnalysisCancellation = null;
+            AnalysisInputSnapshot input = CaptureVideoAnalysisInput(original);
+            using VideoEditorFrame pixels = input.Video!.Pixels;
+            AnalysisInputSnapshot? editedInput = NeedsEditedVideoAnalysisInput(request) &&
+                TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Edited, out VideoAnalysisInput edited)
+                ? CaptureVideoAnalysisInput(edited) : null;
+            using VideoEditorFrame? editedPixels = editedInput?.Video?.Pixels;
+            settings = settings with {
+                EdgeMethod = request.EdgesRevision == edgesWorkRevision &&
+                    (request.EdgeSource == AnalysisImageSource.Original || editedInput is not null) ? settings.EdgeMethod : null,
+                Clusters = request.SegmentationRevision == segmentationWorkRevision &&
+                    (request.SegmentationSource == AnalysisImageSource.Original || editedInput is not null) ? settings.Clusters : null,
+                FastThreshold = request.KeypointsRevision == keypointsWorkRevision ? settings.FastThreshold : null
+            };
+            VideoFrameAnalysisResult result = await Task.Run(() => VideoFrameAnalysisService.Analyze(
+                input, editedInput, request.EdgeSource, request.SegmentationSource, settings, cancellation.Token), cancellation.Token);
+            if (cancellation.IsCancellationRequested || analysisDisposed || !IsCurrentAnalysisLayer(request.Original)) {
+                return;
             }
+            if (request.EdgesRevision == edgesWorkRevision && result.Edges is { } edges && IsCurrentAnalysisLayer(edges.VideoFrame)) {
+                SetEdgesResult(edges);
+            }
+            if (request.SegmentationRevision == segmentationWorkRevision && result.Segmentation is { } segmentation &&
+                IsCurrentAnalysisLayer(segmentation.VideoFrame)) {
+                SetSegmentationResult(segmentation);
+            }
+            if (request.KeypointsRevision == keypointsWorkRevision && result.Keypoints is { } keypoints) {
+                SetKeypointsResult(keypoints);
+            }
+            RefreshVideoAnalysisComposition();
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) {
+            // смена позы исключает публикацию прежнего снимка
         }
         catch (Exception error) {
-            if (!analysisDisposed && IsVideoOpen &&
-                (startedFrame is null || SameVideoAnalysisFrame(requestedAnalysisFrame, startedFrame))) {
+            if (!analysisDisposed && !cancellation.IsCancellationRequested && IsCurrentAnalysisLayer(request.Original)) {
                 videoAnalysisFailure = $"Не удалось выполнить анализ: {error.Message}";
-                RefreshVideoAnalysisStatus();
             }
         }
         finally {
+            activeAnalysisCancellation = null;
+            videoAnalysisRequest = null;
             analysisWorkerRunning = false;
             NotifyAnalysisControls();
             if (!IsVideoOpen && !analysisDisposed && (analysisRunRequested || analysisCompositionRequested)) {
                 _ = ProcessAnalysisRequestsAsync();
             }
-        }
-    }
-
-    // удерживаем допуск видеоочередей до возврата всех временных буферов плана
-    private async Task ApplyVideoAnalysisPlanAsync(VideoAnalysisCapture capture, VideoEditorPlan plan, CancellationToken token) {
-        videoAnalysisApplyingPlan = true;
-        try {
-            VideoEditorGeometry geometry = await Task.Run(() => plan.Apply(capture.Pixels), token);
-            if (geometry != capture.Key.Geometry) {
-                throw new InvalidOperationException("Геометрия редакторского кадра изменилась");
+            if (IsVideoOpen && !analysisDisposed) {
+                RefreshVideoAnalysisStatus();
             }
         }
-        finally {
-            videoAnalysisApplyingPlan = false;
-        }
     }
 
-    // заменяем вход редактора и вывод анализа данными одного кадра
-    private void PublishVideoAnalysis(VideoFrameAnalysisResult result, VideoAnalysisCapture capture) {
-        WriteableBitmap? preview = null;
-        Bitmap? output = null;
-        try {
-            if (capture.Plan is not null) {
-                preview = GetPreparedBitmap(null, capture.Pixels.Size);
-                using ILockedFramebuffer target = preview.Lock();
-                capture.Pixels.CopyTo(target);
-            }
-            using MemoryStream stream = new(result.Png);
-            output = new Bitmap(stream);
-            videoAnalysisEditedInput = preview;
-            preview = null;
-            SetEdgesResult(result.Edges);
-            SetSegmentationResult(result.Segmentation);
-            SetKeypointsResult(result.Keypoints);
-            ReplaceAnalysisComposition(output, result.Png);
-            output = null;
-            NotifyVideoAnalysisInput();
-            RefreshAnalysisStatus();
-        }
-        finally {
-            preview?.Dispose();
-            output?.Dispose();
-        }
-    }
+    // сначала сверяем текущий документ, физический кадр и план именно этого источника
+    private bool IsCurrentAnalysisLayer(VideoAnalysisFrameKey? key) =>
+        key is { } frame && TryResolveVideoAnalysisInput(frame.Source, out VideoAnalysisInput current) &&
+        SameVideoAnalysisFrame(frame, current.Key);
 
-    // снимаем результат по смене запроса, сохраняя данные незавершенного снимка у работника
-    private void ClearVideoAnalysis() {
-        bool hadRequest = requestedAnalysisFrame is not null;
-        requestedAnalysisFrame = null;
-        videoAnalysisFailure = null;
-        if (hadRequest) {
+    // отменяем вычисление методов при смене физического кадра или документа
+    private void CancelActiveVideoAnalysis() {
+        if (videoAnalysisRequest is not null) {
+            videoAnalysisRequest = null;
             activeAnalysisCancellation?.Cancel();
+        }
+        videoAnalysisFailure = null;
+    }
+
+    // снимаем всю композицию предыдущего документа и отменяем его незавершенную работу
+    private void ClearVideoAnalysis() {
+        CancelActiveVideoAnalysis();
+        CancelVideoAnalysisComposition();
+        if (IsVideoOpen || observedAnalysisFrame is not null) {
             SetEdgesResult(null);
             SetSegmentationResult(null);
             SetKeypointsResult(null);
-            ReplaceAnalysisComposition(null, null);
         }
-        if (videoAnalysisEditedInput is { } previous) {
-            videoAnalysisEditedInput = null;
-            NotifyVideoAnalysisInput();
-            previous.Dispose();
-        }
+        ReleaseVideoAnalysisEditedInput();
     }
 
-    // замечаем смену кадра, позы или готовности без запуска метода на каждом тике
+    // реагируем только на смену подтвержденного кадра, плана, паузы или доступа к бюджету
     private void RefreshVideoAnalysisInput() {
-        if (analysisDisposed || !IsVideoOpen || !videoAnalysisVisible && requestedAnalysisFrame is null) {
+        if (analysisDisposed || !IsVideoOpen) {
             return;
         }
-        VideoAnalysisFrameKey? current = TryResolveVideoAnalysisInput(out VideoAnalysisInput input) ? input.Key : null;
-        bool playing = videoWantsToPlay || PlaybackStatus.IsPlaying;
-        if (observedVideoAnalysisPlaying != playing || !SameVideoAnalysisFrame(observedAnalysisFrame, current)) {
-            observedVideoAnalysisPlaying = playing;
-            observedAnalysisFrame = current;
-            if (!SameVideoAnalysisFrame(requestedAnalysisFrame, current)) {
-                ClearVideoAnalysis();
-            }
-            NotifyVideoAnalysisInput();
-            RefreshAnalysisStatus();
+        if (!videoAnalysisVisible && observedAnalysisFrame is null && videoAnalysisRequest is null) {
+            return;
         }
+        VideoAnalysisFrameKey? original = TryResolveVideoAnalysisInput(AnalysisImageSource.Original, out VideoAnalysisInput source)
+            ? source.Key : null;
+        VideoAnalysisFrameKey? edited = TryResolveVideoAnalysisInput(AnalysisImageSource.Edited, out VideoAnalysisInput output)
+            ? output.Key : null;
+        bool playing = videoWantsToPlay || PlaybackStatus.IsPlaying;
+        if (observedVideoAnalysisPlaying == playing && SameVideoAnalysisFrame(observedAnalysisFrame, original) &&
+            SameVideoAnalysisFrame(observedEditedAnalysisFrame, edited) && !ShouldRetryVideoAnalysisEditedInput) {
+            return;
+        }
+        videoAnalysisViewCancellation?.Cancel();
+        videoAnalysisFailure = null;
+        observedVideoAnalysisPlaying = playing;
+        observedAnalysisFrame = original;
+        observedEditedAnalysisFrame = edited;
+        if (!SameVideoAnalysisFrame(videoAnalysisEditedKey, edited) || ShouldRetryVideoAnalysisEditedInput) {
+            ReleaseVideoAnalysisEditedInput();
+        }
+        if (videoAnalysisRequest is { } request && !IsCurrentAnalysisLayer(request.Original)) {
+            CancelActiveVideoAnalysis();
+        }
+        if (edgesResult is { } edges && !IsCurrentAnalysisLayer(edges.VideoFrame)) {
+            SetEdgesResult(null);
+        }
+        if (segmentationResult is { } segmentation && !IsCurrentAnalysisLayer(segmentation.VideoFrame)) {
+            SetSegmentationResult(null);
+        }
+        if (keypointsResult is { } points && !IsCurrentAnalysisLayer(points.VideoFrame)) {
+            SetKeypointsResult(null);
+        }
+        NotifyVideoAnalysisInput();
+        RefreshVideoAnalysisComposition();
+        RefreshVideoAnalysisStatus();
     }
 
     // учитываем даже разные кадры одного PTS и изменения уже переиспользуемого bitmap
     private static bool SameVideoAnalysisFrame(VideoAnalysisFrameKey? left, VideoAnalysisFrameKey? right) =>
         left == right && ReferenceEquals(left?.Document, right?.Document);
 
-    // оповещаем привязки после успешного захвата или изменения готовности остановленного кадра
+    // обновляем привязки входа и доступность ручного анализа после смены кадра
     private void NotifyVideoAnalysisInput() {
         VideoAnalysisInputRevision++;
         OnPropertyChanged(nameof(VideoAnalysisInputRevision));
@@ -271,17 +339,42 @@ public partial class MainViewModel {
         NotifyAnalysisControls();
     }
 
-    // показываем условия ручного запуска и фактический итог видеозапроса
+    // показываем позу плеера, готовность подложки и методы с действительными результатами
     private void RefreshVideoAnalysisStatus() {
-        AnalysisStatusMessage = videoAnalysisFailure ??
-            (videoWantsToPlay || PlaybackStatus.IsPlaying ? "Поставьте видео на паузу для анализа кадра"
-            : analysisWorkerRunning && requestedAnalysisFrame is not null ? "Выполняется анализ кадра"
-            : !HasAnalysisInput ? "Ожидание подтвержденного видеокадра"
-            : !HasAnalysisVideoMethods ? "Включите метод анализа"
-            : isEdgesAnalysisEnabled && !AreSelectedAnalysisParametersValid ? CannyThresholdError
-            : isSegmentationAnalysisEnabled && HasSegmentationValidationError ? SegmentationValidationError
-            : isKeypointAnalysisEnabled && HasFastThresholdError ? FastThresholdError
-            : "Выполните анализ выбранного кадра");
+        NotifyAnalysisControls();
+        string? error = videoAnalysisFailure ?? (WantsVideoAnalysisEditedInput ? videoAnalysisEditedFailure : null)
+            ?? videoAnalysisCompositionFailure;
+        string? pending = VideoAnalysisPendingMessage;
+        if (videoWantsToPlay || PlaybackStatus.IsPlaying) {
+            AnalysisStatusMessage = "Поставьте видео на паузу для анализа кадра";
+        }
+        else if (error is not null || videoAnalysisRequest is not null || pending is not null) {
+            AnalysisStatusMessage = error ?? (videoAnalysisRequest is { } request
+                ? $"Анализ кадра · {FormatVideoAnalysisTime(request.Original.Position)}" : pending!);
+        }
+        else if (isEdgesAnalysisEnabled && !AreSelectedAnalysisParametersValid) {
+            AnalysisStatusMessage = CannyThresholdError;
+        }
+        else if (IsSegmentationAnalysisEnabled && HasSegmentationValidationError) {
+            AnalysisStatusMessage = SegmentationValidationError;
+        }
+        else if (isKeypointAnalysisEnabled && HasFastThresholdError) {
+            AnalysisStatusMessage = FastThresholdError;
+        }
+        else if (AnalyzedVideoFrame is { } frame) {
+            string methods = edgesResult is null ? "" : edgesResult.Method == AnalysisEdgeMethod.Canny ? "Canny" : "Робертс";
+            if (segmentationResult is { } segmentation) {
+                methods += (methods.Length == 0 ? "" : " + ") + $"K-means N={segmentation.ClusterCount}";
+            }
+            if (keypointsResult is { } points) {
+                methods += (methods.Length == 0 ? "" : " + ") + $"FAST: {points.Points.Length} точек";
+            }
+            AnalysisStatusMessage = $"Готово: {methods} · {FormatVideoAnalysisTime(frame.Position)}";
+        }
+        else {
+            AnalysisStatusMessage = !HasVideoAnalysisInput ? "Ожидание подтвержденного видеокадра"
+                : !HasAnalysisVideoMethods ? "Включите метод анализа" : "Выполните анализ выбранного кадра";
+        }
     }
 
     // форматируем позицию остановленного кадра в миллисекундах даже для длинных роликов
@@ -290,13 +383,20 @@ public partial class MainViewModel {
         return $"{(long)time.TotalMinutes:00}:{time.Seconds:00}.{time.Milliseconds:000}";
     }
 
-    // обновляем видеовход при входе на страницу, не создавая спрос на скрытый редактор
+    // обновляем предъявление после входа на страницу и приостанавливаем его вне нее
     internal void SetVideoAnalysisVisible(bool visible) {
         videoAnalysisVisible = visible;
         if (visible && IsVideoOpen) {
             RefreshVideoAnalysisInput();
             NotifyVideoAnalysisInput();
-            RefreshAnalysisStatus();
+            RefreshVideoAnalysisComposition();
+            RefreshVideoAnalysisStatus();
+        }
+        else if (!visible) {
+            if (VideoAnalysisManualNeedsEditedInput && !TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Edited, out _)) {
+                CancelActiveVideoAnalysis();
+            }
+            CancelVideoAnalysisComposition();
         }
     }
 
@@ -304,7 +404,13 @@ public partial class MainViewModel {
     private void ResetVideoAnalysisAfterLoad() {
         ClearVideoAnalysis();
         observedAnalysisFrame = null;
+        observedEditedAnalysisFrame = null;
         observedVideoAnalysisPlaying = false;
+        ResetVideoAnalysisViewSelection();
+        videoAnalysisDisplayedSource = videoEdgeSource = videoSegmentationSource = AnalysisImageSource.Original;
+        OnPropertyChanged(nameof(SelectedVideoAnalysisSourceIndex));
+        OnPropertyChanged(nameof(SelectedVideoEdgeSourceIndex));
+        OnPropertyChanged(nameof(SelectedVideoSegmentationSourceIndex));
         if (IsVideoOpen && photoAnalysisBeforeVideo is null) {
             photoAnalysisBeforeVideo = new(isEdgesAnalysisEnabled, isSegmentationAnalysisEnabled, isKeypointAnalysisEnabled,
                 selectedEdgeMethod, cannyLowerThresholdText, cannyUpperThresholdText, segmentationClusterCountText,

@@ -43,7 +43,7 @@ public partial class MainViewModel {
             if (!SetProperty(ref isEdgesAnalysisEnabled, value)) {
                 return;
             }
-            if (value) {
+            if (!IsVideoOpen && value) {
                 ShowAnalysisEdges = true;
             }
             InvalidateEdgeAnalysis();
@@ -106,10 +106,10 @@ public partial class MainViewModel {
         : "Введите конечные числа: 0 ≤ нижний < верхний ≤ 32767";
     public bool HasCannyThresholdError => !TryGetCannyThresholds(out _, out _);
     private bool AreSelectedAnalysisParametersValid => IsRobertsEdgeMethod || !HasCannyThresholdError;
-    private bool HasEnabledAnalysisMethods => isEdgesAnalysisEnabled || isSegmentationAnalysisEnabled ||
+    private bool HasEnabledAnalysisMethods => isEdgesAnalysisEnabled || IsSegmentationAnalysisEnabled ||
         isKeypointAnalysisEnabled || !IsVideoOpen && isPlateAnalysisEnabled;
     private bool AreAllAnalysisParametersValid => (!isEdgesAnalysisEnabled || AreSelectedAnalysisParametersValid) &&
-        (!isSegmentationAnalysisEnabled || !HasSegmentationValidationError) &&
+        (!IsSegmentationAnalysisEnabled || !HasSegmentationValidationError) &&
         (!isKeypointAnalysisEnabled || !HasFastThresholdError);
     private bool HasMissingAnalysisResults => (isEdgesAnalysisEnabled && edgesResult is null) ||
         (isSegmentationAnalysisEnabled && segmentationResult is null) ||
@@ -173,10 +173,11 @@ public partial class MainViewModel {
     public bool IsAnalysisRunning => analysisWorkerRunning;
     public bool CanRunAnalysis => !analysisDisposed && HasEnabledAnalysisMethods && HasAnalysisInput &&
         AreAllAnalysisParametersValid && !analysisWorkerRunning;
-    public bool HasAnalysisResult => analysisResultImage is not null && analysisResultPng is not null;
-    public bool IsAnalysisResultEmpty => !HasAnalysisResult;
+    public bool HasAnalysisResult => IsVideoOpen ? HasVideoAnalysisResult :
+        analysisResultImage is not null && analysisResultPng is not null;
+    public bool IsAnalysisResultEmpty => AnalysisResultImage is null;
     public bool CanSaveAnalysisResult => !analysisDisposed && !IsVideoOpen && HasAnalysisResult && !analysisWorkerRunning;
-    public Bitmap? AnalysisResultImage => analysisResultImage;
+    public Bitmap? AnalysisResultImage => IsVideoOpen ? VideoAnalysisResultImage : analysisResultImage;
     public AnalysisEdgeResult? EdgesResult => edgesResult;
     public long AnalysisResultRevision => analysisResultRevision;
     public string AnalysisStatusMessage {
@@ -274,6 +275,9 @@ public partial class MainViewModel {
         if (analysisDisposed) {
             return;
         }
+        if (IsVideoOpen) {
+            videoAnalysisFailure = null;
+        }
         edgesWorkRevision++;
         edgesFailure = string.Empty;
         analysisDebounce?.Stop();
@@ -315,8 +319,8 @@ public partial class MainViewModel {
     private void RequestAnalysisComposition() {
         analysisDisplayRevision++;
         if (IsVideoOpen) {
-            ClearVideoAnalysis();
-            NotifyAnalysisControls();
+            NotifyVideoAnalysisInput();
+            RefreshVideoAnalysisComposition();
             return;
         }
         ReplaceAnalysisComposition(null, null);
@@ -536,6 +540,10 @@ public partial class MainViewModel {
     }
 
     private void RefreshAnalysisStatus() {
+        if (IsVideoOpen) {
+            RefreshVideoAnalysisStatus();
+            return;
+        }
         string issue = isEdgesAnalysisEnabled && !AreSelectedAnalysisParametersValid ? CannyThresholdError
             : isSegmentationAnalysisEnabled && HasSegmentationValidationError ? SegmentationValidationError
             : isKeypointAnalysisEnabled && HasFastThresholdError ? FastThresholdError
@@ -553,13 +561,8 @@ public partial class MainViewModel {
                     (plateResult.Rectangle is null ? "Номер не найден" : "Найден кандидат на номер");
             }
             Bitmap? input = AnalysisInputImage;
-            string frameTime = IsVideoOpen && requestedAnalysisFrame is { } frame
-                ? $" · {FormatVideoAnalysisTime(frame.Position)}" : string.Empty;
-            AnalysisStatusMessage = $"Готово: {methods} · {input?.PixelSize.Width} × {input?.PixelSize.Height}{frameTime}" +
+            AnalysisStatusMessage = $"Готово: {methods} · {input?.PixelSize.Width} × {input?.PixelSize.Height}" +
                 (issue.Length == 0 ? string.Empty : " · " + issue);
-        }
-        else if (IsVideoOpen) {
-            RefreshVideoAnalysisStatus();
         }
         else {
             AnalysisStatusMessage = !HasAnalysisInput ? "Откройте изображение"

@@ -24,11 +24,11 @@ public partial class MainViewModel {
             if (!SetProperty(ref isKeypointAnalysisEnabled, value)) {
                 return;
             }
-            if (value && !showAnalysisKeypoints) {
+            if (!IsVideoOpen && value && !showAnalysisKeypoints) {
                 showAnalysisKeypoints = true;
                 OnPropertyChanged(nameof(ShowAnalysisKeypoints));
             }
-            if (value && !isEdgesAnalysisEnabled && !isSegmentationAnalysisEnabled &&
+            if (!IsVideoOpen && value && !isEdgesAnalysisEnabled && !isSegmentationAnalysisEnabled &&
                 !isPlateAnalysisEnabled && IsAnalysisBlackBackground) {
                 SelectedAnalysisBackground = AnalysisResultBackground.Input;
             }
@@ -82,6 +82,9 @@ public partial class MainViewModel {
     private void InvalidateKeypointAnalysis() {
         if (analysisDisposed) {
             return;
+        }
+        if (IsVideoOpen) {
+            videoAnalysisFailure = null;
         }
         keypointsWorkRevision++;
         keypointsFailure = string.Empty;

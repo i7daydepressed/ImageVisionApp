@@ -5,6 +5,7 @@ namespace ImageVisionApp.Models;
 public sealed class AnalysisSegmentationResult {
     public AnalysisImageSource Source { get; }
     public long InputRevision { get; }
+    internal VideoAnalysisFrameKey? VideoFrame { get; }
     public int Width { get; }
     public int Height { get; }
     public int ClusterCount { get; }
@@ -26,6 +27,7 @@ public sealed class AnalysisSegmentationResult {
         }
         Source = input.Source;
         InputRevision = input.InputRevision;
+        VideoFrame = input.Video?.Key;
         Width = width;
         Height = height;
         ClusterCount = clusterCount;

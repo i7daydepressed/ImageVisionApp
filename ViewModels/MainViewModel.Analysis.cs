@@ -34,7 +34,7 @@ public partial class MainViewModel {
     public Bitmap? AnalysisInputImage => IsVideoOpen ? AnalysisVideoInputImage :
         IsOriginalAnalysisSource ? OriginalImage : ModifiedImage;
 
-    public bool HasAnalysisInput => IsVideoOpen ? TryResolveVideoAnalysisInput(out _) :
+    public bool HasAnalysisInput => IsVideoOpen ? HasVideoAnalysisInput :
         CurrentDocument?.Kind is MediaKind.Image && (IsOriginalAnalysisSource ? originalImageData : modifiedImageData) is not null;
     public long AnalysisInputRevision => analysisInputRevision;
 
@@ -73,12 +73,13 @@ public partial class MainViewModel {
     private void ResetAnalysisInputAfterLoad() {
         // снимаем уже собранный результат предыдущего документа до смены источника
         analysisCompositionRequested = false;
-        if (HasAnalysisResult) {
+        if (analysisResultImage is not null) {
             ReplaceAnalysisComposition(null, null);
         }
         ResetVideoAnalysisAfterLoad();
         selectedAnalysisSource = AnalysisImageSource.Original;
-        NotifyAnalysisInputChanged();
+        NotifyAnalysisInputChanged(documentChanged: true);
+        OnPropertyChanged(nameof(IsPlateAnalysisSelected));
     }
 
     private void NotifyEditedAnalysisInputChanged() {
@@ -87,11 +88,12 @@ public partial class MainViewModel {
         }
     }
 
-    private void NotifyAnalysisInputChanged() {
+    private void NotifyAnalysisInputChanged(bool documentChanged = false) {
         analysisInputRevision++;
-        InvalidateAllAnalysis();
+        if (!IsVideoOpen || documentChanged) {
+            InvalidateAllAnalysis();
+        }
         OnPropertyChanged(nameof(SelectedAnalysisSource));
-        OnPropertyChanged(nameof(SelectedVideoAnalysisSourceIndex));
         OnPropertyChanged(nameof(IsOriginalAnalysisSource));
         OnPropertyChanged(nameof(IsEditedAnalysisSource));
         OnPropertyChanged(nameof(AnalysisInputImage));

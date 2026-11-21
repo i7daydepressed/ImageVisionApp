@@ -13,9 +13,18 @@ public partial class MainViewModel {
     private string segmentationFailure = string.Empty;
 
     public bool IsSegmentationAnalysisEnabled {
-        get => isSegmentationAnalysisEnabled;
+        get => IsVideoOpen ? videoAnalysisBackground == VideoAnalysisBackground.Segmentation : isSegmentationAnalysisEnabled;
         set {
             Dispatcher.UIThread.VerifyAccess();
+            if (IsVideoOpen) {
+                if (value) {
+                    ChangeVideoAnalysisBackground(VideoAnalysisBackground.Segmentation);
+                }
+                else if (IsSegmentationAnalysisEnabled) {
+                    ChangeVideoAnalysisBackground(videoAnalysisBackgroundBeforeSegmentation);
+                }
+                return;
+            }
             if (!SetProperty(ref isSegmentationAnalysisEnabled, value)) {
                 return;
             }
@@ -37,7 +46,7 @@ public partial class MainViewModel {
                 return;
             }
             NotifySegmentationValidation();
-            if (isSegmentationAnalysisEnabled) {
+            if (IsSegmentationAnalysisEnabled) {
                 InvalidateSegmentationAnalysis();
             }
         }
@@ -48,7 +57,7 @@ public partial class MainViewModel {
             if (!TryGetSegmentationClusterCount(out int count)) {
                 return "Введите целое N от 2 до 20";
             }
-            var size = IsVideoOpen && TryResolveVideoAnalysisInput(out VideoAnalysisInput video)
+            var size = IsVideoOpen && TryResolveVideoAnalysisInput(videoSegmentationSource, out VideoAnalysisInput video)
                 ? video.Key.Geometry.OutputSize : AnalysisInputImage?.PixelSize;
             if (size is { } inputSize) {
                 long pixels = (long)inputSize.Width * inputSize.Height;
@@ -76,6 +85,9 @@ public partial class MainViewModel {
         if (analysisDisposed) {
             return;
         }
+        if (IsVideoOpen) {
+            videoAnalysisFailure = null;
+        }
         segmentationWorkRevision++;
         segmentationFailure = string.Empty;
         analysisDebounce?.Stop();
@@ -95,7 +107,10 @@ public partial class MainViewModel {
         revision == segmentationWorkRevision && inputRevision == AnalysisInputRevision;
 
     private void SetSegmentationResult(AnalysisSegmentationResult? result) {
-        segmentationResult = result;
+        if (!ReferenceEquals(segmentationResult, result)) {
+            segmentationResult = result;
+            ReleaseVideoAnalysisSegmentationPreview();
+        }
         OnPropertyChanged(nameof(SegmentationResult));
     }
 }
