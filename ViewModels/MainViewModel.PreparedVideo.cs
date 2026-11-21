@@ -78,6 +78,7 @@ public partial class MainViewModel {
             return;
         }
         CancelVideoAnalysisApply();
+        liveAnalysisSeekTarget = null;
         preparedPauseOnCurrentPosition = false;
         if (PreviewSettings.Mode == VideoPreviewMode.Live) {
             if (preparedOpening is not null || preparedSource is not null) {
@@ -454,7 +455,8 @@ public partial class MainViewModel {
             target = Math.Max(preparedPosition, playback.Position);
         }
 
-        bool covered = AdvancePreparedVideo(target);
+        bool covered = AdvancePreparedVideo(target, live: state == VLCState.Playing && videoWantsToPlay &&
+            !preparedNeedsSeek && preparedWaitingPosition is null);
         if (preparedSource is null) {
             return;
         }
@@ -490,7 +492,7 @@ public partial class MainViewModel {
     }
 
     // копируем только пару, которая действительно покрывает текущую позицию
-    private bool AdvancePreparedVideo(long position) {
+    private bool AdvancePreparedVideo(long position, bool live = false) {
         if (preparedVideo is not { } coordinator) {
             return false;
         }
@@ -498,6 +500,8 @@ public partial class MainViewModel {
             using PreparedVideoFrame? frame = coordinator.TakeAt(preparedGeneration, position);
             if (frame is not null) {
                 PublishPreparedVideo(frame);
+                RecordVisibleOriginalFrame(live);
+                RecordVisibleEditedFrame(live);
                 return true;
             }
             PreparedVideoWindow snapshot = coordinator.Snapshot;

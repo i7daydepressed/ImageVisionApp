@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Automation;
@@ -51,15 +52,25 @@ public partial class MainWindow {
             WindowStartupLocation = WindowStartupLocation.CenterOwner
         };
         VideoPreviewSettings settings = viewModel.PreviewSettings;
-        int[] budgets = [16, 32, 64, 128, 256];
+        int[] budgets = [16, 32, 64, 128, 256, VideoPreviewSettings.BudgetLimitMiB];
         ComboBox workers = new() {
-            ItemsSource = new[] { "Авто", "1", "2", "3", "4" },
+            ItemsSource = Enumerable.Range(0, VideoPreviewSettings.WorkerLimit + 1).Select(limit => limit == 0 ? "Авто" : limit.ToString()).ToArray(),
             SelectedIndex = settings.MaximumWorkers,
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
         ComboBox budget = new() {
             ItemsSource = budgets,
             SelectedIndex = Array.IndexOf(budgets, settings.BudgetMiB),
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        ComboBox analysisWorkers = new() {
+            ItemsSource = Enumerable.Range(1, VideoPreviewSettings.WorkerLimit).ToArray(),
+            SelectedIndex = settings.AnalysisMaximumWorkers - 1,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        ComboBox analysisBudget = new() {
+            ItemsSource = budgets,
+            SelectedIndex = Array.IndexOf(budgets, settings.AnalysisBudgetMiB),
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
         ComboBox mode = new() {
@@ -76,8 +87,10 @@ public partial class MainWindow {
         };
         AutomationProperties.SetName(arrowStep, "Шаг стрелок");
         AutomationProperties.SetName(mode, "Режим предпросмотра");
-        AutomationProperties.SetName(workers, "Максимум обработчиков");
-        AutomationProperties.SetName(budget, "Бюджет буферов предпросмотра, МиБ");
+        AutomationProperties.SetName(workers, "Редактирование. Максимум обработчиков");
+        AutomationProperties.SetName(budget, "Редактирование. Бюджет буферов, МиБ");
+        AutomationProperties.SetName(analysisWorkers, "Анализ. Максимум обработчиков");
+        AutomationProperties.SetName(analysisBudget, "Анализ. Бюджет буферов, МиБ");
 
         TextBlock modeHelp = new() { TextWrapping = TextWrapping.Wrap };
         TextBlock actualMode = new() { TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold };
@@ -89,6 +102,20 @@ public partial class MainWindow {
         StackPanel performance = new() { Spacing = 8 };
         performance.Children.Add(BuildPreviewSettingsRow("Максимум обработчиков", workers));
         performance.Children.Add(BuildPreviewSettingsRow("Бюджет буферов, МиБ", budget));
+        performance.Children.Add(new TextBlock {
+            Text = $"«Авто» пробует до {VideoPreviewSettings.AutoWorkerLimit} обработчиков. Вручную доступно до {VideoPreviewSettings.WorkerLimit}.",
+            TextWrapping = TextWrapping.Wrap
+        });
+        StackPanel analysisPerformance = new() { Spacing = 8, Children = {
+            BuildPreviewSettingsRow("Максимум обработчиков", analysisWorkers),
+            BuildPreviewSettingsRow("Бюджет буферов, МиБ", analysisBudget),
+            new TextBlock {
+                Text = "На стоп-кадре могут одновременно работать до трёх выбранных методов. " +
+                    "Предварительное редактирование использует бюджет редактора. " +
+                    "Лимиты относятся к рабочим буферам, которые учитывает приложение.",
+                TextWrapping = TextWrapping.Wrap
+            }
+        } };
 
         TextBlock status = new() { TextWrapping = TextWrapping.Wrap, MinHeight = 22, Margin = new Thickness(0, 0, 0, 4) };
         StackPanel load = new() { Children = { status } };
@@ -101,7 +128,7 @@ public partial class MainWindow {
             ("Расчётный интервал", new TextBlock()),
             ("Всего кадров в исходном ролике", new TextBlock()),
             ("Настройка числа обработчиков", new TextBlock()),
-            ("Действующий предел обработчиков", new TextBlock()),
+            ("Предел по кадру и бюджету", new TextBlock()),
             ("Готовый запас", preparedReserve),
             ("Занято работ / пик наблюдения", new TextBlock()),
             ("Новых кадров на входе очереди обработки", new TextBlock()),
@@ -115,7 +142,8 @@ public partial class MainWindow {
             ("Отброшено готовых кадров", new TextBlock()),
             ("Ожидали бюджета за замер", new TextBlock()),
             ("Резерв буферов / бюджет", new TextBlock()),
-            ("Пиковый резерв буферов", peakReserve)
+            ("Редактирование стоп-кадра для анализа", new TextBlock()),
+            ("Пиковый резерв буферов потока", peakReserve)
         ];
         foreach (var (label, value) in rows) {
             if (ReferenceEquals(value, intervalP95)) {
@@ -147,10 +175,71 @@ public partial class MainWindow {
             }
             load.Children.Add(row);
         }
-        DispatcherTimer refresh = new() { Interval = TimeSpan.FromMilliseconds(333) };
-        refresh.Tick += (_, _) => UpdatePreviewLoad(viewModel, status, actualMode, preparedReserve, rows);
-        dialog.Opened += (_, _) => {
+        ComboBox metricScope = new() {
+            ItemsSource = new[] { "Весь выход", "Редактирование", "Анализ" },
+            SelectedIndex = 0,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        AutomationProperties.SetName(metricScope, "Область замера");
+        TextBlock visibleStatus = new() { TextWrapping = TextWrapping.Wrap };
+        TextBlock nominalRate = new();
+        TextBlock visibleRate = new();
+        TextBlock visibleInterval = new();
+        TextBlock visibleReserve = new() { TextWrapping = TextWrapping.Wrap };
+        StackPanel visibleLoad = new() { Spacing = 8, Children = {
+            visibleStatus,
+            BuildPreviewSettingsRow("Частота исходной дорожки", nominalRate),
+            BuildPreviewSettingsRow("Выдано в видимый предпросмотр", visibleRate),
+            BuildPreviewSettingsRow("Между выдачами (95% замеров)", visibleInterval),
+            BuildPreviewSettingsRow("Резерв буферов пути показа", visibleReserve),
+            new TextBlock { Text = "Время ожидания кадров при воспроизведении входит в замер.",
+                TextWrapping = TextWrapping.Wrap }
+        } };
+        TextBlock analysisStatus = new() { TextWrapping = TextWrapping.Wrap };
+        (string Label, TextBlock Value)[] analysisRows = [
+            ("От «Применить» до готового результата", new TextBlock()),
+            ("Выполнение методов", new TextBlock()),
+            ("Сборка и выдача изображения", new TextBlock()),
+            ("Допуск / пик параллельных методов за замер", new TextBlock()),
+            ("Допуск методов сейчас", new TextBlock()),
+            ("Рабочие буферы сейчас / бюджет", new TextBlock()),
+            ("Резерв на выполнение методов за замер", new TextBlock())
+        ];
+        StackPanel analysisLoad = new() { Spacing = 8, Children = { analysisStatus } };
+        foreach (var (label, value) in analysisRows) {
+            analysisLoad.Children.Add(BuildPreviewSettingsRow(label, value));
+        }
+        StackPanel measurements = new() { Spacing = 8, Children = { metricScope, visibleLoad, load, analysisLoad } };
+
+        // выбор среза показывает фактический выход или отдельный этап, не меняя настройки работы
+        void RefreshMeasurements() {
             UpdatePreviewLoad(viewModel, status, actualMode, preparedReserve, rows);
+            bool displayed = metricScope.SelectedIndex == 0;
+            bool displayAnalysis = displayed && viewModel.IsVideoAnalysisOutputSelected;
+            load.IsVisible = metricScope.SelectedIndex == 1;
+            analysisLoad.IsVisible = metricScope.SelectedIndex == 2 || displayAnalysis;
+            visibleLoad.IsVisible = displayed && !displayAnalysis;
+            if (visibleLoad.IsVisible) {
+                var (window, picture) = viewModel.ReadVisibleVideoOutput();
+                visibleStatus.Text = picture;
+                double? sourceRate = viewModel.CurrentVideoInfo?.FramesPerSecond;
+                SetMetric(nominalRate, "Частота исходной дорожки", sourceRate is > 0 && double.IsFinite(sourceRate.Value)
+                    ? FormatPreviewRate(sourceRate) : VideoInfo.UnknownValue);
+                SetMetric(visibleRate, "Выдано в видимый предпросмотр", FormatPreviewRate(window?.OutputRate));
+                SetMetric(visibleInterval, "Между выдачами (95% замеров)", FormatPreviewPercentile(window?.IntervalP95Ms));
+                var (bytes, path) = viewModel.ReadVisibleVideoOutputBuffers();
+                SetMetric(visibleReserve, "Резерв буферов пути показа", $"{bytes / (1024.0 * 1024):0.##} МиБ\n{path}");
+            }
+            if (analysisLoad.IsVisible) {
+                UpdateVideoAnalysisLoad(viewModel, displayed, analysisStatus, analysisRows);
+            }
+        }
+
+        DispatcherTimer refresh = new() { Interval = TimeSpan.FromMilliseconds(333) };
+        metricScope.SelectionChanged += (_, _) => RefreshMeasurements();
+        refresh.Tick += (_, _) => RefreshMeasurements();
+        dialog.Opened += (_, _) => {
+            RefreshMeasurements();
             refresh.Start();
         };
         dialog.Closed += (_, _) => refresh.Stop();
@@ -159,10 +248,12 @@ public partial class MainWindow {
         cancel.Click += (_, _) => dialog.Close(null);
         apply.Click += (_, _) => {
             if (mode.SelectedIndex is 0 or 1 && workers.SelectedIndex >= 0 && budget.SelectedIndex >= 0 &&
-                arrowStep.SelectedIndex >= 0) {
+                arrowStep.SelectedIndex >= 0 && analysisWorkers.SelectedIndex >= 0 && analysisBudget.SelectedIndex >= 0) {
                 dialog.Close(new VideoPreviewSettings(workers.SelectedIndex, budgets[budget.SelectedIndex]) {
                     Mode = (VideoPreviewMode)mode.SelectedIndex,
-                    ArrowStep = steps[arrowStep.SelectedIndex]
+                    ArrowStep = steps[arrowStep.SelectedIndex],
+                    AnalysisMaximumWorkers = analysisWorkers.SelectedIndex + 1,
+                    AnalysisBudgetMiB = budgets[analysisBudget.SelectedIndex]
                 });
             }
         };
@@ -177,8 +268,9 @@ public partial class MainWindow {
                         Children = {
                             BuildPreviewSettingsCard("Режим предпросмотра", modeCard),
                             BuildPreviewSettingsCard("Управление воспроизведением", playback),
-                            BuildPreviewSettingsCard("Производительность", performance),
-                            BuildPreviewSettingsCard("Нагрузка предпросмотра", load)
+                            BuildPreviewSettingsCard("Производительность · Редактирование", performance),
+                            BuildPreviewSettingsCard("Производительность · Анализ", analysisPerformance),
+                            BuildPreviewSettingsCard("Нагрузка предпросмотра", measurements)
                         }
                     }
                 },
@@ -237,11 +329,22 @@ public partial class MainWindow {
         string? modeNotice = viewModel.VideoPreviewModeNotice;
         actualMode.Text = modeNotice is null ? $"Сейчас · {mode}" : $"Сейчас · {mode}\n{modeNotice}";
         preparedReserve.IsVisible = isPrepared;
-        status.Text = isPrepared ? "Живые замеры доступны в режиме «Живой предпросмотр»." : state;
+        status.Text = isPrepared ? "С подготовкой участка · один последовательный обработчик. " +
+            "Частота показа выбранного вида доступна в разделе «Весь выход»." : state;
         if (isPrepared) {
             window = null;
         }
-        long reservedBytes = resources.ReservedBytes + (prepared?.ReservedBytes ?? 0);
+        var (analysisInputReserve, analysisInputTime, reused) = viewModel.ReadVideoEditorAnalysisWork();
+        if (analysisInputReserve > 0) {
+            status.Text = "Готовим изменённый стоп-кадр для анализа.";
+        }
+        else if (analysisInputTime is not null) {
+            status.Text = "Подготовлен изменённый стоп-кадр для анализа.";
+        }
+        else if (reused) {
+            status.Text = "Анализ использовал готовый изменённый стоп-кадр.";
+        }
+        long reservedBytes = resources.ReservedBytes + (prepared?.ReservedBytes ?? 0) + analysisInputReserve;
         long peakBytes = isPrepared ? prepared?.PeakReservedBytes ?? 0 : resources.BudgetPeakReservedBytes;
         double? sourceRate = viewModel.CurrentVideoInfo?.FramesPerSecond;
         bool knownRate = sourceRate is > 0 && double.IsFinite(sourceRate.Value);
@@ -265,16 +368,44 @@ public partial class MainWindow {
             window?.Superseded.ToString() ?? "—",
             window?.BudgetWaiting.ToString() ?? "—",
             $"{reservedBytes / (1024.0 * 1024):0.##} / {settings.BudgetMiB} МиБ",
+            reused ? "Без пересчёта" : FormatAnalysisTime(analysisInputTime),
             viewModel.IsVideoOpen ? $"{peakBytes / (1024.0 * 1024):0.##} МиБ" : "—"
         ];
         for (int i = 0; i < rows.Length; i++) {
-            var (label, value) = rows[i];
-            if (value.Text != values[i]) {
-                value.Text = values[i];
-                AutomationProperties.SetName(value, $"{label}. {values[i].Replace('\n', ' ')}");
-            }
+            SetMetric(rows[i].Value, rows[i].Label, values[i]);
         }
     }
+
+    // показываем время завершенного стоп-кадра и текущий рабочий резерв участка анализа
+    private static void UpdateVideoAnalysisLoad(MainViewModel model, bool displayed, TextBlock status,
+        (string Label, TextBlock Value)[] rows) {
+        var (workers, bytes, sample, state) = model.ReadVideoAnalysisState(displayed);
+        status.Text = $"Анализ · {state}";
+        string[] values = [
+            FormatAnalysisTime(sample?.Presentation),
+            FormatAnalysisTime(sample?.Calculation),
+            FormatAnalysisTime(sample?.Composition),
+            sample is { } measured ? $"{measured.Workers} / {measured.PeakWorkers}" : "—",
+            workers > 0 ? workers.ToString() : "—",
+            $"{bytes / (1024.0 * 1024):0.##} / {model.PreviewSettings.AnalysisBudgetMiB} МиБ",
+            sample is { } stored ? $"{stored.ReservedBytes / (1024.0 * 1024):0.##} МиБ" : "—"
+        ];
+        for (int i = 0; i < rows.Length; i++) {
+            SetMetric(rows[i].Value, rows[i].Label, values[i]);
+        }
+    }
+
+    // обновляем значение и его доступное имя только при изменении
+    private static void SetMetric(TextBlock value, string label, string text) {
+        if (value.Text != text) {
+            value.Text = text;
+            AutomationProperties.SetName(value, $"{label}. {text.Replace('\n', ' ')}");
+        }
+    }
+
+    // одно вычисление на паузе измеряем временем, без частоты кадров
+    private static string FormatAnalysisTime(TimeSpan? duration) =>
+        duration is { } time ? $"{time.TotalMilliseconds:0.##} мс" : "—";
 
     // считаем долю подтвержденных вытеснений среди входов того же замера
     private static string FormatPreviewDrops(VideoPreviewMeasurements.Window? window) {

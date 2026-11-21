@@ -45,6 +45,7 @@ public partial class MainViewModel {
         get => videoEditorPreviewTabIndex;
         set {
             if ((value is 0 or 1) && SetProperty(ref videoEditorPreviewTabIndex, value)) {
+                ResetVisibleVideoOutput();
                 OnPropertyChanged(nameof(VideoEditorVisibleProcessingTime));
             }
         }
@@ -76,6 +77,7 @@ public partial class MainViewModel {
         }
 
         videoEditorVisible = visible;
+        ResetVisibleVideoOutput();
         if (preparedSource is not null) {
             NotifyVideoEditorPreview();
             return;
@@ -108,6 +110,7 @@ public partial class MainViewModel {
     // сохраняем порядок, числовые значения и неизменяемые матрицы без ссылок на редактируемые шаги
     private void CaptureVideoEditorPlan() {
         CancelVideoAnalysisApply();
+        ResetVisibleVideoOutput();
         VideoEditorStep[] steps = AdvancedSteps
             .Select(step => new VideoEditorStep(step.Type, step.Parameter, step.ElementSnapshot, step.KernelSnapshot))
             .ToArray();
@@ -136,6 +139,7 @@ public partial class MainViewModel {
 
     // снимаем старый результат в момент запроса перехода, пока новый кадр не подтвержден
     private void InvalidateVideoEditorSource() {
+        ResetVisibleVideoOutput();
         videoEditorStoppedOutput = null;
         videoEditorSource++;
         videoEditorWaitingForFrame = true;
@@ -300,13 +304,16 @@ public partial class MainViewModel {
 
     // меняем настройки окна и пересылаем текущий кадр, если его результат еще не показан
     internal void ApplyVideoPreviewSettings(VideoPreviewSettings settings) {
-        bool retrySource = settings.Mode == VideoPreviewMode.Prepared && preparedSource is null &&
+        VideoPreviewSettings previous = PreviewSettings;
+        bool analysisChanged = previous.AnalysisMaximumWorkers != settings.AnalysisMaximumWorkers ||
+            previous.AnalysisBudgetMiB != settings.AnalysisBudgetMiB;
+        bool retrySource = !analysisChanged && settings.Mode == VideoPreviewMode.Prepared && preparedSource is null &&
             preparedOpening is null && IsVideoOpen;
         if (settings == PreviewSettings && !retrySource) {
             return;
         }
-        VideoPreviewSettings previous = PreviewSettings;
-        if (previous.ArrowStep != settings.ArrowStep && (previous with { ArrowStep = settings.ArrowStep }) == settings) {
+        if (!retrySource && previous.Mode == settings.Mode && previous.MaximumWorkers == settings.MaximumWorkers &&
+            previous.BudgetMiB == settings.BudgetMiB) {
             PreviewSettings = settings;
             return;
         }
@@ -314,6 +321,7 @@ public partial class MainViewModel {
         PreviewSettings = settings;
         ResetVideoPreviewAuto();
         if (previous.Mode != settings.Mode || retrySource) {
+            ResetVisibleVideoOutput();
             ChangeVideoPreviewMode();
             return;
         }
@@ -345,7 +353,11 @@ public partial class MainViewModel {
         if (videoPreviewAuto.IsTrial) {
             status += " · проба «Авто»";
         }
-        return (PreviewSettings, RuntimePreviewSettings.EffectiveWorkers, resources, peakActive, window, status);
+        int effective = RuntimePreviewSettings.EffectiveWorkers;
+        if (videoEditorPlan.HasSteps && VideoPreviewFrame is { } frame) {
+            effective = (int)Math.Min(effective, PreviewSettings.BudgetBytes / GetVideoEditorWorkBytes(frame.PixelSize));
+        }
+        return (PreviewSettings, effective, resources, peakActive, window, status);
     }
 
     // на подтвержденном живом просмотре собираем окно, а для режима «Авто» сравниваем рабочие пределы
@@ -430,9 +442,12 @@ public partial class MainViewModel {
 
     // считаем, сколько активных кадров с рабочими буферами помещается в бюджет
     private int GetVideoPreviewCapacity(PixelSize size) {
-        long bytes = VideoEditorFrame.GetBufferBytes(size) + videoEditorPlan.GetScratchBytes(size);
-        return (int)Math.Min(4, PreviewSettings.BudgetBytes / bytes);
+        return (int)Math.Min(VideoPreviewSettings.AutoWorkerLimit, PreviewSettings.BudgetBytes / GetVideoEditorWorkBytes(size));
     }
+
+    // учитываем снимок и дополнительные полноразмерные буферы операции
+    private long GetVideoEditorWorkBytes(PixelSize size) =>
+        VideoEditorFrame.GetBufferBytes(size) + videoEditorPlan.GetScratchBytes(size);
 
     // переносим строки в bitmap и измеряем выдачу после обновления привязок
     private void PublishVideoEditorOutput(VideoEditorFrame pixels, VideoEditorGeometry geometry, VideoPreviewFrameKey key) {
@@ -462,6 +477,7 @@ public partial class MainViewModel {
         try {
             NotifyVideoEditorPreview();
             videoPreviewMeasurements.RecordOutput(key.Observation, key.Frame, key.OfferedAt, Environment.TickCount64);
+            RecordVisibleEditedFrame(key.LiveInput != 0 && key.LiveInput == videoEditorLiveInput && videoWantsToPlay);
             if (!videoWantsToPlay && key.PauseObservation == videoEditorPauseObservation && IsCurrentVideoEditorRequest(key)) {
                 SetVideoEditorProcessingTime(pixels.ProcessingTime);
             }

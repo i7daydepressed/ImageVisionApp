@@ -19,6 +19,16 @@ internal sealed class VideoPlaybackFrames : IDisposable {
     private int stride;
     private long revision;
     private bool hasFrame;
+    private int nativeBytes;
+
+    // учитываем только собственные буферы передачи, без внутренней памяти VLC и bitmap интерфейса
+    internal long PreviewBufferBytes {
+        get {
+            lock (frameLock) {
+                return nativeBytes + pixels.LongLength;
+            }
+        }
+    }
 
     // получает видимые размеры из кадра, уже подготовленного при открытии файла
     public VideoPlaybackFrames(PixelSize visibleSize) => this.visibleSize = visibleSize;
@@ -39,9 +49,12 @@ internal sealed class VideoPlaybackFrames : IDisposable {
             int scanlines = Align(height);
             try {
                 pixels = new byte[stride * height];
-                allocation = Marshal.AllocHGlobal(stride * scanlines + Alignment - 1);
+                int bytes = stride * scanlines + Alignment - 1;
+                allocation = Marshal.AllocHGlobal(bytes);
+                nativeBytes = bytes;
             }
             catch (OutOfMemoryException) {
+                pixels = [];
                 return 0;
             }
 
@@ -109,6 +122,7 @@ internal sealed class VideoPlaybackFrames : IDisposable {
             Marshal.FreeHGlobal(allocation);
             allocation = IntPtr.Zero;
             alignedPixels = IntPtr.Zero;
+            nativeBytes = 0;
         }
     }
 

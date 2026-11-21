@@ -18,6 +18,11 @@ public static class RobertsAnalysisService {
         byte[] rgb, int width, int height, CancellationToken cancellationToken = default) {
 
         byte[] gray = AnalysisImageDecoder.ToLuminance(rgb, width, height, cancellationToken);
+        return CalculateFromGray(gray, width, height, cancellationToken);
+    }
+
+    // повторно используем яркость, приготовленную для других методов того же входа
+    internal static byte[] CalculateFromGray(byte[] gray, int width, int height, CancellationToken cancellationToken) {
         // у квадрата 2x2 берем разности по диагоналям и их евклидову длину
         // справа и снизу повторяем ближайший пиксель, без порога и нормализации по максимуму
         byte[] result = new byte[gray.Length];

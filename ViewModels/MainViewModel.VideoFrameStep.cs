@@ -68,6 +68,8 @@ public partial class MainViewModel {
             return;
         }
         CancelVideoAnalysisApply();
+        ResetVisibleVideoOutput();
+        liveAnalysisSeekTarget = null;
         preparedPauseOnCurrentPosition = false;
         if (videoFrameStep is { } step) {
             step.Add(distance);

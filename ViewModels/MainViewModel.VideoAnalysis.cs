@@ -104,7 +104,7 @@ public partial class MainViewModel {
             videoPlayback?.State is not (VLCState.Paused or VLCState.Ended) ||
             videoEditorWaitingForFrame || requestedVideoSeek is not null || videoFrameStep is not null ||
             preparedOpening is not null || livePreviewHandoff is not null || VideoPreviewFrame is not { } original ||
-            preparedSource is null && PlaybackStatus.Position > 0 && ReferenceEquals(original, VideoFirstFrame) ||
+            NeedsVerifiedLiveAnalysisFrame(original, PlaybackStatus.Position) ||
             preparedSource is not null && (preparedStartPending || preparedNeedsSeek || preparedPauseOnCurrentPosition ||
                 preparedWaitingPosition is not null)) {
             return false;
@@ -216,22 +216,56 @@ public partial class MainViewModel {
                 !SameVideoAnalysisFrame(original.Key, request.Original)) {
                 return;
             }
-            AnalysisInputSnapshot input = CaptureVideoAnalysisInput(original);
-            using VideoEditorFrame pixels = input.Video!.Pixels;
-            AnalysisInputSnapshot? editedInput = NeedsEditedVideoAnalysisInput(request) &&
-                TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Edited, out VideoAnalysisInput edited)
-                ? CaptureVideoAnalysisInput(edited) : null;
-            using VideoEditorFrame? editedPixels = editedInput?.Video?.Pixels;
+            VideoAnalysisInput? edited = NeedsEditedVideoAnalysisInput(request) &&
+                TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Edited, out VideoAnalysisInput readyEdited)
+                ? readyEdited : null;
             settings = settings with {
                 EdgeMethod = request.EdgesRevision == edgesWorkRevision &&
-                    (request.EdgeSource == AnalysisImageSource.Original || editedInput is not null) ? settings.EdgeMethod : null,
+                    (request.EdgeSource == AnalysisImageSource.Original || edited is not null) ? settings.EdgeMethod : null,
                 Clusters = request.SegmentationRevision == segmentationWorkRevision &&
-                    (request.SegmentationSource == AnalysisImageSource.Original || editedInput is not null) ? settings.Clusters : null,
+                    (request.SegmentationSource == AnalysisImageSource.Original || edited is not null) ? settings.Clusters : null,
                 FastThreshold = request.KeypointsRevision == keypointsWorkRevision ? settings.FastThreshold : null
             };
+            if (settings is { EdgeMethod: null, Clusters: null, FastThreshold: null }) {
+                return;
+            }
             RefreshVideoAnalysisStatus();
-            VideoFrameAnalysisResult result = await Task.Run(() => VideoFrameAnalysisService.Analyze(
-                input, editedInput, request.EdgeSource, request.SegmentationSource, settings, cancellation.Token), cancellation.Token);
+            int workers;
+            long bytes;
+            while (true) {
+                cancellation.Token.ThrowIfCancellationRequested();
+                if (!IsCurrentAnalysisLayer(original.Key) || edited is { } source && !IsCurrentAnalysisLayer(source.Key)) {
+                    return;
+                }
+                (workers, bytes) = VideoFrameAnalysisService.FitWorkers(original.Bitmap.PixelSize, edited?.Bitmap.PixelSize,
+                    request.EdgeSource, request.SegmentationSource, settings, PreviewSettings.AnalysisMaximumWorkers,
+                    PreviewSettings.AnalysisBudgetBytes - videoAnalysisReservedBytes);
+                if (workers > 0) {
+                    break;
+                }
+                if (VideoFrameAnalysisService.FitWorkers(original.Bitmap.PixelSize, edited?.Bitmap.PixelSize,
+                    request.EdgeSource, request.SegmentationSource, settings, PreviewSettings.AnalysisMaximumWorkers,
+                    PreviewSettings.AnalysisBudgetBytes).Workers == 0) {
+                    throw new InvalidOperationException("Недостаточно бюджета буферов анализа для выбранных методов");
+                }
+                await Task.Delay(25, cancellation.Token);
+            }
+
+            VideoFrameAnalysisResult result;
+            videoAnalysisReservedBytes += bytes;
+            videoAnalysisWorkerLimit = workers;
+            try {
+                AnalysisInputSnapshot input = CaptureVideoAnalysisInput(original);
+                using VideoEditorFrame pixels = input.Video!.Pixels;
+                AnalysisInputSnapshot? editedInput = edited is { } ready ? CaptureVideoAnalysisInput(ready) : null;
+                using VideoEditorFrame? editedPixels = editedInput?.Video?.Pixels;
+                result = await Task.Run(() => VideoFrameAnalysisService.Analyze(input, editedInput, request.EdgeSource,
+                    request.SegmentationSource, settings, cancellation.Token, workers), cancellation.Token);
+            }
+            finally {
+                videoAnalysisReservedBytes -= bytes;
+                videoAnalysisWorkerLimit = 0;
+            }
             if (cancellation.IsCancellationRequested || analysisDisposed || !IsCurrentAnalysisLayer(request.Original)) {
                 return;
             }
@@ -245,6 +279,8 @@ public partial class MainViewModel {
             if (request.KeypointsRevision == keypointsWorkRevision && result.Keypoints is { } keypoints) {
                 SetKeypointsResult(keypoints);
             }
+            RecordVideoAnalysisCalculation(request.Original, workers, bytes, result);
+            RecordVideoEditorAnalysisWork(edited);
             RefreshVideoAnalysisComposition();
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) {
@@ -406,6 +442,9 @@ public partial class MainViewModel {
 
     // обновляем предъявление после входа на страницу и приостанавливаем его вне нее
     internal void SetVideoAnalysisVisible(bool visible) {
+        if (visible != videoAnalysisVisible) {
+            ResetVisibleVideoOutput();
+        }
         videoAnalysisVisible = visible;
         if (visible && IsVideoOpen) {
             RefreshVideoAnalysisInput();

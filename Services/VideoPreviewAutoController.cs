@@ -1,4 +1,5 @@
 using System;
+using ImageVisionApp.Models;
 
 namespace ImageVisionApp.Services;
 
@@ -33,7 +34,7 @@ internal sealed class VideoPreviewAutoController(int logicalCpus) {
 
     // ограничиваем рабочий предел вместимостью кадра, не меняя пользовательский бюджет
     public void FitCapacity(int capacity) {
-        int limit = Math.Clamp(capacity, 1, Math.Clamp(logicalCpus, 1, 4));
+        int limit = Math.Clamp(capacity, 1, Math.Clamp(logicalCpus, 1, VideoPreviewSettings.AutoWorkerLimit));
         if (Workers > limit || accepted > limit) {
             accepted = Math.Min(accepted, limit);
             CancelTrial();
@@ -74,7 +75,7 @@ internal sealed class VideoPreviewAutoController(int logicalCpus) {
         bool enoughNow = window.OutputRate >= .9 * window.InputRate;
         int candidate = enoughEarlier && enoughNow ? Workers - 1 :
             !enoughEarlier && !enoughNow ? Workers + 1 : Workers;
-        if (candidate == Workers || candidate < 1 || candidate > Math.Min(capacity, Math.Min(4, logicalCpus)) ||
+        if (candidate == Workers || candidate < 1 || candidate > Math.Min(capacity, Math.Min(VideoPreviewSettings.AutoWorkerLimit, logicalCpus)) ||
             (rejected & (1 << candidate)) != 0) {
             return;
         }

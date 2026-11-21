@@ -17,6 +17,7 @@ internal sealed class VideoPlaybackSession : IDisposable {
     public bool CanSeek => player.IsSeekable;
     public long Position => player.Time;
     public long Duration => player.Length;
+    internal long PreviewBufferBytes => frames.PreviewBufferBytes;
 
     // загружает библиотеку из сборки и соединяет декодер с предпросмотром
     public VideoPlaybackSession(string sourcePath, PixelSize visibleSize) {

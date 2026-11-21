@@ -30,6 +30,8 @@ public partial class MainViewModel {
     private bool videoRestarting;
     private bool videoRestartOnPlay;
     private VideoDecodedFrameHint? videoLiveSeekHint;
+    private (long Position, bool Forward)? liveAnalysisSeekTarget;
+    private (long NativeRevision, long Position)? liveAnalysisSeekRecovery;
     private bool videoPlaybackIdentityPending;
     private bool mediaPreviewsDisposed;
     private int videoPlaybackGeneration;
@@ -166,6 +168,8 @@ public partial class MainViewModel {
 
     // начинаем новый проход в том же живом плеере после последнего кадра
     private void RestartLiveVideo(VideoPlaybackSession playback) {
+        liveAnalysisSeekTarget = null;
+        liveAnalysisSeekRecovery = null;
         livePreviewAnchor = null;
         videoRestartOnPlay = false;
         videoLiveSeekHint = null;
@@ -192,7 +196,7 @@ public partial class MainViewModel {
         }
         if (forAnalysis && requestedVideoSeek is null && videoFrameStep is null &&
             (videoWantsToPlay || videoWasPlaying || videoPlayback?.State == VLCState.Playing ||
-             PlaybackStatus.Position > 0 && ReferenceEquals(VideoPreviewFrame, VideoFirstFrame))) {
+             VideoPreviewFrame is { } frame && NeedsVerifiedLiveAnalysisFrame(frame, PlaybackStatus.Position))) {
             videoAnalysisWaitingForLivePause = true;
         }
         videoWantsToPlay = false;
@@ -214,6 +218,7 @@ public partial class MainViewModel {
         }
 
         CancelVideoAnalysisApply();
+        ResetVisibleVideoOutput();
         preparedPauseOnCurrentPosition = false;
         CancelVideoFrameStep(clearPin: true);
         long position = Math.Clamp(PlaybackStatus.Position + offset, 0, PlaybackStatus.Duration);
@@ -230,6 +235,9 @@ public partial class MainViewModel {
             livePreviewAnchor = null;
             videoLiveSeekHint = null;
             InvalidateVideoEditorSource();
+            // временная метка VLC может обновиться раньше кадрового буфера
+            liveAnalysisSeekTarget = (position, offset > 0);
+            liveAnalysisSeekRecovery = null;
             playback.Seek(position);
             UpdatePlaybackStatus(PlaybackStatus with { Position = position });
         }
@@ -246,6 +254,7 @@ public partial class MainViewModel {
         }
 
         CancelVideoAnalysisApply();
+        ResetVisibleVideoOutput();
         preparedPauseOnCurrentPosition = false;
         CancelVideoFrameStep(clearPin: true);
         long duration = PlaybackStatus.Duration;
@@ -263,6 +272,7 @@ public partial class MainViewModel {
         }
 
         videoRestartOnPlay = false;
+        liveAnalysisSeekTarget = null;
         livePreviewAnchor = null;
         videoLiveSeekHint = null;
         requestedVideoSeek = new VideoSeek(playback, sourcePath, target, duration, restartOnPlay);
@@ -444,7 +454,14 @@ public partial class MainViewModel {
 
         bool live = isPlaying && videoWantsToPlay && requestedVideoSeek is null && !videoRestarting;
         UpdateVideoPreviewMonitoring(live);
-        bool analysisPauseConfirmed = videoAnalysisWaitingForLivePause && state is VLCState.Paused or VLCState.Ended;
+        long nativePosition = playback.Position;
+        if (liveAnalysisSeekTarget is { } seekTarget && nativePosition >= 0 &&
+            (seekTarget.Forward ? nativePosition >= seekTarget.Position - 25 : nativePosition <= seekTarget.Position + 25)) {
+            liveAnalysisSeekTarget = null;
+            liveAnalysisSeekRecovery = (videoLiveRevision, nativePosition);
+        }
+        bool analysisPauseConfirmed = videoAnalysisWaitingForLivePause && liveAnalysisSeekTarget is null &&
+            state is VLCState.Paused or VLCState.Ended;
         if (requestedVideoSeek is null && (isPlaying || videoWasPlaying || analysisPauseConfirmed)) {
             PublishVideoFrame(playback, live);
         }
@@ -458,16 +475,17 @@ public partial class MainViewModel {
         }
 
         long duration = Math.Max(PlaybackStatus.Duration, playback.Duration);
-        if (livePreviewAnchor is { } anchor && isPlaying && allowPlay && playback.Position >= anchor) {
+        if (livePreviewAnchor is { } anchor && isPlaying && allowPlay && nativePosition >= anchor) {
             livePreviewAnchor = null;
         }
-        long position = ended ? duration : livePreviewAnchor ?? Math.Clamp(playback.Position, 0, Math.Max(0, duration));
+        long position = ended ? duration : liveAnalysisSeekTarget?.Position ?? livePreviewAnchor ??
+            Math.Clamp(nativePosition, 0, Math.Max(0, duration));
         if (analysisPauseConfirmed) {
             // оставляем видимым последний живой кадр и отдельно запрашиваем пиксели при отсутствии живого вывода
             if (!ended) {
                 livePreviewAnchor = position;
             }
-            videoAnalysisWaitingForLivePause = position > 0 && ReferenceEquals(VideoPreviewFrame, VideoFirstFrame);
+            videoAnalysisWaitingForLivePause = VideoPreviewFrame is { } frame && NeedsVerifiedLiveAnalysisFrame(frame, position);
             videoAnalysisLiveFallbackPosition = videoAnalysisWaitingForLivePause ? position : null;
             if (!videoAnalysisWaitingForLivePause) {
                 videoAnalysisLiveFallbackCancellation?.Cancel();
@@ -573,9 +591,15 @@ public partial class MainViewModel {
             previous?.Dispose();
         }
         videoLiveSeekHint = null;
+        // после перехода ждем обновлений кадрового буфера и продвижения часов, пока источник играет
+        if (live && liveAnalysisSeekRecovery is { } recovery && videoLiveRevision - recovery.NativeRevision >= 3 &&
+            playback.Position - recovery.Position >= 180) {
+            liveAnalysisSeekRecovery = null;
+        }
         VideoPreviewRevision++;
         OnPropertyChanged(nameof(VideoPreviewRevision));
         AcceptVideoEditorFrame(live);
+        RecordVisibleOriginalFrame(live);
     }
 
     // при возврате к нулю убираем более старые картинки, чтобы выбрать первый кадр документа
@@ -591,6 +615,10 @@ public partial class MainViewModel {
     private void SetVideoSeekPreview(Bitmap? bitmap) {
         Bitmap? previous = videoSeekPreview;
         videoSeekPreview = bitmap;
+        if (bitmap is not null) {
+            liveAnalysisSeekTarget = null;
+            liveAnalysisSeekRecovery = null;
+        }
         OnPropertyChanged(nameof(VideoPreviewFrame));
         previous?.Dispose();
     }
@@ -602,11 +630,15 @@ public partial class MainViewModel {
             OnPropertyChanged(nameof(PlaybackStatus));
         }
         RefreshVideoAnalysisInput();
+        StopVisibleVideoOutputOnPause();
     }
 
     // прекращает публикацию и освобождает один источник перед заменой файла или закрытием окна
     private void ReleaseVideoPlayback() {
+        liveAnalysisSeekTarget = null;
+        liveAnalysisSeekRecovery = null;
         CancelVideoAnalysisApply();
+        ResetVisibleVideoOutput();
         preparedPauseOnCurrentPosition = false;
         CancelVideoFrameStep(clearPin: true);
         DetachPreparedVideo();

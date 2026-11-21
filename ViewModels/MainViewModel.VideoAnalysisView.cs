@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
@@ -25,6 +26,30 @@ public partial class MainViewModel {
     private string? videoAnalysisCompositionFailure;
     private string? videoAnalysisEditedFailure;
     private long videoAnalysisEditedBudget;
+    private long videoAnalysisEditedReservedBytes;
+    private TimeSpan? videoAnalysisEditedTime;
+    private long videoAnalysisEditedReadyAt;
+    private (VideoAnalysisFrameKey Frame, TimeSpan? Calculation)? videoAnalysisEditorStage;
+
+    // редакторский шаг для анализа использует и показывает свой резерв, даже вне вкладки редактора
+    internal (long Reserved, TimeSpan? Calculation, bool Reused) ReadVideoEditorAnalysisWork() {
+        if (!videoAnalysisVisible) {
+            return (videoAnalysisEditedReservedBytes, null, false);
+        }
+        if (videoAnalysisEditorStage is { } stage && IsCurrentAnalysisLayer(stage.Frame)) {
+            return (videoAnalysisEditedReservedBytes, stage.Calculation, stage.Calculation is null);
+        }
+        return (videoAnalysisEditedReservedBytes, videoAnalysisEditedInput is not null &&
+            IsCurrentAnalysisLayer(videoAnalysisEditedKey) ? videoAnalysisEditedTime : null, false);
+    }
+
+    // различаем расчет после Apply и использование подготовленного/ранее посчитанного стоп-кадра
+    private void RecordVideoEditorAnalysisWork(VideoAnalysisInput? edited) {
+        videoAnalysisEditorStage = edited is { } input && videoEditorPlan.HasSteps
+            ? (input.Key, ReferenceEquals(input.Bitmap, videoAnalysisEditedInput) &&
+                videoAnalysisStartedAt is { } started && videoAnalysisEditedReadyAt >= started ? videoAnalysisEditedTime : null)
+            : null;
+    }
 
     public int SelectedVideoAnalysisBackgroundIndex {
         get => (int)videoAnalysisBackground;
@@ -157,6 +182,7 @@ public partial class MainViewModel {
                 long revision = videoAnalysisViewRevision;
                 using CancellationTokenSource stop = new();
                 videoAnalysisViewCancellation = stop;
+                long reserved = 0;
                 try {
                     if (WantsVideoAnalysisEditedInput && videoAnalysisEditedFailure is null &&
                         TryResolveVideoAnalysisInput(AnalysisImageSource.Edited, out VideoAnalysisInput edited) &&
@@ -168,7 +194,35 @@ public partial class MainViewModel {
                         continue;
                     }
 
-                    if (view.Segmentation is { } segmentation && videoAnalysisSegmentationPreview is null) {
+                    AnalysisEdgeResult? edges = isEdgesAnalysisEnabled && IsCurrentAnalysisLayer(edgesResult?.VideoFrame)
+                        ? edgesResult : null;
+                    AnalysisKeypointResult? points = isKeypointAnalysisEnabled && IsCurrentAnalysisLayer(keypointsResult?.VideoFrame)
+                        ? keypointsResult : null;
+                    bool prepareSegmentation = view.Segmentation is not null && videoAnalysisSegmentationPreview is null;
+                    bool compose = edges is not null || points is { Points.IsEmpty: false } ||
+                        view.Bitmap is null && view.Segmentation is null;
+                    long frameBytes = VideoEditorFrame.GetBufferBytes(view.Key.Geometry.OutputSize);
+                    long bytes = compose ? frameBytes + frameBytes * 3 / 4 : prepareSegmentation ? frameBytes : 0;
+                    if (compose && view.Bitmap is not null && view.Segmentation is null) {
+                        bytes += frameBytes;
+                    }
+                    if (compose && points?.VideoFrame is { } pointFrame &&
+                        pointFrame.Geometry.ClockwiseQuarterTurns != view.Key.Geometry.ClockwiseQuarterTurns) {
+                        bytes += 8L * points.Points.Length;
+                    }
+                    if (bytes > PreviewSettings.AnalysisBudgetBytes) {
+                        throw new InvalidOperationException("Недостаточно бюджета буферов анализа для композиции");
+                    }
+                    if (bytes > PreviewSettings.AnalysisBudgetBytes - videoAnalysisReservedBytes) {
+                        videoAnalysisViewRequested = true;
+                        await Task.Delay(25, stop.Token);
+                        continue;
+                    }
+                    videoAnalysisReservedBytes += bytes;
+                    reserved = bytes;
+                    long composing = Stopwatch.GetTimestamp();
+
+                    if (view.Segmentation is { } segmentation && prepareSegmentation) {
                         using VideoEditorFrame pixels = await Task.Run(() => VideoEditorFrame.FromRgb(view.Key.Geometry.OutputSize,
                             segmentation.SegmentedRgb.Span, stop.Token), stop.Token);
                         if (stop.IsCancellationRequested || !ReferenceEquals(segmentation, segmentationResult) ||
@@ -181,20 +235,17 @@ public partial class MainViewModel {
                             continue;
                         }
                     }
-                    AnalysisEdgeResult? edges = isEdgesAnalysisEnabled && IsCurrentAnalysisLayer(edgesResult?.VideoFrame)
-                        ? edgesResult : null;
-                    AnalysisKeypointResult? points = isKeypointAnalysisEnabled && IsCurrentAnalysisLayer(keypointsResult?.VideoFrame)
-                        ? keypointsResult : null;
-                    if (edges is null && (points is null || points.Points.IsEmpty) && view.Bitmap is not null) {
-                        continue;
-                    }
-                    using VideoEditorFrame? background = view.Bitmap is not null && view.Segmentation is null
-                        ? VideoEditorFrame.Capture(view.Bitmap) : null;
-                    using VideoEditorFrame composed = await Task.Run(() => AnalysisCompositionService.ComposeVideoFrame(view.Key,
-                        background, view.Segmentation, edges, points, stop.Token), stop.Token);
-                    if (!stop.IsCancellationRequested && revision == videoAnalysisViewRevision && IsCurrentAnalysisLayer(view.Key)) {
+                    if (compose) {
+                        using VideoEditorFrame? background = view.Bitmap is not null && view.Segmentation is null
+                            ? VideoEditorFrame.Capture(view.Bitmap) : null;
+                        using VideoEditorFrame composed = await Task.Run(() => AnalysisCompositionService.ComposeVideoFrame(view.Key,
+                            background, view.Segmentation, edges, points, stop.Token), stop.Token);
+                        if (stop.IsCancellationRequested || revision != videoAnalysisViewRevision || !IsCurrentAnalysisLayer(view.Key)) {
+                            continue;
+                        }
                         ReplaceVideoAnalysisComposition(CreateVideoAnalysisBitmap(composed));
                     }
+                    RecordVideoAnalysisPresentation(revision, view.Key, Stopwatch.GetElapsedTime(composing));
                 }
                 catch (OperationCanceledException) when (stop.IsCancellationRequested) {
                     // изменившийся кадр освобождает временные пиксели без публикации
@@ -205,6 +256,7 @@ public partial class MainViewModel {
                     }
                 }
                 finally {
+                    videoAnalysisReservedBytes -= reserved;
                     videoAnalysisViewCancellation = null;
                     if (IsVideoOpen && videoAnalysisVisible && !analysisDisposed) {
                         RefreshVideoAnalysisStatus();
@@ -221,20 +273,18 @@ public partial class MainViewModel {
     private async Task PrepareVideoAnalysisEditedInputAsync(VideoAnalysisInput input, VideoEditorPlan plan, CancellationToken token) {
         videoAnalysisEditedKey = input.Key;
         videoAnalysisEditedBudget = PreviewSettings.BudgetBytes;
+        long bytes = VideoEditorFrame.GetBufferBytes(input.Bitmap.PixelSize) + plan.GetScratchBytes(input.Bitmap.PixelSize);
         try {
-            if (VideoEditorFrame.GetBufferBytes(input.Bitmap.PixelSize) + plan.GetScratchBytes(input.Bitmap.PixelSize) >
-                videoAnalysisEditedBudget) {
+            if (bytes > videoAnalysisEditedBudget) {
                 throw new InvalidOperationException("Бюджета буферов недостаточно для редакторского кадра");
             }
-            using VideoEditorFrame pixels = VideoEditorFrame.Capture(input.Bitmap);
-            VideoEditorGeometry geometry;
+            videoAnalysisEditedReservedBytes = bytes;
             videoAnalysisApplyingPlan = true;
-            try {
-                geometry = await Task.Run(() => plan.Apply(pixels), token);
-            }
-            finally {
-                videoAnalysisApplyingPlan = false;
-            }
+            using VideoEditorFrame pixels = VideoEditorFrame.Capture(input.Bitmap);
+            var (geometry, elapsed) = await Task.Run(() => {
+                long started = Stopwatch.GetTimestamp();
+                return (plan.Apply(pixels), Stopwatch.GetElapsedTime(started));
+            }, token);
             token.ThrowIfCancellationRequested();
             if (!IsCurrentAnalysisLayer(input.Key)) {
                 return;
@@ -243,12 +293,18 @@ public partial class MainViewModel {
                 throw new InvalidOperationException("Геометрия редакторского кадра изменилась");
             }
             videoAnalysisEditedInput = CreateVideoAnalysisBitmap(pixels);
+            videoAnalysisEditedTime = elapsed;
+            videoAnalysisEditedReadyAt = Stopwatch.GetTimestamp();
             NotifyVideoAnalysisInput();
             NotifyVideoAnalysisPreview();
         }
         catch (Exception error) when (!token.IsCancellationRequested && IsCurrentAnalysisLayer(input.Key)) {
             videoAnalysisEditedFailure = $"Не удалось подготовить изменённый кадр: {error.Message}";
             NotifyVideoAnalysisInput();
+        }
+        finally {
+            videoAnalysisApplyingPlan = false;
+            videoAnalysisEditedReservedBytes = 0;
         }
     }
 
@@ -288,6 +344,7 @@ public partial class MainViewModel {
     private void ReleaseVideoAnalysisEditedInput() {
         WriteableBitmap? previous = videoAnalysisEditedInput;
         videoAnalysisEditedInput = null;
+        videoAnalysisEditedTime = null;
         videoAnalysisEditedKey = null;
         videoAnalysisEditedFailure = null;
         if (previous is not null) {

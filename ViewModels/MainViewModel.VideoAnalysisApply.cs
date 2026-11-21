@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia.Media.Imaging;
 using ImageVisionApp.Models;
 using ImageVisionApp.Services;
 using LibVLCSharp.Shared;
@@ -19,10 +20,16 @@ public partial class MainViewModel {
     private bool CanApplyVideoAnalysis => videoAnalysisVisible &&
         videoPlayback is { State: not VLCState.Error } && (PlaybackStatus.CanPlay || HasVideoAnalysisInput);
 
-    private bool IsWaitingForVideoAnalysisFrame => videoAnalysisWaitingForLivePause ||
+    private bool IsWaitingForVideoAnalysisFrame => videoAnalysisWaitingForLivePause || liveAnalysisSeekTarget is not null ||
         requestedVideoSeek is not null || videoFrameStep is not null ||
         preparedOpening is not null || livePreviewHandoff is not null || preparedSource is not null &&
         (preparedStartPending || preparedNeedsSeek || preparedPauseOnCurrentPosition || preparedWaitingPosition is not null);
+
+    private bool HasUnconfirmedLiveAnalysisFrame => liveAnalysisSeekTarget is not null || liveAnalysisSeekRecovery is not null;
+
+    // после живой перемотки буфер VLC не содержит надежной метки позиции
+    private bool NeedsVerifiedLiveAnalysisFrame(Bitmap frame, long position) => preparedSource is null &&
+        (HasUnconfirmedLiveAnalysisFrame || position > 0 && ReferenceEquals(frame, VideoFirstFrame));
 
     // заменяем ожидающий запрос и ставим плеер на паузу перед выбором кадра
     private Task ApplyVideoAnalysisAsync() {
@@ -33,6 +40,7 @@ public partial class MainViewModel {
         CancelVideoAnalysisApply();
         TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         videoAnalysisApply = (document, completion);
+        BeginVideoAnalysisMeasurement();
         try {
             PauseVideoPlayback(forAnalysis: true);
         }
@@ -62,9 +70,13 @@ public partial class MainViewModel {
                         if (videoPlayback is not { } playback || playback.State == VLCState.Error || videoEditorSourceError is not null) {
                             throw new InvalidOperationException(videoEditorSourceError ?? "Не удалось получить видеокадр");
                         }
-                        if (playback.State is not (VLCState.Paused or VLCState.Ended) &&
-                            Environment.TickCount64 >= pauseDeadline) {
-                            throw new InvalidOperationException("Не удалось подтвердить паузу видео");
+                        if (Environment.TickCount64 >= pauseDeadline) {
+                            if (liveAnalysisSeekTarget is not null) {
+                                throw new InvalidOperationException("Плеер не подтвердил позицию после перемотки");
+                            }
+                            if (playback.State is not (VLCState.Paused or VLCState.Ended)) {
+                                throw new InvalidOperationException("Не удалось подтвердить паузу видео");
+                            }
                         }
                         if (videoAnalysisLiveFallbackPosition is { } position && !HasLivePreviewWork &&
                             PreparedVideo is not { ReservedBytes: > 0 }) {
@@ -118,13 +130,25 @@ public partial class MainViewModel {
         }
         int revision = VideoPreviewRevision;
         long duration = PlaybackStatus.Duration;
-        long budget = PreviewSettings.BudgetBytes;
         VideoFileIdentity? identity = videoFileIdentity;
         using CancellationTokenSource stop = new();
         videoAnalysisLiveFallbackCancellation = stop;
+        long reservedBytes = 0;
         try {
+            FfprobeVideoMediaSource source = await Task.Run(
+                () => FfprobeVideoMediaSource.OpenAsync(path, identity, stop.Token), stop.Token);
+            if (!IsCurrentFallback()) {
+                return;
+            }
+            // резервируем рабочие пиксели чтения и снимок, который остается в предпросмотре
+            long frameBytes = source.ReadScratchBytes + 2 * VideoEditorFrame.GetBufferBytes(source.FrameSize);
+            if (frameBytes > PreviewSettings.AnalysisBudgetBytes - videoAnalysisReservedBytes) {
+                throw new InvalidOperationException("Бюджета анализа недостаточно, чтобы прочитать остановленный кадр");
+            }
+            reservedBytes = frameBytes;
+            videoAnalysisReservedBytes += reservedBytes;
             TimedVideoInput frame = await Task.Run(
-                () => ReadVideoAnalysisPausedFrameAsync(path, identity, position, duration, budget, stop.Token), stop.Token);
+                () => ReadVideoAnalysisPausedFrameAsync(source, position, duration, stop.Token), stop.Token);
             using VideoEditorFrame pixels = frame.Pixels;
             if (!IsCurrentFallback()) {
                 return;
@@ -144,6 +168,7 @@ public partial class MainViewModel {
             // при позднем живом кадре или новой команде запасные пиксели и ошибка больше не нужны
         }
         finally {
+            videoAnalysisReservedBytes -= reservedBytes;
             videoAnalysisLiveFallbackCancellation = null;
         }
 
@@ -152,16 +177,13 @@ public partial class MainViewModel {
             ReferenceEquals(CurrentDocument, request.Document) && ReferenceEquals(videoPlayback, playback) &&
             !videoWantsToPlay && playback.State is VLCState.Paused or VLCState.Ended &&
             videoAnalysisLiveFallbackPosition == position && PlaybackStatus.Position == position &&
-            VideoPreviewRevision == revision && ReferenceEquals(VideoPreviewFrame, VideoFirstFrame);
+            (HasUnconfirmedLiveAnalysisFrame || VideoPreviewRevision == revision &&
+                ReferenceEquals(VideoPreviewFrame, VideoFirstFrame));
     }
 
     // проверяем, что интервал декодированного кадра действительно покрывает позицию остановки
-    private static async Task<TimedVideoInput> ReadVideoAnalysisPausedFrameAsync(string path, VideoFileIdentity? identity,
-        long position, long duration, long budget, CancellationToken token) {
-        FfprobeVideoMediaSource source = await FfprobeVideoMediaSource.OpenAsync(path, identity, token).ConfigureAwait(false);
-        if (source.ReadScratchBytes + VideoEditorFrame.GetBufferBytes(source.FrameSize) > budget) {
-            throw new InvalidOperationException("Бюджета буферов недостаточно, чтобы прочитать остановленный кадр");
-        }
+    private static async Task<TimedVideoInput> ReadVideoAnalysisPausedFrameAsync(FfprobeVideoMediaSource source,
+        long position, long duration, CancellationToken token) {
         bool atEnd = duration > 0 && position >= duration;
         VideoPresentationTime target = new(position, 1000);
         await foreach (TimedVideoInput frame in source.ReadFramesAsync(new(position, atEnd) { SingleFrame = true }, token)
@@ -178,6 +200,7 @@ public partial class MainViewModel {
 
     // снимаем ожидание и старый расчет без изменения уже опубликованных совместимых слоев
     private void CancelVideoAnalysisApply() {
+        ClearVideoAnalysisMeasurement();
         videoAnalysisWaitingForLivePause = false;
         videoAnalysisLiveFallbackPosition = null;
         videoAnalysisLiveFallbackCancellation?.Cancel();
