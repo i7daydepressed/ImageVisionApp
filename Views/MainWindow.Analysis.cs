@@ -321,15 +321,27 @@ public partial class MainWindow {
         };
         tabs.DataContextChanged += (_, _) =>
             (tabs.DataContext as MainViewModel)?.SetVideoAnalysisResultTabSelected(tabs.SelectedIndex == 1);
-        Grid header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 8 };
+        Grid header = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = 8 };
         header.Children.Add(tabs);
+        TextBlock pipeline = CreateBoundText(viewModel => viewModel.VideoAnalysisPipelineDescription);
+        pipeline.FontSize = 12;
+        pipeline.LineHeight = 14;
+        pipeline.MaxHeight = 42;
+        pipeline.VerticalAlignment = VerticalAlignment.Center;
+        pipeline.TextTrimming = TextTrimming.CharacterEllipsis;
+        pipeline.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.VideoAnalysisPipelineDescription)) {
+            Converter = StringConverters.IsNotNullOrEmpty
+        });
+        pipeline.Bind(ToolTip.TipProperty, new Binding(nameof(MainViewModel.VideoAnalysisPipelineDescription)));
+        Grid.SetColumn(pipeline, 1);
+        header.Children.Add(pipeline);
         Button displayButton = CreateAnalysisDisplayButton();
         displayButton.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
-        Grid.SetColumn(displayButton, 1);
+        Grid.SetColumn(displayButton, 2);
         header.Children.Add(displayButton);
         Border videoDisplayHost = new() { Child = videoDisplay };
         videoDisplayHost.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
-        Grid.SetColumn(videoDisplayHost, 1);
+        Grid.SetColumn(videoDisplayHost, 2);
         header.Children.Add(videoDisplayHost);
         layout.Children.Add(header);
 

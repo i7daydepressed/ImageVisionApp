@@ -135,6 +135,7 @@ public partial class MainViewModel {
 
     // меняем только показ и сразу возвращаем подложку, если прежние отметки уже не актуальны
     private void RefreshVideoAnalysisComposition() {
+        UpdateVideoAnalysisPipelineDescription();
         videoAnalysisViewRevision++;
         videoAnalysisCompositionFailure = null;
         videoAnalysisViewRequested = (videoAnalysisVisible || VideoAnalysisManualNeedsEditedInput) && IsVideoOpen && !analysisDisposed;

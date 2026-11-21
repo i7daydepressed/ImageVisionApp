@@ -12,8 +12,11 @@ namespace ImageVisionApp.ViewModels;
 public partial class MainViewModel {
     private readonly record struct VideoAnalysisInput(VideoAnalysisFrameKey Key, Bitmap Bitmap, VideoEditorPlan? Plan);
     private readonly record struct VideoAnalysisRequest(VideoAnalysisFrameKey Original, VideoAnalysisFrameKey Edited,
-        VideoFrameAnalysisSettings Settings, AnalysisImageSource EdgeSource, AnalysisImageSource SegmentationSource,
-        long EdgesRevision, long SegmentationRevision, long KeypointsRevision);
+        VideoAnalysisPipeline Pipeline, VideoFrameAnalysisSettings Settings,
+        long EdgesRevision, long SegmentationRevision, long KeypointsRevision) {
+        public AnalysisImageSource EdgeSource => Pipeline.EdgeSource ?? AnalysisImageSource.Original;
+        public AnalysisImageSource SegmentationSource => Pipeline.SegmentationSource ?? AnalysisImageSource.Original;
+    }
 
     private readonly record struct PhotoAnalysisSettings(bool Edges, bool Segmentation, bool Keypoints,
         AnalysisEdgeMethod Method, string Lower, string Upper, string Clusters, string Fast, bool Nonmax,
@@ -155,7 +158,7 @@ public partial class MainViewModel {
 
     // готовим редакторский вход лишь для методов текущего ручного запроса, которым он нужен
     private bool NeedsEditedVideoAnalysisInput(VideoAnalysisRequest request) =>
-        IsCurrentAnalysisLayer(request.Original) && SameVideoAnalysisFrame(request.Edited, GetVideoAnalysisEditedKey(request.Original)) &&
+        request.Pipeline.Queue.Stages.Contains(VideoPipelineStage.Editing) && IsCurrentAnalysisLayer(request.Original) && SameVideoAnalysisFrame(request.Edited, GetVideoAnalysisEditedKey(request.Original)) &&
         (request.Settings.EdgeMethod is not null && request.EdgesRevision == edgesWorkRevision && request.EdgeSource == AnalysisImageSource.Edited ||
          request.Settings.Clusters is not null && request.SegmentationRevision == segmentationWorkRevision &&
          request.SegmentationSource == AnalysisImageSource.Edited);
@@ -183,10 +186,11 @@ public partial class MainViewModel {
         TryGetCannyThresholds(out double lower, out double upper);
         TryGetSegmentationClusterCount(out int clusters);
         TryGetFastThreshold(out int threshold);
-        VideoFrameAnalysisSettings settings = new(isEdgesAnalysisEnabled ? selectedEdgeMethod : null, lower, upper,
-            IsSegmentationAnalysisEnabled ? clusters : null, isKeypointAnalysisEnabled ? threshold : null, fastNonmaxSuppression);
-        VideoAnalysisRequest request = new(original.Key, GetVideoAnalysisEditedKey(original.Key), settings,
-            videoEdgeSource, videoSegmentationSource, edgesWorkRevision, segmentationWorkRevision, keypointsWorkRevision);
+        VideoAnalysisPipeline pipeline = CaptureVideoAnalysisPipeline();
+        VideoFrameAnalysisSettings settings = new(pipeline.EdgeSource is not null ? selectedEdgeMethod : null, lower, upper,
+            pipeline.SegmentationSource is not null ? clusters : null, pipeline.Fast ? threshold : null, fastNonmaxSuppression);
+        VideoAnalysisRequest request = new(original.Key, GetVideoAnalysisEditedKey(original.Key), pipeline,
+            settings, edgesWorkRevision, segmentationWorkRevision, keypointsWorkRevision);
 
         analysisWorkerRunning = true;
         videoAnalysisFailure = null;
@@ -411,6 +415,7 @@ public partial class MainViewModel {
         OnPropertyChanged(nameof(SelectedVideoAnalysisSourceIndex));
         OnPropertyChanged(nameof(SelectedVideoEdgeSourceIndex));
         OnPropertyChanged(nameof(SelectedVideoSegmentationSourceIndex));
+        UpdateVideoAnalysisPipelineDescription();
         if (IsVideoOpen && photoAnalysisBeforeVideo is null) {
             photoAnalysisBeforeVideo = new(isEdgesAnalysisEnabled, isSegmentationAnalysisEnabled, isKeypointAnalysisEnabled,
                 selectedEdgeMethod, cannyLowerThresholdText, cannyUpperThresholdText, segmentationClusterCountText,
