@@ -114,10 +114,14 @@ public partial class MainViewModel {
 
     // одним таймером публикуем готовые кадры и опрашиваем общий плеер
     private void EnsureVideoPlaybackTimer() {
+        TimeSpan interval = TimeSpan.FromMilliseconds(IsStrictVideo ? 8 : 25);
         if (videoPlaybackTimer is null) {
-            videoPlaybackTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(25) };
+            videoPlaybackTimer = new DispatcherTimer { Interval = interval };
             videoPlaybackTimer.Tick += VideoPlaybackTimer_OnTick;
             videoPlaybackTimer.Start();
+        }
+        else if (videoPlaybackTimer.Interval != interval) {
+            videoPlaybackTimer.Interval = interval;
         }
     }
 

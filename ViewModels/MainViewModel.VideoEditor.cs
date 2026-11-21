@@ -307,7 +307,7 @@ public partial class MainViewModel {
         VideoPreviewSettings previous = PreviewSettings;
         bool analysisChanged = previous.AnalysisMaximumWorkers != settings.AnalysisMaximumWorkers ||
             previous.AnalysisBudgetMiB != settings.AnalysisBudgetMiB;
-        bool retrySource = !analysisChanged && settings.Mode == VideoPreviewMode.Prepared && preparedSource is null &&
+        bool retrySource = !analysisChanged && settings.Mode != VideoPreviewMode.Live && preparedSource is null &&
             preparedOpening is null && IsVideoOpen;
         if (settings == PreviewSettings && !retrySource) {
             return;
@@ -326,7 +326,9 @@ public partial class MainViewModel {
             return;
         }
         if (preparedSource is not null) {
-            if (previous.BudgetMiB != settings.BudgetMiB && videoFrameStep is null && !RecalculatePinnedPreparedFrame()) {
+            if ((previous.BudgetMiB != settings.BudgetMiB ||
+                 IsStrictVideo && previous.MaximumWorkers != settings.MaximumWorkers) &&
+                videoFrameStep is null && !RecalculatePinnedPreparedFrame()) {
                 RequestPreparedVideo(preparedPosition, preparedAtEnd, preservePlay: true);
             }
             return;

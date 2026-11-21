@@ -10,11 +10,18 @@ namespace ImageVisionApp.Services;
 
 internal readonly record struct PreparedVideoWindow(
     long Generation, int ReadyFrames, VideoPresentationTime? First, VideoPresentationTime? Last, VideoPresentationTime? Through,
-    bool Ended, Exception? Error, long ReservedBytes, long BudgetBytes, long PeakReservedBytes);
+    bool Ended, Exception? Error, long ReservedBytes, long BudgetBytes, long PeakReservedBytes) {
+    public long? FirstOrdinal { get; init; }
+    public int ActiveWorkers { get; init; }
+    public int PeakActiveWorkers { get; init; }
+    public int WorkerLimit { get; init; }
+    public int ResumeCapacity { get; init; }
+}
 
 // обе картинки принадлежат вызывающей стороне до окончания копирования в интерфейс
 internal sealed class PreparedVideoFrame(
-    TimedVideoInput input, VideoEditorFrame edited, VideoEditorGeometry geometry, Action release) : IDisposable {
+    TimedVideoInput input, VideoEditorFrame edited, VideoEditorGeometry geometry, Action release,
+    long? acceptedAt = null) : IDisposable {
     private Action? releaseReservation = release;
 
     public VideoPresentationTime Time => input.Time;
@@ -23,6 +30,7 @@ internal sealed class PreparedVideoFrame(
     public VideoEditorFrame Original => input.Pixels;
     public VideoEditorFrame Edited => edited;
     public VideoEditorGeometry Geometry => geometry;
+    public long? AcceptedAt => acceptedAt;
 
     // кадр действует на полуоткрытом интервале до следующей подтвержденной метки
     public bool Contains(VideoPresentationTime time) =>
@@ -40,15 +48,17 @@ internal sealed class PreparedVideoFrame(
     }
 }
 
-// читает и рассчитывает ближайший участок одним фоновым циклом, не вытесняя кадры при заполнении
-internal sealed class PreviewCoordinator : IAsyncDisposable {
+// читает ближайший участок фоновым циклом, удерживая кадровый резерв до освобождения
+internal sealed partial class PreviewCoordinator : IAsyncDisposable {
     private sealed record RequestData(long Generation, IVideoMediaSource Source, VideoFrameReadRequest Start,
-        VideoEditorPlan Plan, long Budget, PixelSize Size, long ReaderBytes, long ResultBytes, long ScratchBytes);
+        VideoEditorPlan Plan, long Budget, PixelSize Size, long ReaderBytes, long ResultBytes, long ScratchBytes,
+        bool Strict, int WorkerLimit, int ResumeCapacity);
 
     private sealed class Reading(RequestData request) {
         public RequestData Request { get; } = request;
         public CancellationTokenSource Stop { get; } = new();
         public Task? Cancellation { get; set; }
+        public StrictStage? Strict { get; } = request.Strict ? new() : null;
     }
 
     private const int AheadMilliseconds = 7000;
@@ -68,35 +78,58 @@ internal sealed class PreviewCoordinator : IAsyncDisposable {
     private long budget;
     private bool ended;
     private bool atEnd;
+    private int workerLimit;
+    private int peakActiveWorkers;
+    private int resumeCapacity;
     private bool disposed;
     private Exception? error;
 
     public PreparedVideoWindow Snapshot {
         get {
             lock (gate) {
-                return new(generation, ready.Count, ready.TryPeek(out PreparedVideoFrame? first) ? first.Time : null,
-                    last, through, ended, error, reserved, budget, peakReserved);
+                ready.TryPeek(out PreparedVideoFrame? first);
+                return new(generation, ready.Count, first?.Time, last, through, ended, error, reserved, budget, peakReserved) {
+                    FirstOrdinal = first?.Ordinal,
+                    ActiveWorkers = reading?.Strict?.Active ?? 0,
+                    PeakActiveWorkers = peakActiveWorkers,
+                    WorkerLimit = workerLimit,
+                    ResumeCapacity = resumeCapacity
+                };
             }
         }
     }
 
     // оставляем только последний запрос, старый читатель освобождает собственные буферы при выходе
-    public long Request(IVideoMediaSource source, VideoFrameReadRequest start, VideoEditorPlan plan, long budgetBytes) {
+    public long Request(IVideoMediaSource source, VideoFrameReadRequest start, VideoEditorPlan plan, long budgetBytes) =>
+        RequestCore(source, start, plan, budgetBytes, strict: false, workers: 1);
+
+    // используем тот же бюджет и поколение, сохраняя особый порядок потребления строгого запроса
+    private long RequestCore(IVideoMediaSource source, VideoFrameReadRequest start, VideoEditorPlan plan, long budgetBytes,
+        bool strict, int workers) {
         PixelSize size = source.FrameSize;
         long readerBytes = source.ReadScratchBytes;
         if (size.Width <= 0 || size.Height <= 0 || readerBytes < 0 || budgetBytes <= 0 ||
-            start.PositionMilliseconds < 0 || start.PositionMilliseconds > long.MaxValue - AheadMilliseconds) {
+            workers <= 0 || start.PositionMilliseconds < 0 || start.PositionMilliseconds > long.MaxValue - AheadMilliseconds) {
             throw new ArgumentOutOfRangeException(nameof(start), "Неверные параметры подготовленного участка");
         }
         long resultBytes = checked((long)size.Width * size.Height * (plan.HasSteps ? 8 : 4));
         long scratchBytes = plan.GetScratchBytes(size);
+        long frameBytes = checked(resultBytes + scratchBytes);
+        long frameBudget = Math.Max(0, budgetBytes - readerBytes);
+        int limit = strict ? (int)Math.Min(plan.HasSteps ? workers : 1, frameBudget / frameBytes) : 1;
+        int capacity = strict && limit > 0
+            ? (int)Math.Min(MaximumReadyFrames, 1 + (frameBudget - frameBytes) / resultBytes) : 0;
         lock (gate) {
             ObjectDisposedException.ThrowIf(disposed, this);
             Invalidate();
             position = start.PositionMilliseconds;
             atEnd = start.AtEnd;
             budget = budgetBytes;
-            pending = new(generation, source, start, plan, budgetBytes, size, readerBytes, resultBytes, scratchBytes);
+            workerLimit = limit;
+            resumeCapacity = capacity;
+            strictMeasuring = strictRequest = strict;
+            pending = new(generation, source, start, plan, budgetBytes, size, readerBytes, resultBytes, scratchBytes,
+                strict, limit, capacity);
             producer ??= Task.Run(RunAsync);
             return generation;
         }
@@ -173,9 +206,12 @@ internal sealed class PreviewCoordinator : IAsyncDisposable {
         pending = null;
         ended = false;
         error = null;
-        if (reading is { Cancellation: null } active) {
-            active.Cancellation = active.Stop.CancelAsync();
+        if (reading is { } active) {
+            active.Cancellation ??= active.Stop.CancelAsync();
+            ClearStrictCompleted(active.Strict);
         }
+        workerLimit = resumeCapacity = peakActiveWorkers = 0;
+        ResetStrictMeasurements();
         ClearReady();
         peakReserved = reserved;
         SignalProducer();
@@ -203,7 +239,12 @@ internal sealed class PreviewCoordinator : IAsyncDisposable {
                 reading = work = new(request);
             }
             try {
-                await PrepareAsync(work).ConfigureAwait(false);
+                if (work.Request.Strict) {
+                    await PrepareStrictAsync(work).ConfigureAwait(false);
+                }
+                else {
+                    await PrepareAsync(work).ConfigureAwait(false);
+                }
             }
             catch (Exception failure) {
                 lock (gate) {

@@ -14,6 +14,7 @@ namespace ImageVisionApp.ViewModels;
 public partial class MainViewModel {
     private PreviewCoordinator? preparedVideo;
     private IVideoMediaSource? preparedSource;
+    private VideoPreviewMode preparedMode;
     private WriteableBitmap? preparedOriginal;
     private VideoPresentationTime? preparedFrom;
     private VideoPresentationTime? preparedUntil;
@@ -45,8 +46,8 @@ public partial class MainViewModel {
     internal PreparedVideoWindow? PreparedVideo => preparedVideo?.Snapshot;
     internal VideoPresentationTime? PreparedPresentedTime => preparedFrom;
 
-    internal VideoPreviewMode ActiveVideoPreviewMode => preparedSource is null
-        ? VideoPreviewMode.Live : VideoPreviewMode.Prepared;
+    internal VideoPreviewMode ActiveVideoPreviewMode => preparedSource is null ? VideoPreviewMode.Live : preparedMode;
+    private bool IsStrictVideo => ActiveVideoPreviewMode == VideoPreviewMode.Strict;
     internal string PreparedVideoBufferDescription =>
         $"{DescribePreparedVideo()} · {PreparedVideo?.ReadyFrames ?? 0} кадр.";
     internal string? VideoPreviewModeNotice => preparedOpening is not null
@@ -67,7 +68,7 @@ public partial class MainViewModel {
             OnPropertyChanged(nameof(VideoPreviewFrame));
             previous.Dispose();
         }
-        if (!mediaPreviewsDisposed && IsVideoOpen && PreviewSettings.Mode == VideoPreviewMode.Prepared) {
+        if (!mediaPreviewsDisposed && IsVideoOpen && PreviewSettings.Mode != VideoPreviewMode.Live) {
             ChangeVideoPreviewMode();
         }
     }
@@ -87,6 +88,14 @@ public partial class MainViewModel {
             else {
                 preparedUnavailable = null;
             }
+            return;
+        }
+        if (preparedSource is not null) {
+            preparedMode = PreviewSettings.Mode;
+            if (!RecalculatePinnedPreparedFrame()) {
+                RequestPreparedVideo(PlaybackStatus.Position, preparedAtEnd, preservePlay: true);
+            }
+            EnsureVideoPlaybackTimer();
             return;
         }
         if (preparedOpening is null && preparedSource is null &&
@@ -133,6 +142,7 @@ public partial class MainViewModel {
             }
             preparedOpening = null;
             preparedSource = source;
+            preparedMode = PreviewSettings.Mode;
             if (!RecalculatePinnedPreparedFrame()) {
                 RequestPreparedVideo(preparedPosition, preparedAtEnd,
                     seekPlayer: preparedPosition > 0 || preparedInterruptedLiveSeek || videoPlayback is { Position: > 0 },
@@ -142,7 +152,7 @@ public partial class MainViewModel {
         catch (Exception error) {
             if (ReferenceEquals(preparedOpening, request) && ReferenceEquals(CurrentDocument, document)) {
                 preparedOpening = null;
-                SwitchPreparedPreviewToLive(preparedPosition, error.Message);
+                FailPreparedVideo(error.Message);
             }
         }
         finally {
@@ -183,6 +193,7 @@ public partial class MainViewModel {
     private void SwitchPreparedPreviewToLive(long position, string? reason = null) {
         CancelVideoFrameStep();
         bool wasPrepared = preparedSource is not null;
+        bool wasStrict = IsStrictVideo || PreviewSettings.Mode == VideoPreviewMode.Strict;
         long duration = PlaybackStatus.Duration;
         bool atEnd = duration > 0 && position >= duration ||
             wasPrepared && preparedAtEnd && position == preparedPosition;
@@ -201,7 +212,8 @@ public partial class MainViewModel {
         preparedFrom = preparedUntil = null;
         preparedWaitingPosition = null;
         preparedDetached = false;
-        preparedUnavailable = reason is null ? null : $"Подготовка недоступна: {reason}";
+        preparedUnavailable = reason is null ? null : wasStrict
+            ? $"Строгий показ недоступен: {reason}" : $"Подготовка недоступна: {reason}";
         videoPlayback?.SetPaused(true);
         videoWasPlaying = false;
         videoRestartOnPlay = atEnd;
@@ -300,7 +312,7 @@ public partial class MainViewModel {
 
     // замена позиции, плана и бюджета останавливает звук и скрывает кадры прежнего запроса
     private void RequestPreparedVideo(long position, bool atEnd, bool seekPlayer = true, bool reuseReady = false,
-        bool preservePlay = false) {
+        bool preservePlay = false, VideoFrameCursor? strictAnchor = null) {
         preparedPauseOnCurrentPosition = false;
         if (preparedSource is null) {
             return;
@@ -317,13 +329,14 @@ public partial class MainViewModel {
             return;
         }
         VideoPresentationTime time = new(position, 1000);
-        bool keepWindow = reuseReady && !atEnd && !preparedAtEnd && position >= preparedPosition &&
+        bool keepWindow = !IsStrictVideo && reuseReady && !atEnd && !preparedAtEnd && position >= preparedPosition &&
             preparedWaitingPosition is null && (PreparedFrameCovers(time) ||
                 PreparedVideo is { Error: null, First: { } first } window && first.CompareTo(time) <= 0 &&
                 (window.Ended || window.Through is { } right && time.CompareTo(right) < 0));
         videoWantsToPlay &= preservePlay;
         videoPlayback?.SetPaused(true);
         preparedPosition = position;
+        ResetStrictVideoClock(position, strictAnchor);
         preparedWaitingPosition = null;
         preparedDetached = false;
         preparedAtEnd = atEnd;
@@ -359,13 +372,17 @@ public partial class MainViewModel {
             if (videoHandoffReplay) {
                 videoHandoffReplay = false;
                 preparedPosition = 0;
+                ResetStrictVideoClock(0);
                 preparedAtEnd = false;
                 preparedNeedsSeek = true;
             }
             try {
                 preparedVideo ??= new PreviewCoordinator();
-                preparedGeneration = preparedVideo.Request(source, new(preparedPosition, preparedAtEnd),
-                    videoEditorPlan, PreviewSettings.BudgetBytes);
+                VideoFrameReadRequest start = new(preparedPosition, preparedAtEnd);
+                preparedGeneration = IsStrictVideo
+                    ? preparedVideo.RequestStrict(source, start with { Anchor = strictStartAnchor },
+                        videoEditorPlan, PreviewSettings.BudgetBytes, PreviewSettings.EffectiveWorkers)
+                    : preparedVideo.Request(source, start, videoEditorPlan, PreviewSettings.BudgetBytes);
             }
             catch (Exception error) {
                 FailPreparedVideo(error.Message);
@@ -375,16 +392,31 @@ public partial class MainViewModel {
 
     // первый готовый кадр может появиться до открытия общего плеера
     private void RefreshPreparedBeforePlayer() {
-        bool covered = AdvancePreparedVideo(preparedPosition);
-        if (preparedSource is not null) {
-            UpdatePlaybackStatus(PlaybackStatus with {
-                Notice = covered ? "Подготовка воспроизведения…" : "Подготовка кадра…"
-            });
+        try {
+            bool covered = IsStrictVideo ? TryShowFirstStrictFrame() : AdvancePreparedVideo(preparedPosition);
+            if (preparedSource is not null) {
+                UpdatePlaybackStatus(PlaybackStatus with {
+                    Notice = covered ? "Подготовка воспроизведения…" : "Подготовка кадра…"
+                });
+            }
+        }
+        catch (Exception failure) {
+            FailPreparedVideo(failure.Message);
         }
     }
 
     // явная пауза снимает намерение запуска даже когда VLC уже ожидает на паузе
     private void PausePreparedVideo(VideoPlaybackSession? playback, bool keepCurrentPosition = false) {
+        if (IsStrictVideo) {
+            videoWantsToPlay = false;
+            strictClockStartedAt = null;
+            preparedVideo?.StopStrictMeasurement(preparedGeneration);
+            playback?.SetPaused(true);
+            if (playback is not null) {
+                RefreshVideoPlayback();
+            }
+            return;
+        }
         if (videoWantsToPlay && !preparedNeedsSeek && !preparedStartPending &&
             preparedWaitingPosition is null && playback?.State == VLCState.Playing) {
             if (keepCurrentPosition) {
@@ -420,21 +452,28 @@ public partial class MainViewModel {
             PausePreparedVideo(playback);
             return;
         }
-        bool wasPinned = videoPinnedFrame is not null;
+        VideoFrameCursor? pin = videoPinnedFrame;
         videoPinnedFrame = null;
-        if (preparedAtEnd || playback.State == VLCState.Ended) {
+        if (preparedAtEnd || !IsStrictVideo && playback.State == VLCState.Ended) {
             RequestPreparedVideo(0, atEnd: false);
         }
-        else if (wasPinned) {
-            RequestPreparedVideo(preparedPosition, atEnd: false);
+        else if (pin is not null) {
+            RequestPreparedVideo(preparedPosition, atEnd: false, strictAnchor: IsStrictVideo ? pin : null);
         }
         videoWantsToPlay = true;
+        if (IsStrictVideo && !preparedStartPending) {
+            preparedVideo?.StartStrictMeasurement(preparedGeneration);
+        }
         SetVideoEditorProcessingTime(null);
         RefreshVideoPlayback();
     }
 
     // учитываем запрос пользователя отдельно от фактического состояния общего плеера
     private void RefreshPreparedVideo(VideoPlaybackSession playback) {
+        if (IsStrictVideo) {
+            RefreshStrictVideo(playback);
+            return;
+        }
         if (videoPinnedFrame is not null && preparedFrom is not null && !videoWantsToPlay) {
             UpdatePlaybackStatus(PlaybackStatus with { Notice = videoFrameStepNotice });
             return;
@@ -625,5 +664,11 @@ public partial class MainViewModel {
     }
 
     // при отказе проверенного источника передаем ту же позицию и команду живому предпросмотру
-    private void FailPreparedVideo(string reason) => SwitchPreparedPreviewToLive(preparedPosition, reason);
+    private void FailPreparedVideo(string reason) {
+        if (IsStrictVideo || PreviewSettings.Mode == VideoPreviewMode.Strict) {
+            videoWantsToPlay = false;
+            videoHandoffReplay = false;
+        }
+        SwitchPreparedPreviewToLive(preparedPosition, reason);
+    }
 }
