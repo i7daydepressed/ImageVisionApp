@@ -107,7 +107,7 @@ public partial class MainViewModel {
     public bool HasCannyThresholdError => !TryGetCannyThresholds(out _, out _);
     private bool AreSelectedAnalysisParametersValid => IsRobertsEdgeMethod || !HasCannyThresholdError;
     private bool HasEnabledAnalysisMethods => isEdgesAnalysisEnabled || IsSegmentationAnalysisEnabled ||
-        isKeypointAnalysisEnabled || !IsVideoOpen && isPlateAnalysisEnabled;
+        isKeypointAnalysisEnabled || isPlateAnalysisEnabled;
     private bool AreAllAnalysisParametersValid => (!isEdgesAnalysisEnabled || AreSelectedAnalysisParametersValid) &&
         (!IsSegmentationAnalysisEnabled || !HasSegmentationValidationError) &&
         (!isKeypointAnalysisEnabled || !HasFastThresholdError);
@@ -428,14 +428,14 @@ public partial class MainViewModel {
                 AnalysisResultBackground background = selectedAnalysisBackground;
                 bool showEdges = showAnalysisEdges;
                 bool showKeypoints = showAnalysisKeypoints;
-                bool showPlate = showAnalysisPlate;
+                int plateLimit = showAnalysisPlate ? VisiblePlateRegionLimit : 0;
                 using CancellationTokenSource cancellation = new CancellationTokenSource();
                 activeAnalysisCancellation = cancellation;
                 activeAnalysisMethod = AnalysisWorkerMethod.Composition;
                 try {
                     AnalysisStatusMessage = "Подготовка результата";
                     byte[] png = await Task.Run(() => AnalysisCompositionService.CreatePng(
-                        edges, segmentation, keypoints, plate, background, showEdges, showKeypoints, showPlate, cancellation.Token), cancellation.Token);
+                        edges, segmentation, keypoints, plate, background, showEdges, showKeypoints, plateLimit, cancellation.Token), cancellation.Token);
                     if (analysisDisposed || inputRevision != AnalysisInputRevision || displayRevision != analysisDisplayRevision ||
                         !ReferenceEquals(edges, edgesResult) || !ReferenceEquals(segmentation, segmentationResult) ||
                         !ReferenceEquals(keypoints, keypointsResult) || !ReferenceEquals(plate, plateResult)) {
@@ -561,7 +561,7 @@ public partial class MainViewModel {
             }
             if (plateResult is not null) {
                 methods += (methods.Length == 0 ? string.Empty : " + ") +
-                    (plateResult.Rectangle is null ? "Номер не найден" : "Найден кандидат на номер");
+                    DescribePlateRegions(plateResult);
             }
             Bitmap? input = AnalysisInputImage;
             AnalysisStatusMessage = $"Готово: {methods} · {input?.PixelSize.Width} × {input?.PixelSize.Height}" +

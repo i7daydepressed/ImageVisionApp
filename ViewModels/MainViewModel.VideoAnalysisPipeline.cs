@@ -6,7 +6,7 @@ namespace ImageVisionApp.ViewModels;
 
 public partial class MainViewModel {
     private readonly record struct VideoAnalysisPipeline(VideoPipelinePlan Queue,
-        AnalysisImageSource? EdgeSource, AnalysisImageSource? SegmentationSource, bool Fast);
+        AnalysisImageSource? EdgeSource, AnalysisImageSource? SegmentationSource, bool Fast, bool Plate);
 
     private string? videoAnalysisPipelineDescription;
     public string? VideoAnalysisPipelineDescription {
@@ -32,6 +32,9 @@ public partial class MainViewModel {
         }
         if (pipeline.Fast) {
             original.Add("FAST");
+        }
+        if (pipeline.Plate) {
+            original.Add("Область номера");
         }
         List<string> lines = [];
         if (edited.Count > 0) {
@@ -62,7 +65,8 @@ public partial class MainViewModel {
     private VideoAnalysisPipeline CaptureVideoAnalysisPipeline() {
         AnalysisImageSource? edge = isEdgesAnalysisEnabled ? videoEdgeSource : null;
         AnalysisImageSource? segmentation = IsSegmentationAnalysisEnabled ? videoSegmentationSource : null;
-        VideoPipelineStage inputs = isKeypointAnalysisEnabled ? VideoPipelineStage.Original : VideoPipelineStage.None;
+        VideoPipelineStage inputs = isKeypointAnalysisEnabled || isPlateAnalysisEnabled
+            ? VideoPipelineStage.Original : VideoPipelineStage.None;
         if (edge is { } edgeSource) {
             inputs |= VideoPipelinePlan.FromAnalysisSource(edgeSource);
         }
@@ -73,6 +77,6 @@ public partial class MainViewModel {
             out VideoPipelinePlan? plan, out string? error)) {
             throw new InvalidOperationException(error);
         }
-        return new(plan, edge, segmentation, isKeypointAnalysisEnabled);
+        return new(plan, edge, segmentation, isKeypointAnalysisEnabled, isPlateAnalysisEnabled);
     }
 }

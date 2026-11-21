@@ -45,18 +45,9 @@ public partial class MainWindow {
         };
         Grid.SetRow(parametersScroll, 3);
         layout.Children.Add(parametersScroll);
-        IDisposable? parametersTitleVisibility = null;
-
-        // вместе с фото-параметрами скрываем их заголовок даже при смене открытого файла
-        void ShowParameters(string title, StackPanel panel, bool photoOnly = false) {
-            parametersTitleVisibility?.Dispose();
-            parametersTitleVisibility = null;
+        // обновляем общую панель выбранного метода
+        void ShowParameters(string title, StackPanel panel) {
             parametersTitle.Text = title;
-            if (photoOnly) {
-                Binding photoVisibility = new(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not };
-                parametersTitleVisibility = parametersTitle.Bind(IsVisibleProperty, photoVisibility);
-                panel.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
-            }
             parametersScroll.Content = panel;
         }
 
@@ -89,15 +80,12 @@ public partial class MainWindow {
             Mode = BindingMode.TwoWay
         });
         Button plateSettings = new Button { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
-        plateSettings.Click += (_, _) => ShowParameters("Параметры поиска номера", CreatePlateParametersPanel(), photoOnly: true);
+        plateSettings.Click += (_, _) => ShowParameters("Параметры поиска номера", CreatePlateParametersPanel());
         Grid plateRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 4 };
         plateRow.Children.Add(plate);
         Grid.SetColumn(plateSettings, 1);
         plateRow.Children.Add(plateSettings);
-        plateRow.Bind(IsEnabledProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
-        TextBlock plateAvailability = new() { Text = "Пока только для фото", FontSize = 12, Margin = new Thickness(20, 0, 0, 0) };
-        plateAvailability.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
-        methods.Children.Add(new StackPanel { Children = { plateRow, plateAvailability } });
+        methods.Children.Add(plateRow);
         CheckBox segmentation = new CheckBox { Content = "Сегментация" };
         segmentation.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(MainViewModel.IsSegmentationAnalysisEnabled)) {
             Mode = BindingMode.TwoWay
@@ -180,17 +168,41 @@ public partial class MainWindow {
         return panel;
     }
 
+    // меняем только число видимых рамок, оставляя поиск общим для двух типов входа
     private static StackPanel CreatePlateParametersPanel() {
         StackPanel panel = new StackPanel { Spacing = 8 };
-        panel.Children.Add(new TextBlock { Text = "Метод: поиск области номера" });
+        TextBlock source = new() { Text = "Вход на видео: оригинал", TextWrapping = TextWrapping.Wrap };
+        source.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
+        panel.Children.Add(source);
         panel.Children.Add(new TextBlock {
-            Text = "Ищет светлый номер с темными символами и отмечает найденную область зеленой рамкой",
+            Text = "Поиск светлых табличек с темными символами. Найденные области отмечаются зелеными рамками.",
             TextWrapping = TextWrapping.Wrap
         });
-        panel.Children.Add(new TextBlock {
-            Text = "Параметры фиксированы. Сильный наклон, тень и перекрытие могут привести к пропуску номера",
-            TextWrapping = TextWrapping.Wrap
+        panel.Children.Add(new TextBlock { Text = "Показывать области" });
+        ComboBox mode = new() {
+            ItemsSource = new[] { "Все", "До N лучших" },
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        AutomationProperties.SetName(mode, "Показывать области номера");
+        mode.Bind(ComboBox.SelectedIndexProperty, new Binding(nameof(MainViewModel.PlateDisplayModeIndex)) { Mode = BindingMode.TwoWay });
+        panel.Children.Add(mode);
+        NumericUpDown count = new() {
+            Minimum = 1,
+            Maximum = MainViewModel.MaximumPlateDisplayLimit,
+            Increment = 1,
+            FormatString = "0",
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        AutomationProperties.SetName(count, "Число лучших областей номера");
+        count.Bind(NumericUpDown.ValueProperty, new Binding(nameof(MainViewModel.PlateDisplayLimit)) { Mode = BindingMode.TwoWay });
+        count.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.HasPlateDisplayLimit)));
+        panel.Children.Add(count);
+        TextBlock summary = CreateBoundText(viewModel => viewModel.PlateDisplaySummary);
+        summary.TextWrapping = TextWrapping.Wrap;
+        summary.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.PlateDisplaySummary)) {
+            Converter = StringConverters.IsNotNullOrEmpty
         });
+        panel.Children.Add(summary);
         return panel;
     }
 

@@ -127,6 +127,9 @@ public partial class MainViewModel {
                     if (isKeypointAnalysisEnabled && keypointsResult is null) {
                         return "Ключевые точки ещё не рассчитаны";
                     }
+                    if (isPlateAnalysisEnabled && plateResult is null) {
+                        return "Области номера ещё не рассчитаны";
+                    }
                 }
             }
             return null;
@@ -198,9 +201,12 @@ public partial class MainViewModel {
                         ? edgesResult : null;
                     AnalysisKeypointResult? points = isKeypointAnalysisEnabled && IsCurrentAnalysisLayer(keypointsResult?.VideoFrame)
                         ? keypointsResult : null;
+                    AnalysisPlateResult? plate = isPlateAnalysisEnabled && IsCurrentAnalysisLayer(plateResult?.VideoFrame)
+                        ? plateResult : null;
+                    int plateLimit = VisiblePlateRegionLimit;
                     bool prepareSegmentation = view.Segmentation is not null && videoAnalysisSegmentationPreview is null;
                     bool compose = edges is not null || points is { Points.IsEmpty: false } ||
-                        view.Bitmap is null && view.Segmentation is null;
+                        plate is { Rectangles.Count: > 0 } || view.Bitmap is null && view.Segmentation is null;
                     long frameBytes = VideoEditorFrame.GetBufferBytes(view.Key.Geometry.OutputSize);
                     long bytes = compose ? frameBytes + frameBytes * 3 / 4 : prepareSegmentation ? frameBytes : 0;
                     if (compose && view.Bitmap is not null && view.Segmentation is null) {
@@ -239,7 +245,7 @@ public partial class MainViewModel {
                         using VideoEditorFrame? background = view.Bitmap is not null && view.Segmentation is null
                             ? VideoEditorFrame.Capture(view.Bitmap) : null;
                         using VideoEditorFrame composed = await Task.Run(() => AnalysisCompositionService.ComposeVideoFrame(view.Key,
-                            background, view.Segmentation, edges, points, stop.Token), stop.Token);
+                            background, view.Segmentation, edges, points, plate, plateLimit, stop.Token), stop.Token);
                         if (stop.IsCancellationRequested || revision != videoAnalysisViewRevision || !IsCurrentAnalysisLayer(view.Key)) {
                             continue;
                         }

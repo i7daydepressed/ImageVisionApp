@@ -8,12 +8,16 @@ using ImageVisionApp.Models;
 namespace ImageVisionApp.Services;
 
 internal readonly record struct VideoFrameAnalysisSettings(AnalysisEdgeMethod? EdgeMethod, double Lower, double Upper,
-    int? Clusters, int? FastThreshold, bool FastNonmaxSuppression);
+    int? Clusters, int? FastThreshold, bool FastNonmaxSuppression) {
+    public bool Plate { get; init; }
+}
 
 internal sealed record VideoFrameAnalysisResult(AnalysisEdgeResult? Edges, AnalysisSegmentationResult? Segmentation,
     AnalysisKeypointResult? Keypoints) {
     public int PeakWorkers { get; init; }
     public TimeSpan CalculationTime { get; init; }
+    public AnalysisPlateResult? Plate { get; init; }
+    public string? PlateError { get; init; }
 }
 
 internal static class VideoFrameAnalysisService {
@@ -27,20 +31,20 @@ internal static class VideoFrameAnalysisService {
         bool originalEdges = settings.EdgeMethod is not null && edgeSource == AnalysisImageSource.Original;
         bool originalSegmentation = settings.Clusters is not null && segmentationSource == AnalysisImageSource.Original;
         bool fast = settings.FastThreshold is not null;
-        if (originalEdges || originalSegmentation || fast) {
+        if (originalEdges || originalSegmentation || fast || settings.Plate) {
             baseBytes += 3 * sourcePixels;
         }
         if (editedPixels > 0) {
             baseBytes += 3 * editedPixels;
         }
-        if (originalEdges || fast) {
+        if (originalEdges || fast || settings.Plate) {
             baseBytes += sourcePixels;
         }
         if (settings.EdgeMethod is not null && !originalEdges) {
             baseBytes += editedPixels;
         }
 
-        Span<long> scratch = stackalloc long[3];
+        Span<long> scratch = stackalloc long[4];
         int count = 0;
         if (settings.EdgeMethod is { } method) {
             long pixels = originalEdges ? sourcePixels : editedPixels;
@@ -58,6 +62,10 @@ internal static class VideoFrameAnalysisService {
             // до одной точки на пиксель, включая явный массив KeyPoint OpenCVSharp и карту координат
             baseBytes += 8 * sourcePixels;
             scratch[count++] = 29 * sourcePixels;
+        }
+
+        if (settings.Plate) {
+            scratch[count++] = PlateAnalysisService.EstimateVideoScratchBytes(original.Width, original.Height);
         }
 
         // любая группа из N задач помещается, даже если первыми запустятся самые дорогие
@@ -94,7 +102,9 @@ internal static class VideoFrameAnalysisService {
         AnalysisEdgeResult? edges = null;
         AnalysisSegmentationResult? segmentation = null;
         AnalysisKeypointResult? keypoints = null;
-        Action[] methods = new Action[3];
+        AnalysisPlateResult? plate = null;
+        string? plateError = null;
+        Action[] methods = new Action[4];
         int count = 0;
         if (settings.EdgeMethod is { } method) {
             PixelSize size = edgeInput.Video!.Pixels.Size;
@@ -128,6 +138,21 @@ internal static class VideoFrameAnalysisService {
             };
         }
 
+        if (settings.Plate) {
+            PixelSize size = source.Pixels.Size;
+            byte[] rgb = ReadRgb(original);
+            byte[] gray = ReadGray(original, rgb);
+            methods[count++] = () => {
+                try {
+                    plate = new(original, size.Width, size.Height, rgb,
+                        PlateAnalysisService.FindPlateRegions(gray, size.Width, size.Height, token));
+                }
+                catch (Exception error) when (!token.IsCancellationRequested) {
+                    plateError = "Поиск номера: " + error.Message;
+                }
+            };
+        }
+
         int active = 0;
         int peak = 0;
         object peakGate = new();
@@ -153,7 +178,9 @@ internal static class VideoFrameAnalysisService {
                 }
             });
         }
-        return new(edges, segmentation, keypoints) { PeakWorkers = peak, CalculationTime = Stopwatch.GetElapsedTime(started) };
+        return new(edges, segmentation, keypoints) {
+            PeakWorkers = peak, CalculationTime = Stopwatch.GetElapsedTime(started), Plate = plate, PlateError = plateError
+        };
 
         // проверяем геометрию до выделения и храним один RGB на исходный растр
         byte[] ReadRgb(AnalysisInputSnapshot input) {

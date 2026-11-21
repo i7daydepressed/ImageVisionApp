@@ -34,7 +34,15 @@ public static class AnalysisCompositionService {
     public static byte[] CreatePng(
         AnalysisEdgeResult? edges, AnalysisSegmentationResult? segmentation, AnalysisKeypointResult? keypoints,
         AnalysisPlateResult? plate, AnalysisResultBackground background, bool showEdges, bool showKeypoints,
-        bool showPlate, CancellationToken cancellationToken = default) {
+        bool showPlate, CancellationToken cancellationToken = default) =>
+        CreatePng(edges, segmentation, keypoints, plate, background, showEdges, showKeypoints,
+            showPlate ? 1 : 0, cancellationToken);
+
+    // для текущего фото передаем только лимит показа и используем уже рассчитанные области
+    internal static byte[] CreatePng(
+        AnalysisEdgeResult? edges, AnalysisSegmentationResult? segmentation, AnalysisKeypointResult? keypoints,
+        AnalysisPlateResult? plate, AnalysisResultBackground background, bool showEdges, bool showKeypoints,
+        int plateLimit, CancellationToken cancellationToken) {
 
         cancellationToken.ThrowIfCancellationRequested();
         if (edges is null && segmentation is null && keypoints is null && plate is null) {
@@ -91,8 +99,8 @@ public static class AnalysisCompositionService {
         if (showKeypoints && keypoints is not null) {
             DrawKeypoints(rgb, width, height, keypoints.Points.Span, cancellationToken);
         }
-        if (showPlate && plate?.Rectangle is not null) {
-            DrawPlateRectangle(rgb, width, height, plate.Rectangle, cancellationToken);
+        if (plate is not null) {
+            DrawPlateRectangles(rgb, width, height, plate, plateLimit, null, cancellationToken);
         }
         using MagickImage image = new MagickImage(MagickColors.Black, (uint)width, (uint)height);
         image.ColorSpace = ColorSpace.sRGB;
@@ -110,7 +118,13 @@ public static class AnalysisCompositionService {
     // рисуем готовые слои в координатах заданной видеоподложки и возвращаем пиксели для интерфейса
     internal static VideoEditorFrame ComposeVideoFrame(VideoAnalysisFrameKey backdrop,
         VideoEditorFrame? image, AnalysisSegmentationResult? segmentation, AnalysisEdgeResult? edges,
-        AnalysisKeypointResult? keypoints, CancellationToken token) {
+        AnalysisKeypointResult? keypoints, CancellationToken token) =>
+        ComposeVideoFrame(backdrop, image, segmentation, edges, keypoints, null, 0, token);
+
+    // совместимый слой номера рисуем поверх всех остальных слоев на координатах выбранной подложки
+    internal static VideoEditorFrame ComposeVideoFrame(VideoAnalysisFrameKey backdrop,
+        VideoEditorFrame? image, AnalysisSegmentationResult? segmentation, AnalysisEdgeResult? edges,
+        AnalysisKeypointResult? keypoints, AnalysisPlateResult? plate, int plateLimit, CancellationToken token) {
 
         PixelSize size = backdrop.Geometry.OutputSize;
         byte[] rgb;
@@ -151,6 +165,10 @@ public static class AnalysisCompositionService {
                 DrawKeypoints(rgb, size.Width, size.Height, points, token);
             }
         }
+        if (plate is not null && plateLimit > 0) {
+            VideoEditorGeometry transform = GetLayerTransform(plate.VideoFrame, plate.Width, plate.Height, backdrop);
+            DrawPlateRectangles(rgb, size.Width, size.Height, plate, plateLimit, transform, token);
+        }
         return VideoEditorFrame.FromRgb(size, rgb, token);
     }
 
@@ -180,6 +198,21 @@ public static class AnalysisCompositionService {
                     rgb[i] = (byte)((rgb[i] * (255 - strength) + 255 * strength + 127) / 255);
                 }
             }
+        }
+    }
+
+    // берем заданное число лучших рамок и переносим их границы без дробных координат
+    private static void DrawPlateRectangles(byte[] rgb, int width, int height, AnalysisPlateResult plate,
+        int limit, VideoEditorGeometry? transform, CancellationToken token) {
+        for (int i = 0; i < Math.Min(limit, plate.Rectangles.Count); i++) {
+            AnalysisPlateRectangle rectangle = plate.Rectangles[i];
+            if (transform is { ClockwiseQuarterTurns: not 0 } rotation) {
+                PixelPoint first = rotation.MapPixel(new(rectangle.X, rectangle.Y));
+                PixelPoint opposite = rotation.MapPixel(new(rectangle.Right - 1, rectangle.Bottom - 1));
+                rectangle = new(Math.Min(first.X, opposite.X), Math.Min(first.Y, opposite.Y),
+                    Math.Abs(opposite.X - first.X) + 1, Math.Abs(opposite.Y - first.Y) + 1);
+            }
+            DrawPlateRectangle(rgb, width, height, rectangle, token);
         }
     }
 

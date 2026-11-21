@@ -119,7 +119,7 @@ public partial class MainWindow {
             BuildPreviewSettingsRow("Максимум обработчиков", analysisWorkers),
             BuildPreviewSettingsRow("Бюджет буферов, МиБ", analysisBudget),
             new TextBlock {
-                Text = "На стоп-кадре могут одновременно работать до трёх выбранных методов. " +
+                Text = "На стоп-кадре могут одновременно работать до четырёх выбранных методов. " +
                     "Предварительное редактирование использует бюджет редактора. " +
                     "Лимиты относятся к рабочим буферам, которые учитывает приложение.",
                 TextWrapping = TextWrapping.Wrap

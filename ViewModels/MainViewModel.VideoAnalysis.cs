@@ -13,14 +13,14 @@ public partial class MainViewModel {
     private readonly record struct VideoAnalysisInput(VideoAnalysisFrameKey Key, Bitmap Bitmap, VideoEditorPlan? Plan);
     private readonly record struct VideoAnalysisRequest(VideoAnalysisFrameKey Original, VideoAnalysisFrameKey Edited,
         VideoAnalysisPipeline Pipeline, VideoFrameAnalysisSettings Settings,
-        long EdgesRevision, long SegmentationRevision, long KeypointsRevision) {
+        long EdgesRevision, long SegmentationRevision, long KeypointsRevision, long PlateRevision) {
         public AnalysisImageSource EdgeSource => Pipeline.EdgeSource ?? AnalysisImageSource.Original;
         public AnalysisImageSource SegmentationSource => Pipeline.SegmentationSource ?? AnalysisImageSource.Original;
     }
 
-    private readonly record struct PhotoAnalysisSettings(bool Edges, bool Segmentation, bool Keypoints,
+    private readonly record struct PhotoAnalysisSettings(bool Edges, bool Segmentation, bool Keypoints, bool Plate,
         AnalysisEdgeMethod Method, string Lower, string Upper, string Clusters, string Fast, bool Nonmax,
-        AnalysisResultBackground Background, bool ShowEdges, bool ShowKeypoints);
+        AnalysisResultBackground Background, bool ShowEdges, bool ShowKeypoints, bool ShowPlate);
 
     private bool videoAnalysisVisible;
     private bool videoAnalysisApplyingPlan;
@@ -70,11 +70,13 @@ public partial class MainViewModel {
     public bool IsVideoAnalysisEditedInputPending => IsVideoOpen && videoAnalysisDisplayedSource == AnalysisImageSource.Edited &&
         HasVideoAnalysisInput && !TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Edited, out _) && videoAnalysisEditedFailure is null;
 
-    private bool HasAnalysisVideoMethods => isEdgesAnalysisEnabled || IsSegmentationAnalysisEnabled || isKeypointAnalysisEnabled;
+    private bool HasAnalysisVideoMethods => isEdgesAnalysisEnabled || IsSegmentationAnalysisEnabled || isKeypointAnalysisEnabled || isPlateAnalysisEnabled;
     private bool HasVideoAnalysisInput => TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Original, out _);
-    private bool HasVideoAnalysisResult => edgesResult is not null || segmentationResult is not null || keypointsResult is not null;
+    private bool HasVideoAnalysisResult => edgesResult is not null || segmentationResult is not null || keypointsResult is not null ||
+        isPlateAnalysisEnabled && plateResult is not null;
     internal VideoAnalysisFrameKey? AnalyzedVideoFrame =>
-        edgesResult?.VideoFrame ?? segmentationResult?.VideoFrame ?? keypointsResult?.VideoFrame;
+        edgesResult?.VideoFrame ?? segmentationResult?.VideoFrame ?? keypointsResult?.VideoFrame ??
+        (isPlateAnalysisEnabled ? plateResult?.VideoFrame : null);
 
     // оставляем подтвержденный оригинал видимым до готовности выбранного редакторского кадра
     private Bitmap? AnalysisVideoInputImage =>
@@ -197,9 +199,11 @@ public partial class MainViewModel {
         TryGetFastThreshold(out int threshold);
         VideoAnalysisPipeline pipeline = CaptureVideoAnalysisPipeline();
         VideoFrameAnalysisSettings settings = new(pipeline.EdgeSource is not null ? selectedEdgeMethod : null, lower, upper,
-            pipeline.SegmentationSource is not null ? clusters : null, pipeline.Fast ? threshold : null, fastNonmaxSuppression);
+            pipeline.SegmentationSource is not null ? clusters : null, pipeline.Fast ? threshold : null, fastNonmaxSuppression) {
+            Plate = pipeline.Plate
+        };
         VideoAnalysisRequest request = new(original.Key, GetVideoAnalysisEditedKey(original.Key), pipeline,
-            settings, edgesWorkRevision, segmentationWorkRevision, keypointsWorkRevision);
+            settings, edgesWorkRevision, segmentationWorkRevision, keypointsWorkRevision, plateWorkRevision);
 
         analysisWorkerRunning = true;
         videoAnalysisFailure = null;
@@ -207,9 +211,16 @@ public partial class MainViewModel {
         using CancellationTokenSource cancellation = new();
         activeAnalysisCancellation = cancellation;
         try {
+            if (pipeline.Plate) {
+                plateFailure = string.Empty;
+                SetPlateResult(null);
+            }
             RefreshVideoAnalysisStatus();
-            if (NeedsEditedVideoAnalysisInput(request)) {
+            bool needsEdited = NeedsEditedVideoAnalysisInput(request);
+            if (needsEdited || pipeline.Plate) {
                 RefreshVideoAnalysisComposition();
+            }
+            if (needsEdited) {
                 await WaitForVideoAnalysisEditedInputAsync(request, cancellation.Token);
             }
             if (!TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Original, out original) ||
@@ -224,9 +235,10 @@ public partial class MainViewModel {
                     (request.EdgeSource == AnalysisImageSource.Original || edited is not null) ? settings.EdgeMethod : null,
                 Clusters = request.SegmentationRevision == segmentationWorkRevision &&
                     (request.SegmentationSource == AnalysisImageSource.Original || edited is not null) ? settings.Clusters : null,
-                FastThreshold = request.KeypointsRevision == keypointsWorkRevision ? settings.FastThreshold : null
+                FastThreshold = request.KeypointsRevision == keypointsWorkRevision ? settings.FastThreshold : null,
+                Plate = request.PlateRevision == plateWorkRevision && settings.Plate
             };
-            if (settings is { EdgeMethod: null, Clusters: null, FastThreshold: null }) {
+            if (settings is { EdgeMethod: null, Clusters: null, FastThreshold: null, Plate: false }) {
                 return;
             }
             RefreshVideoAnalysisStatus();
@@ -279,6 +291,10 @@ public partial class MainViewModel {
             if (request.KeypointsRevision == keypointsWorkRevision && result.Keypoints is { } keypoints) {
                 SetKeypointsResult(keypoints);
             }
+            if (settings.Plate && request.PlateRevision == plateWorkRevision) {
+                plateFailure = result.PlateError ?? string.Empty;
+                SetPlateResult(result.Plate);
+            }
             RecordVideoAnalysisCalculation(request.Original, workers, bytes, result);
             RecordVideoEditorAnalysisWork(edited);
             RefreshVideoAnalysisComposition();
@@ -328,7 +344,9 @@ public partial class MainViewModel {
             SetEdgesResult(null);
             SetSegmentationResult(null);
             SetKeypointsResult(null);
+            SetPlateResult(null);
         }
+        plateFailure = string.Empty;
         ReleaseVideoAnalysisEditedInput();
     }
 
@@ -352,6 +370,9 @@ public partial class MainViewModel {
         videoAnalysisViewCancellation?.Cancel();
         videoAnalysisFailure = null;
         observedVideoAnalysisPlaying = playing;
+        if (!SameVideoAnalysisFrame(observedAnalysisFrame, original)) {
+            plateFailure = string.Empty;
+        }
         observedAnalysisFrame = original;
         observedEditedAnalysisFrame = edited;
         if (!SameVideoAnalysisFrame(videoAnalysisEditedKey, edited) || ShouldRetryVideoAnalysisEditedInput) {
@@ -368,6 +389,9 @@ public partial class MainViewModel {
         }
         if (keypointsResult is { } points && !IsCurrentAnalysisLayer(points.VideoFrame)) {
             SetKeypointsResult(null);
+        }
+        if (plateResult is { } plate && !IsCurrentAnalysisLayer(plate.VideoFrame)) {
+            SetPlateResult(null);
         }
         NotifyVideoAnalysisInput();
         RefreshVideoAnalysisComposition();
@@ -394,7 +418,8 @@ public partial class MainViewModel {
     private void RefreshVideoAnalysisStatus() {
         NotifyAnalysisControls();
         string? error = videoAnalysisFailure ?? videoEditorSourceError ??
-            (WantsVideoAnalysisEditedInput ? videoAnalysisEditedFailure : null) ?? videoAnalysisCompositionFailure;
+            (WantsVideoAnalysisEditedInput ? videoAnalysisEditedFailure : null) ?? videoAnalysisCompositionFailure ??
+            (isPlateAnalysisEnabled && plateFailure.Length > 0 ? plateFailure : null);
         string? pending = VideoAnalysisPendingMessage;
         if (videoAnalysisApply is not null && videoAnalysisRequest is null) {
             AnalysisStatusMessage = "Подготовка анализа: ждём подтверждённый кадр";
@@ -406,7 +431,8 @@ public partial class MainViewModel {
             AnalysisStatusMessage = error ?? (videoAnalysisRequest is { } request
                 ? NeedsEditedVideoAnalysisInput(request) && !TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Edited, out _)
                     ? "Подготовка анализа: ждём результат редактирования"
-                    : $"Анализ кадра · {FormatVideoAnalysisTime(request.Original.Position)}"
+                    : $"{(request.Settings is { Plate: true, EdgeMethod: null, Clusters: null, FastThreshold: null }
+                        ? "Поиск областей номера" : "Анализ кадра")} · {FormatVideoAnalysisTime(request.Original.Position)}"
                 : pending!);
         }
         else if (isEdgesAnalysisEnabled && !AreSelectedAnalysisParametersValid) {
@@ -425,6 +451,9 @@ public partial class MainViewModel {
             }
             if (keypointsResult is { } points) {
                 methods += (methods.Length == 0 ? "" : " + ") + $"FAST: {points.Points.Length} точек";
+            }
+            if (isPlateAnalysisEnabled && plateResult is { } plate) {
+                methods += (methods.Length == 0 ? "" : " + ") + DescribePlateRegions(plate);
             }
             AnalysisStatusMessage = $"Готово: {methods} · {FormatVideoAnalysisTime(frame.Position)}";
         }
@@ -476,14 +505,15 @@ public partial class MainViewModel {
         OnPropertyChanged(nameof(AnalysisRunButtonText));
         if (IsVideoOpen && photoAnalysisBeforeVideo is null) {
             photoAnalysisBeforeVideo = new(isEdgesAnalysisEnabled, isSegmentationAnalysisEnabled, isKeypointAnalysisEnabled,
-                selectedEdgeMethod, cannyLowerThresholdText, cannyUpperThresholdText, segmentationClusterCountText,
-                fastThresholdText, fastNonmaxSuppression, selectedAnalysisBackground, showAnalysisEdges, showAnalysisKeypoints);
+                isPlateAnalysisEnabled, selectedEdgeMethod, cannyLowerThresholdText, cannyUpperThresholdText, segmentationClusterCountText,
+                fastThresholdText, fastNonmaxSuppression, selectedAnalysisBackground, showAnalysisEdges, showAnalysisKeypoints, showAnalysisPlate);
         }
         else if (!IsVideoOpen && photoAnalysisBeforeVideo is { } saved) {
             photoAnalysisBeforeVideo = null;
             IsEdgesAnalysisEnabled = saved.Edges;
             IsSegmentationAnalysisEnabled = saved.Segmentation;
             IsKeypointAnalysisEnabled = saved.Keypoints;
+            IsPlateAnalysisEnabled = saved.Plate;
             SelectedEdgeMethod = saved.Method;
             CannyLowerThresholdText = saved.Lower;
             CannyUpperThresholdText = saved.Upper;
@@ -493,6 +523,7 @@ public partial class MainViewModel {
             SelectedAnalysisBackground = saved.Background;
             ShowAnalysisEdges = saved.ShowEdges;
             ShowAnalysisKeypoints = saved.ShowKeypoints;
+            ShowAnalysisPlate = saved.ShowPlate;
         }
     }
 }
