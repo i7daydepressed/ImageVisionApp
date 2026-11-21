@@ -23,6 +23,7 @@ public partial class MainViewModel {
     private long preparedSeekDeadline;
     private bool preparedAtEnd;
     private bool preparedNeedsSeek;
+    private bool preparedPauseOnCurrentPosition;
     private bool preparedRestarting;
     private bool preparedDetached;
     private PreparedSourceRequest? preparedOpening;
@@ -76,6 +77,8 @@ public partial class MainViewModel {
         if (!IsVideoOpen || mediaPreviewsDisposed) {
             return;
         }
+        CancelVideoAnalysisApply();
+        preparedPauseOnCurrentPosition = false;
         if (PreviewSettings.Mode == VideoPreviewMode.Live) {
             if (preparedOpening is not null || preparedSource is not null) {
                 SwitchPreparedPreviewToLive(PlaybackStatus.Position);
@@ -222,7 +225,8 @@ public partial class MainViewModel {
         EnsureVideoPlaybackTimer();
     }
 
-    private bool HasLivePreviewWork => videoAnalysisApplyingPlan || HasLivePreviewSourceWork;
+    private bool HasLivePreviewWork =>
+        videoAnalysisApplyingPlan || IsReadingVideoAnalysisLiveFallback || HasLivePreviewSourceWork;
     private bool HasLivePreviewSourceWork => readingVideoSeek || videoPreviewExecutor is { Metrics.ReservedBytes: > 0 };
 
     // начинаем новые расчеты только после возврата буферов другого режима
@@ -296,6 +300,7 @@ public partial class MainViewModel {
     // замена позиции, плана и бюджета останавливает звук и скрывает кадры прежнего запроса
     private void RequestPreparedVideo(long position, bool atEnd, bool seekPlayer = true, bool reuseReady = false,
         bool preservePlay = false) {
+        preparedPauseOnCurrentPosition = false;
         if (preparedSource is null) {
             return;
         }
@@ -378,12 +383,17 @@ public partial class MainViewModel {
     }
 
     // явная пауза снимает намерение запуска даже когда VLC уже ожидает на паузе
-    private void PausePreparedVideo(VideoPlaybackSession? playback) {
+    private void PausePreparedVideo(VideoPlaybackSession? playback, bool keepCurrentPosition = false) {
         if (videoWantsToPlay && !preparedNeedsSeek && !preparedStartPending &&
             preparedWaitingPosition is null && playback?.State == VLCState.Playing) {
-            preparedWaitingPosition = Math.Max(preparedPosition, playback.Position);
-            preparedNeedsSeek = true;
-            preparedSeekDeadline = 0;
+            if (keepCurrentPosition) {
+                preparedPauseOnCurrentPosition = true;
+            }
+            else {
+                preparedWaitingPosition = Math.Max(preparedPosition, playback.Position);
+                preparedNeedsSeek = true;
+                preparedSeekDeadline = 0;
+            }
         }
         videoWantsToPlay = false;
         playback?.SetPaused(true);
@@ -430,6 +440,11 @@ public partial class MainViewModel {
         }
         VLCState state = playback.State;
         long duration = Math.Max(PlaybackStatus.Duration, playback.Duration);
+        if (preparedPauseOnCurrentPosition && state is VLCState.Paused or VLCState.Ended) {
+            // берем время уже остановленного плеера и ждем покрывающую его пару без нового seek
+            preparedPauseOnCurrentPosition = false;
+            preparedWaitingPosition = Math.Min(duration, Math.Max(preparedPosition, playback.Position));
+        }
         long target = preparedWaitingPosition ?? preparedPosition;
         if (!preparedNeedsSeek && state == VLCState.Ended) {
             videoWantsToPlay = false;

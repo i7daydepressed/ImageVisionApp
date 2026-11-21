@@ -122,7 +122,8 @@ public partial class MainWindow {
         automatic.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(MainViewModel.IsAutoAnalysisEnabled)) {
             Mode = BindingMode.TwoWay
         });
-        Button run = new Button { Content = "Выполнить выбранное", HorizontalAlignment = HorizontalAlignment.Stretch };
+        Button run = new Button { HorizontalAlignment = HorizontalAlignment.Stretch };
+        run.Bind(ContentProperty, new Binding(nameof(MainViewModel.AnalysisRunButtonText)));
         run.Bind(IsEnabledProperty, new Binding(nameof(MainViewModel.CanRunAnalysis)));
         run.Click += RunAnalysisButton_OnClick;
         StackPanel actions = new StackPanel { Spacing = 8 };

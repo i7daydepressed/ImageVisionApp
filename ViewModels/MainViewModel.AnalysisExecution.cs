@@ -170,9 +170,11 @@ public partial class MainViewModel {
     }
     public bool IsAnalysisBlackBackground => selectedAnalysisBackground == AnalysisResultBackground.Black;
     public bool IsAnalysisSegmentationBackground => selectedAnalysisBackground == AnalysisResultBackground.Segmentation;
-    public bool IsAnalysisRunning => analysisWorkerRunning;
-    public bool CanRunAnalysis => !analysisDisposed && HasEnabledAnalysisMethods && HasAnalysisInput &&
-        AreAllAnalysisParametersValid && !analysisWorkerRunning;
+    public bool IsAnalysisRunning => IsVideoOpen
+        ? videoAnalysisApply is not null || videoAnalysisRequest is not null : analysisWorkerRunning;
+    public bool CanRunAnalysis => !analysisDisposed && HasEnabledAnalysisMethods && AreAllAnalysisParametersValid &&
+        (IsVideoOpen ? CanApplyVideoAnalysis : HasAnalysisInput && !analysisWorkerRunning);
+    public string AnalysisRunButtonText => IsVideoOpen ? "Применить" : "Выполнить выбранное";
     public bool HasAnalysisResult => IsVideoOpen ? HasVideoAnalysisResult :
         analysisResultImage is not null && analysisResultPng is not null;
     public bool IsAnalysisResultEmpty => AnalysisResultImage is null;
@@ -191,7 +193,7 @@ public partial class MainViewModel {
             return;
         }
         if (IsVideoOpen) {
-            await RunVideoAnalysisAsync();
+            await ApplyVideoAnalysisAsync();
             return;
         }
         analysisDebounce?.Stop();
@@ -276,6 +278,7 @@ public partial class MainViewModel {
             return;
         }
         if (IsVideoOpen) {
+            CancelVideoAnalysisApply();
             videoAnalysisFailure = null;
         }
         edgesWorkRevision++;

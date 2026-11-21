@@ -124,6 +124,8 @@ public partial class MainViewModel {
         if (videoPlayback is not { } playback || !PlaybackStatus.CanPlay) {
             return;
         }
+        CancelVideoAnalysisApply();
+        preparedPauseOnCurrentPosition = false;
         bool canceledStep = CancelVideoFrameStep();
         if (canceledStep && preparedSource is not null && videoPinnedFrame is null) {
             RequestPreparedVideo(preparedPosition, preparedAtEnd);
@@ -177,15 +179,21 @@ public partial class MainViewModel {
     }
 
     // прекращает вывод звука и продвижение общего времени при смене вкладки
-    internal void PauseVideoPlayback() {
-        bool canceledStep = CancelVideoFrameStep();
+    internal void PauseVideoPlayback(bool forAnalysis = false) {
+        // запрос анализа может дождаться уже начатого точного перехода, который сам ставит паузу
+        bool canceledStep = !forAnalysis && CancelVideoFrameStep();
         if (canceledStep && preparedSource is not null) {
             RestorePausedPreparedFrame();
         }
         videoHandoffReplay = false;
         if (preparedSource is not null) {
-            PausePreparedVideo(videoPlayback);
+            PausePreparedVideo(videoPlayback, keepCurrentPosition: forAnalysis);
             return;
+        }
+        if (forAnalysis && requestedVideoSeek is null && videoFrameStep is null &&
+            (videoWantsToPlay || videoWasPlaying || videoPlayback?.State == VLCState.Playing ||
+             PlaybackStatus.Position > 0 && ReferenceEquals(VideoPreviewFrame, VideoFirstFrame))) {
+            videoAnalysisWaitingForLivePause = true;
         }
         videoWantsToPlay = false;
         StopVideoEditorLiveInput();
@@ -205,6 +213,8 @@ public partial class MainViewModel {
             return;
         }
 
+        CancelVideoAnalysisApply();
+        preparedPauseOnCurrentPosition = false;
         CancelVideoFrameStep(clearPin: true);
         long position = Math.Clamp(PlaybackStatus.Position + offset, 0, PlaybackStatus.Duration);
         if (SeekDuringPreviewModeHandoff(position, PlaybackStatus.Duration,
@@ -235,6 +245,8 @@ public partial class MainViewModel {
             return;
         }
 
+        CancelVideoAnalysisApply();
+        preparedPauseOnCurrentPosition = false;
         CancelVideoFrameStep(clearPin: true);
         long duration = PlaybackStatus.Duration;
         long target = Math.Clamp(position, 0, duration);
@@ -268,6 +280,12 @@ public partial class MainViewModel {
             while (requestedVideoSeek is { } request) {
                 Bitmap? preparedFrame = null;
                 try {
+                    while (IsReadingVideoAnalysisLiveFallback && requestedVideoSeek == request) {
+                        await Task.Delay(25);
+                    }
+                    if (requestedVideoSeek != request) {
+                        continue;
+                    }
                     long seekPosition = request.Position;
                     VideoDecodedFrameHint? hint = null;
                     if (request.ReadFrame) {
@@ -426,7 +444,8 @@ public partial class MainViewModel {
 
         bool live = isPlaying && videoWantsToPlay && requestedVideoSeek is null && !videoRestarting;
         UpdateVideoPreviewMonitoring(live);
-        if (requestedVideoSeek is null && (isPlaying || videoWasPlaying)) {
+        bool analysisPauseConfirmed = videoAnalysisWaitingForLivePause && state is VLCState.Paused or VLCState.Ended;
+        if (requestedVideoSeek is null && (isPlaying || videoWasPlaying || analysisPauseConfirmed)) {
             PublishVideoFrame(playback, live);
         }
         RetryVideoEditorAfterBudget(live);
@@ -443,6 +462,17 @@ public partial class MainViewModel {
             livePreviewAnchor = null;
         }
         long position = ended ? duration : livePreviewAnchor ?? Math.Clamp(playback.Position, 0, Math.Max(0, duration));
+        if (analysisPauseConfirmed) {
+            // оставляем видимым последний живой кадр и отдельно запрашиваем пиксели при отсутствии живого вывода
+            if (!ended) {
+                livePreviewAnchor = position;
+            }
+            videoAnalysisWaitingForLivePause = position > 0 && ReferenceEquals(VideoPreviewFrame, VideoFirstFrame);
+            videoAnalysisLiveFallbackPosition = videoAnalysisWaitingForLivePause ? position : null;
+            if (!videoAnalysisWaitingForLivePause) {
+                videoAnalysisLiveFallbackCancellation?.Cancel();
+            }
+        }
         bool preparing = state is VLCState.NothingSpecial or VLCState.Opening or VLCState.Buffering || videoRestarting;
         bool ready = isPlaying || state == VLCState.Paused || ended;
         if (requestedVideoSeek is { } seek) {
@@ -576,6 +606,8 @@ public partial class MainViewModel {
 
     // прекращает публикацию и освобождает один источник перед заменой файла или закрытием окна
     private void ReleaseVideoPlayback() {
+        CancelVideoAnalysisApply();
+        preparedPauseOnCurrentPosition = false;
         CancelVideoFrameStep(clearPin: true);
         DetachPreparedVideo();
         CancelPreviewModeHandoff();

@@ -14,6 +14,7 @@ public partial class MainViewModel {
     private long videoEditorSource;
     private long videoEditorFrame;
     private long videoEditorOutputFrame;
+    private VideoAnalysisFrameKey? videoEditorStoppedOutput;
     private bool videoEditorWaitingForFrame;
     private bool videoEditorVisible;
     private bool videoEditorOutputVisible;
@@ -80,10 +81,12 @@ public partial class MainViewModel {
             return;
         }
         if (visible) {
+            videoEditorStoppedOutput = null;
             NotifyVideoEditorPreview();
             RequestVideoEditorFrame();
         }
         else {
+            videoEditorStoppedOutput = CaptureStoppedVideoEditorOutput();
             videoEditorSource++;
             InvalidateVideoEditorRequests();
             videoEditorOutputVisible = false;
@@ -91,12 +94,25 @@ public partial class MainViewModel {
         }
     }
 
+    // связываем готовый остановленный выход с поколением после выхода с вкладки редактора
+    private VideoAnalysisFrameKey? CaptureStoppedVideoEditorOutput() {
+        if (!videoEditorPlan.HasSteps || !videoEditorOutputVisible || videoEditorOutputFrame != videoEditorFrame ||
+            videoEditorOutput is not { } output || !TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Original, out VideoAnalysisInput original)) {
+            return null;
+        }
+        VideoAnalysisFrameKey key = GetVideoAnalysisEditedKey(original.Key);
+        return key.Geometry == videoEditorOutputGeometry && key.Geometry.OutputSize == output.PixelSize
+            ? key with { SourceRevision = videoEditorSource + 1 } : null;
+    }
+
     // сохраняем порядок, числовые значения и неизменяемые матрицы без ссылок на редактируемые шаги
     private void CaptureVideoEditorPlan() {
+        CancelVideoAnalysisApply();
         VideoEditorStep[] steps = AdvancedSteps
             .Select(step => new VideoEditorStep(step.Type, step.Parameter, step.ElementSnapshot, step.KernelSnapshot))
             .ToArray();
         videoEditorPlan = new(videoEditorPlan.Revision + 1, steps);
+        videoEditorStoppedOutput = null;
         InvalidateVideoEditorRequests();
         ResetVideoEditorChainTotals();
         ResetVideoPreviewAuto();
@@ -120,6 +136,7 @@ public partial class MainViewModel {
 
     // снимаем старый результат в момент запроса перехода, пока новый кадр не подтвержден
     private void InvalidateVideoEditorSource() {
+        videoEditorStoppedOutput = null;
         videoEditorSource++;
         videoEditorWaitingForFrame = true;
         videoEditorOutputVisible = false;
@@ -270,7 +287,8 @@ public partial class MainViewModel {
         }
     }
 
-    private bool IsLiveVideoEditorBudgetHeld => videoAnalysisApplyingPlan || PreparedVideo is { ReservedBytes: > 0 };
+    private bool IsLiveVideoEditorBudgetHeld =>
+        videoAnalysisApplyingPlan || IsReadingVideoAnalysisLiveFallback || PreparedVideo is { ReservedBytes: > 0 };
 
     // после освобождения буферов другой ветви берем актуальный кадр
     private void RetryVideoEditorAfterBudget(bool liveInput = false) {

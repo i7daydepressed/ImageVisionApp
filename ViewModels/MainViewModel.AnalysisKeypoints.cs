@@ -84,6 +84,7 @@ public partial class MainViewModel {
             return;
         }
         if (IsVideoOpen) {
+            CancelVideoAnalysisApply();
             videoAnalysisFailure = null;
         }
         keypointsWorkRevision++;

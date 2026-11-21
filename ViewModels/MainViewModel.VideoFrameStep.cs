@@ -67,6 +67,8 @@ public partial class MainViewModel {
             CurrentDocument is not { Kind: MediaKind.Video, SourcePath: not null } document) {
             return;
         }
+        CancelVideoAnalysisApply();
+        preparedPauseOnCurrentPosition = false;
         if (videoFrameStep is { } step) {
             step.Add(distance);
             return;
