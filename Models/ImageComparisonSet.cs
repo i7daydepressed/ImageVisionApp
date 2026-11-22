@@ -4,7 +4,7 @@ using Avalonia.Media.Imaging;
 
 namespace ImageVisionApp.Models;
 
-internal sealed record ImageComparisonItem(Guid Id, string FileName, Bitmap Bitmap);
+internal sealed record ImageComparisonItem(Guid Id, string FileName, Bitmap Bitmap, ImageComparisonFeatures Features);
 
 // набор владеет принятыми изображениями в течение сеанса окна
 internal sealed class ImageComparisonSet : IDisposable {
@@ -20,23 +20,24 @@ internal sealed class ImageComparisonSet : IDisposable {
     public ImageComparisonSet() => Items = items.AsReadOnly();
 
     // передаем новому слоту отдельный идентификатор и владение загруженным изображением
-    public bool TryAdd(string fileName, Bitmap bitmap) {
+    public bool TryAdd(string fileName, Bitmap bitmap, ImageComparisonFeatures features) {
         if (disposed || items.Count >= Capacity || Owns(bitmap)) {
             return false;
         }
-        items.Add(new(Guid.NewGuid(), fileName, bitmap));
+        items.Add(new(Guid.NewGuid(), fileName, bitmap, features));
         Revision++;
         return true;
     }
 
     // заменяем только ту версию слота, которая была выбрана перед открытием файла
-    public bool TryReplace(ImageComparisonItem expected, string fileName, Bitmap bitmap, out ImageComparisonItem? removed) {
+    public bool TryReplace(ImageComparisonItem expected, string fileName, Bitmap bitmap,
+        ImageComparisonFeatures features, out ImageComparisonItem? removed) {
         removed = null;
         int index = Find(expected);
         if (index < 0 || Owns(bitmap)) {
             return false;
         }
-        items[index] = new(expected.Id, fileName, bitmap);
+        items[index] = new(expected.Id, fileName, bitmap, features);
         removed = expected;
         Revision++;
         return true;
