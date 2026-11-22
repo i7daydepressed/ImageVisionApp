@@ -24,6 +24,7 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
     private readonly VideoSequenceAnalysisPlan? downstream;
     private readonly VideoEditorPlan? editor;
     private readonly bool maskOnly;
+    private readonly VideoBackgroundRaster? background;
     private readonly VideoPipelineMeasurements? measurements;
     private readonly long generation;
     private readonly IDisposable? originalReserve;
@@ -35,7 +36,8 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
     // у режима без комбинированного маршрута те же операции MOG2 и тот же формат результата
     public VideoCombinedFrameProcessor(PixelSize size, VideoForegroundInputPlan? upstream = null,
         VideoSequenceAnalysisPlan? downstream = null, VideoEditorPlan? editor = null, bool maskOnly = false,
-        VideoPipelineMeasurements? measurements = null, long generation = 0, long readerBytes = 0) {
+        VideoPipelineMeasurements? measurements = null, long generation = 0, long readerBytes = 0,
+        VideoBackgroundRaster? background = null) {
         this.upstream = upstream;
         this.downstream = downstream;
         this.editor = editor;
@@ -47,11 +49,16 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
         editingBytes = Math.Max(first.EditorBytes, last.EditorBytes);
         analysisBytes = Math.Max(first.AnalysisBytes, last.AnalysisBytes);
         PixelSize modelSize = upstream?.GetOutputSize(size) ?? size;
+        this.background = maskOnly ? null : background;
+        if (this.background is { } fitted && fitted.Size != modelSize) {
+            throw new ArgumentException("Подготовленный фон не совпадает с размером видеоряда", nameof(background));
+        }
         long persistent = VideoForegroundModel.GetPersistentBytes(modelSize);
         foregroundBytes = VideoForegroundModel.GetRequiredBufferBytes(modelSize, 0) - persistent;
         model = new(modelSize);
         originalReserve = measurements?.Reserve(generation, VideoPipelineStage.Original, readerBytes);
-        modelReserve = measurements?.Reserve(generation, VideoPipelineStage.VideoSequence, persistent);
+        modelReserve = measurements?.Reserve(generation, VideoPipelineStage.VideoSequence,
+            checked(persistent + (this.background?.BufferBytes ?? 0)));
     }
 
     // получаем исходник и подготовленное редактирование одного ordinal, затем выполняем выбранный маршрут
@@ -78,7 +85,7 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
         try {
             if (downstream is not null) {
                 using var stage = measurements?.BeginStage(generation, VideoPipelineStage.Analysis, analysisBytes);
-                using VideoEditorFrame temporal = VideoEditorFrame.FromForeground(foreground, maskOnly, token);
+                using VideoEditorFrame temporal = VideoEditorFrame.FromForeground(foreground, maskOnly, token, background);
                 analysis = downstream.Transform(input, temporal, token, prepared);
                 stage?.Complete();
                 analysisLease = measurements?.Reserve(generation, VideoPipelineStage.Analysis,

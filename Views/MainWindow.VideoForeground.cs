@@ -1,4 +1,7 @@
+using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -9,6 +12,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform.Storage;
 using Avalonia.VisualTree;
 using ImageVisionApp.ViewModels;
 
@@ -17,16 +21,18 @@ namespace ImageVisionApp.Views;
 public partial class MainWindow {
     private readonly TabStrip videoForegroundTabs = new() { HorizontalAlignment = HorizontalAlignment.Left };
     private readonly TabStripItem videoForegroundResultTab = new() { Content = "Результат", IsEnabled = false };
-    private readonly ListBox videoForegroundViews = new() { ItemsSource = new[] { "Передний план", "Маска" } };
-    private readonly ComboBox videoForegroundSourcePicker = new() {
-        ItemsSource = new[] { "Оригинал", "Результат редактирования", "Результат анализа" },
-        HorizontalAlignment = HorizontalAlignment.Stretch
-    };
+    private readonly ListBox videoForegroundViews = new();
+    private readonly ComboBox videoForegroundSourcePicker = CreateVideoForegroundSourcePicker("Источник вычитания фона");
+    private readonly ComboBox videoReplacementSourcePicker = CreateVideoForegroundSourcePicker("Источник замены фона");
     private readonly CheckBox videoForegroundMethod = new() { Content = "Вычитание фона" };
     private readonly Button videoForegroundMethodSettings = new() { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
+    private readonly CheckBox videoReplacementMethod = new() { Content = "Замена фона" };
+    private readonly Button videoReplacementSettings = new() { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
+    private readonly Button videoBackgroundPicker = new() { Content = "Выбрать фон…" };
     private readonly Button videoForegroundApply = new() { Content = "Применить", HorizontalAlignment = HorizontalAlignment.Stretch };
     private Button? videoForegroundDisplayButton;
     private int videoForegroundLastVideoTab = 1;
+    private bool pickingVideoBackground;
 
     // располагаем метод и просмотр так же, как на вкладке анализа
     private Grid CreateVideoForegroundPage() {
@@ -41,34 +47,24 @@ public partial class MainWindow {
 
     // галочка сразу меняет обработку, кнопка отдельно открывает сведения о выбранном методе
     private Border CreateVideoForegroundMethodsCard() {
-        // фото скрывает отметку, настройку видео меняет только действие пользователя
-        videoForegroundMethod.Bind(ToggleButton.IsCheckedProperty, new Binding(nameof(MainViewModel.CanDisplayVideoForegroundEffect)) {
-            Mode = BindingMode.OneWay
-        });
+        Grid methodRow = CreateVideoForegroundMethodRow(videoForegroundMethod, videoForegroundMethodSettings,
+            nameof(MainViewModel.VideoForegroundEnabled));
+        Grid replacementRow = CreateVideoForegroundMethodRow(videoReplacementMethod, videoReplacementSettings,
+            nameof(MainViewModel.VideoBackgroundReplacementEnabled));
         videoForegroundMethod.Click += (_, _) => {
             if (DataContext is MainViewModel { IsVideoOpen: true } vm) {
                 vm.VideoForegroundEnabled = videoForegroundMethod.IsChecked == true;
             }
         };
-        Grid methodRow = new() {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 4
-        };
-        methodRow.Bind(IsEnabledProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
-        Grid.SetColumn(videoForegroundMethodSettings, 1);
-        methodRow.Children.Add(videoForegroundMethod);
-        methodRow.Children.Add(videoForegroundMethodSettings);
         TextBlock hint = CreateBoundText(vm => vm.VideoForegroundStatus);
         hint.TextWrapping = TextWrapping.Wrap;
         hint.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
         ScrollViewer methods = new() {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Content = new StackPanel { Spacing = 8, Children = { methodRow, hint } }
+            Content = new StackPanel { Spacing = 8, Children = { methodRow, replacementRow, hint } }
         };
 
-        AutomationProperties.SetName(videoForegroundSourcePicker, "Источник вычитания фона");
-        videoForegroundSourcePicker.Bind(SelectingItemsControl.SelectedIndexProperty,
-            new Binding(nameof(MainViewModel.SelectedVideoForegroundSourceIndex)) { Mode = BindingMode.TwoWay });
         StackPanel details = new() {
             Spacing = 6,
             Children = {
@@ -84,6 +80,26 @@ public partial class MainWindow {
         videoForegroundMethodSettings.Click += (_, _) => {
             parametersTitle.Text = "Параметры вычитания фона";
             parametersContent.Content = details;
+        };
+        StackPanel replacementDetails = CreateVideoBackgroundSettings();
+        void ShowReplacementSettings() {
+            parametersTitle.Text = "Параметры замены фона";
+            parametersContent.Content = replacementDetails;
+        }
+        videoReplacementSettings.Click += (_, _) => ShowReplacementSettings();
+        videoReplacementMethod.Click += async (_, _) => {
+            if (DataContext is not MainViewModel { IsVideoOpen: true } vm) {
+                return;
+            }
+            if (videoReplacementMethod.IsChecked == true && !vm.HasVideoBackgroundImage) {
+                // отмена выбора оставляет метод в прежнем состоянии
+                videoReplacementMethod.SetCurrentValue(ToggleButton.IsCheckedProperty, false);
+                ShowReplacementSettings();
+                await PickVideoBackgroundAsync();
+            }
+            else {
+                vm.VideoBackgroundReplacementEnabled = videoReplacementMethod.IsChecked == true;
+            }
         };
         parametersContent.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
         // в анализе над кнопкой для фото есть строка автоанализа высотой 32 и отступ 8
@@ -107,13 +123,97 @@ public partial class MainWindow {
         });
     }
 
-    // вход и результат занимают одну область, выбор маски меняет только отображение результата
+    // показываем галочку только на видео, оставляя ее значение в модели при открытии фото
+    private static Grid CreateVideoForegroundMethodRow(CheckBox method, Button settings, string enabledProperty) {
+        method.Bind(ToggleButton.IsCheckedProperty, new MultiBinding {
+            Converter = BoolConverters.And, Mode = BindingMode.OneWay,
+            Bindings = { new Binding(nameof(MainViewModel.IsVideoOpen)), new Binding(enabledProperty) }
+        });
+        Grid.SetColumn(settings, 1);
+        Grid row = new() { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 4, Children = { method, settings } };
+        row.Bind(IsEnabledProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
+        return row;
+    }
+
+    // оба параметра меняют один источник, по которому MOG2 строит маску
+    private static ComboBox CreateVideoForegroundSourcePicker(string label) {
+        ComboBox picker = new() {
+            ItemsSource = new[] { "Оригинал", "Результат редактирования", "Результат анализа" },
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        AutomationProperties.SetName(picker, label);
+        picker.Bind(SelectingItemsControl.SelectedIndexProperty,
+            new Binding(nameof(MainViewModel.SelectedVideoForegroundSourceIndex)) { Mode = BindingMode.TwoWay });
+        return picker;
+    }
+
+    // выбранное имя остается доступным целиком даже в узкой панели
+    private StackPanel CreateVideoBackgroundSettings() {
+        AutomationProperties.SetName(videoBackgroundPicker, "Выбрать изображение для замены фона");
+        videoBackgroundPicker.Click += async (_, _) => await PickVideoBackgroundAsync();
+        TextBlock fileName = new() { TextTrimming = TextTrimming.CharacterEllipsis };
+        fileName.Bind(TextBlock.TextProperty, new Binding(nameof(MainViewModel.VideoBackgroundImageName)) {
+            TargetNullValue = "Фон не выбран"
+        });
+        fileName.Bind(ToolTip.TipProperty, new Binding(nameof(MainViewModel.VideoBackgroundImageName)));
+        TextBlock notice = CreateBoundText(vm => vm.VideoBackgroundSelectionNotice);
+        notice.TextWrapping = TextWrapping.Wrap;
+        notice.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.VideoBackgroundSelectionNotice)) {
+            Converter = StringConverters.IsNotNullOrEmpty
+        });
+        return new StackPanel { Spacing = 4, Children = { videoBackgroundPicker, fileName,
+            new TextBlock { Text = "По центру с обрезкой", TextWrapping = TextWrapping.Wrap },
+            new TextBlock { Text = "Источник" }, videoReplacementSourcePicker, notice } };
+    }
+
+    // ответ системного диалога относится только к видео, для которого открыли выбор
+    private async Task PickVideoBackgroundAsync() {
+        if (pickingVideoBackground || mediaWindowClosed ||
+            DataContext is not MainViewModel { IsVideoOpen: true, CurrentDocument: { } document } vm) {
+            return;
+        }
+        bool IsCurrent() => !mediaWindowClosed && ReferenceEquals(DataContext, vm) && ReferenceEquals(vm.CurrentDocument, document);
+        pickingVideoBackground = true;
+        IReadOnlyList<IStorageFile>? files = null;
+        try {
+            files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions {
+                Title = "Выбрать фон для видео", AllowMultiple = false,
+                FileTypeFilter = [new FilePickerFileType("Изображения") { Patterns = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"] }]
+            });
+            if (files.Count > 0 && IsCurrent()) {
+                await vm.ChooseVideoBackgroundAsync(files[0]);
+            }
+        }
+        catch (Exception error) {
+            if (IsCurrent()) {
+                vm.ShowError($"Не удалось выбрать фон: {error.Message}");
+            }
+        }
+        finally {
+            if (files is not null) {
+                foreach (IStorageFile file in files) {
+                    file.Dispose();
+                }
+            }
+            pickingVideoBackground = false;
+        }
+    }
+
+    // вход и результат занимают одну область, итоговый вид выбирается в общей панели отображения
     private Border CreateVideoForegroundImageCard() {
         videoForegroundTabs.Items.Add(new TabStripItem { Content = "Вход" });
         videoForegroundTabs.Items.Add(videoForegroundResultTab);
         videoForegroundTabs.SelectedIndex = 0;
         AutomationProperties.SetName(videoForegroundTabs, "Просмотр вычитания фона");
         AutomationProperties.SetName(videoForegroundViews, "Вид результата вычитания фона");
+        void AddView(string title, string enabledProperty) {
+            ListBoxItem item = new() { Content = title };
+            BindAnalysisPopup(item, IsEnabledProperty, enabledProperty);
+            videoForegroundViews.Items.Add(item);
+        }
+        AddView("Передний план", nameof(MainViewModel.VideoForegroundEnabled));
+        AddView("Маска", nameof(MainViewModel.VideoForegroundEnabled));
+        AddView("Заменённый фон", nameof(MainViewModel.CanUseVideoBackgroundReplacement));
         BindAnalysisPopup(videoForegroundViews, SelectingItemsControl.SelectedIndexProperty,
             nameof(MainViewModel.VideoForegroundViewIndex), BindingMode.TwoWay);
         BindAnalysisPopup(videoForegroundViews, IsEnabledProperty, nameof(MainViewModel.CanDisplayVideoForegroundEffect));
@@ -189,8 +289,10 @@ public partial class MainWindow {
         (e.Key is Key.Space or Key.Left or Key.Right) && e.Source is Visual source &&
         source.GetSelfAndVisualAncestors().Any(control =>
             ReferenceEquals(control, videoForegroundTabs) || ReferenceEquals(control, videoForegroundViews) ||
-            ReferenceEquals(control, videoForegroundSourcePicker) ||
+            ReferenceEquals(control, videoForegroundSourcePicker) || ReferenceEquals(control, videoReplacementSourcePicker) ||
             e.Key == Key.Space && (ReferenceEquals(control, videoForegroundDisplayButton) ||
                 ReferenceEquals(control, videoForegroundMethod) || ReferenceEquals(control, videoForegroundMethodSettings) ||
+                ReferenceEquals(control, videoReplacementMethod) || ReferenceEquals(control, videoReplacementSettings) ||
+                ReferenceEquals(control, videoBackgroundPicker) ||
                 ReferenceEquals(control, videoForegroundApply) || ReferenceEquals(control, videoForegroundPageButton)));
 }

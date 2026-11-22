@@ -199,29 +199,15 @@ internal sealed class VideoEditorFrame : IDisposable {
         }
     }
 
-    // передаем анализу текущий вид видеоряда с непрозрачным черным фоном
-    public static VideoEditorFrame FromForeground(VideoForegroundFrame input, bool maskOnly, CancellationToken token) {
+    // передаем анализу те же пиксели переднего плана, маски или замены фона, которые видны в интерфейсе
+    public static VideoEditorFrame FromForeground(VideoForegroundFrame input, bool maskOnly, CancellationToken token,
+        VideoBackgroundRaster? background = null) {
         VideoEditorFrame frame = new(input.Size);
         try {
-            ReadOnlySpan<byte> rgb = input.Rgb.Span;
-            ReadOnlySpan<byte> mask = input.Mask.Span;
+            int rowBytes = checked(input.Size.Width * 4);
             for (int y = 0; y < input.Size.Height; y++) {
                 token.ThrowIfCancellationRequested();
-                for (int x = 0; x < input.Size.Width; x++) {
-                    int pixel = y * input.Size.Width + x;
-                    int output = pixel * 4;
-                    if (maskOnly || mask[pixel] == 0) {
-                        byte shade = maskOnly ? mask[pixel] : (byte)0;
-                        frame.pixels[output] = frame.pixels[output + 1] = frame.pixels[output + 2] = shade;
-                    }
-                    else {
-                        int offset = pixel * 3;
-                        frame.pixels[output] = rgb[offset + 2];
-                        frame.pixels[output + 1] = rgb[offset + 1];
-                        frame.pixels[output + 2] = rgb[offset];
-                    }
-                    frame.pixels[output + 3] = 255;
-                }
+                VideoForegroundCompositor.CopyRow(input, y, frame.pixels.AsSpan(y * rowBytes, rowBytes), maskOnly, background);
             }
             return frame;
         }

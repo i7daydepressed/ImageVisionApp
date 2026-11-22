@@ -38,12 +38,12 @@ public partial class MainViewModel {
         : CurrentDocument?.Kind switch {
             MediaKind.Image => OriginalImage,
             MediaKind.Video => videoForegroundOriginal ??
-                (!VideoForegroundEnabled || VideoForegroundSource == VideoPipelineStage.Original ? VideoPreviewFrame : null),
+                (!HasActiveVideoSequenceEffect || VideoForegroundSource == VideoPipelineStage.Original ? VideoPreviewFrame : null),
             _ => null
         };
-    public Bitmap? VideoForegroundPreview => !VideoForegroundEnabled && IsVideoOpen
+    public Bitmap? VideoForegroundPreview => !HasActiveVideoSequenceEffect && IsVideoOpen
         ? VideoForegroundInputPreview : videoForegroundOutput;
-    public bool CanDisplayVideoForegroundEffect => IsVideoOpen && VideoForegroundEnabled;
+    public bool CanDisplayVideoForegroundEffect => IsVideoOpen && HasActiveVideoSequenceEffect;
     public bool CanApplyVideoForeground => IsVideoForegroundOutputSelected && IsVideoOpen &&
         PlaybackStatus.CanPlay && !mediaPreviewsDisposed;
     public string VideoForegroundStatus => videoForegroundStatus;
@@ -52,18 +52,22 @@ public partial class MainViewModel {
         private set => SetProperty(ref videoForegroundPath, value);
     }
     public int VideoForegroundRevision { get; private set; }
-    internal bool IsVideoForegroundOutputSelected => videoForegroundVisible && VideoForegroundEnabled;
+    internal bool IsVideoForegroundOutputSelected => videoForegroundVisible && HasActiveVideoSequenceEffect;
 
     // меняем состав результата на той же позиции и отменяем расчет при отключении метода
     public bool VideoForegroundEnabled {
         get => videoForegroundEnabled;
         set {
+            bool wasActive = HasActiveVideoSequenceEffect;
             if (!SetProperty(ref videoForegroundEnabled, value)) {
                 return;
             }
+            if (!value && CanUseVideoBackgroundReplacement) {
+                SelectVideoForegroundView(ReplacedBackgroundView);
+            }
             OnPropertyChanged(nameof(CanDisplayVideoForegroundEffect));
             OnPropertyChanged(nameof(CanApplyVideoForeground));
-            RestartVideoForeground();
+            RefreshSelectedVideoForegroundView(wasActive);
         }
     }
 
@@ -100,16 +104,22 @@ public partial class MainViewModel {
     public int VideoForegroundViewIndex {
         get => videoForegroundViewIndex;
         set {
-            if (value is < 0 or > 1 || value == videoForegroundViewIndex) {
+            if (value is < 0 or > ReplacedBackgroundView ||
+                (value == ReplacedBackgroundView ? !CanUseVideoBackgroundReplacement : !VideoForegroundEnabled) ||
+                value == videoForegroundViewIndex) {
                 return;
             }
-            videoForegroundViewIndex = value;
-            OnPropertyChanged(nameof(VideoForegroundViewIndex));
-            if (videoForegroundFrame is { } frame && videoForegroundOutput is { } output) {
-                PaintVideoForeground(output, frame, result: true, maskOnly: value == 1);
-                NotifyVideoForegroundPixelsChanged();
-            }
+            SelectVideoForegroundView(value);
+            RefreshSelectedVideoForegroundView(HasActiveVideoSequenceEffect);
         }
+    }
+
+    // запоминаем последний вид вычитания для возврата после отключения замены
+    private void SelectVideoForegroundView(int value) {
+        if (value < ReplacedBackgroundView) {
+            previousSubtractionView = value;
+        }
+        SetProperty(ref videoForegroundViewIndex, value, nameof(VideoForegroundViewIndex));
     }
 
     // отдельное чтение работает только пока открыта вкладка видеоряда
@@ -157,7 +167,7 @@ public partial class MainViewModel {
         ClearVideoForeground();
         ResetPipelineOutputMeasurements();
         SetVideoForegroundStatus(!IsVideoOpen ? ForegroundNoVideo :
-            VideoForegroundEnabled ? ForegroundPreparing : ForegroundDisabled);
+            HasActiveVideoSequenceEffect ? ForegroundPreparing : ForegroundDisabled);
     }
 
     // обновляем цель из общей шкалы, а точный кадр берем по номеру при одинаковых PTS
@@ -221,7 +231,7 @@ public partial class MainViewModel {
         }
         if (videoForegroundOriginal is null) {
             OnPropertyChanged(nameof(VideoForegroundInputPreview));
-            if (IsVideoOpen && !VideoForegroundEnabled) {
+            if (IsVideoOpen && !HasActiveVideoSequenceEffect) {
                 OnPropertyChanged(nameof(VideoForegroundPreview));
             }
             if (videoForegroundInputRevision != VideoPreviewRevision) {
@@ -237,7 +247,7 @@ public partial class MainViewModel {
             SetVideoForegroundStatus(unavailable);
             return;
         }
-        if (!VideoForegroundEnabled) {
+        if (!HasActiveVideoSequenceEffect) {
             SetVideoForegroundStatus(ForegroundDisabled);
             return;
         }
@@ -392,7 +402,8 @@ public partial class MainViewModel {
         WriteableBitmap output = GetPreparedBitmap(oldOutput, frame.Size);
         try {
             PaintVideoForeground(original, frame, result: false, maskOnly: false);
-            PaintVideoForeground(output, frame, result: true, maskOnly: VideoForegroundViewIndex == 1);
+            PaintVideoForeground(output, frame, result: true, maskOnly: VideoForegroundViewIndex == 1,
+                GetReplacementBackground(frame.Size));
         }
         catch {
             if (!ReferenceEquals(original, oldOriginal)) {
@@ -418,10 +429,16 @@ public partial class MainViewModel {
         if (!ReferenceEquals(output, oldOutput)) {
             oldOutput?.Dispose();
         }
+        DescribeVideoForegroundFrame(frame);
+    }
+
+    // статус относится к текущему кадру и выбранному виду результата
+    private void DescribeVideoForegroundFrame(VideoForegroundFrame frame) {
         TimeSpan time = TimeSpan.FromMilliseconds(Math.Max(0, frame.Time.Milliseconds));
         string stamp = time.ToString(time.TotalHours >= 1 ? @"hh\:mm\:ss\.fff" : @"mm\:ss\.fff");
-        SetVideoForegroundStatus(frame.Ordinal == 0
-            ? $"{stamp} · Первый кадр задаёт модель фона"
+        SetVideoForegroundStatus(ShowsReplacedVideoBackground
+            ? $"{stamp} · Заменённый фон"
+            : frame.Ordinal == 0 ? $"{stamp} · Первый кадр задаёт модель фона"
             : $"{stamp} · Вычитание фона по {VideoForegroundSource switch {
                 VideoPipelineStage.Editing => "результату редактирования",
                 VideoPipelineStage.Analysis => "результату анализа",
@@ -430,27 +447,14 @@ public partial class MainViewModel {
     }
 
     // переносим RGB и бинарную маску в BGRA-строки предпросмотра
-    private static void PaintVideoForeground(WriteableBitmap bitmap, VideoForegroundFrame frame, bool result, bool maskOnly) {
+    private static void PaintVideoForeground(WriteableBitmap bitmap, VideoForegroundFrame frame, bool result, bool maskOnly,
+        VideoBackgroundRaster? background = null) {
         using ILockedFramebuffer target = bitmap.Lock();
-        ReadOnlySpan<byte> rgb = frame.Rgb.Span;
-        ReadOnlySpan<byte> mask = frame.Mask.Span;
         int rowBytes = checked(frame.Size.Width * 4);
         byte[] row = ArrayPool<byte>.Shared.Rent(rowBytes);
         try {
-            int pixel = 0;
             for (int y = 0; y < frame.Size.Height; y++) {
-                for (int x = 0; x < rowBytes; x += 4, pixel++) {
-                    if (maskOnly || result && mask[pixel] == 0) {
-                        row[x] = row[x + 1] = row[x + 2] = maskOnly ? mask[pixel] : (byte)0;
-                    }
-                    else {
-                        int offset = pixel * 3;
-                        row[x] = rgb[offset + 2];
-                        row[x + 1] = rgb[offset + 1];
-                        row[x + 2] = rgb[offset];
-                    }
-                    row[x + 3] = 255;
-                }
+                VideoForegroundCompositor.CopyRow(frame, y, row.AsSpan(0, rowBytes), maskOnly, background, rawInput: !result);
                 Marshal.Copy(row, 0, IntPtr.Add(target.Address, y * target.RowBytes), rowBytes);
             }
         }

@@ -20,12 +20,12 @@ public partial class MainViewModel {
 
     private bool IsCombinedAnalysisOutputSelected =>
         videoAnalysisVisible && videoAnalysisResultTabSelected && VideoAnalysisUsesSequence;
-    private bool WantsVideoTemporalPipeline => IsVideoOpen && VideoForegroundEnabled &&
+    private bool WantsVideoTemporalPipeline => IsVideoOpen && HasActiveVideoSequenceEffect &&
         (IsVideoForegroundOutputSelected || IsCombinedAnalysisOutputSelected);
     private bool IsCombinedStrictOutputSelected => IsStrictVideo && WantsVideoTemporalPipeline;
     private bool IsStrictPipelineOutputSelected => IsCombinedStrictOutputSelected || IsStrictFrameAnalysisSelected;
-    private string? CombinedVideoAnalysisNotice => !VideoForegroundEnabled
-        ? "Включите вычитание фона на вкладке «Работа с видеорядом»"
+    private string? CombinedVideoAnalysisNotice => !HasActiveVideoSequenceEffect
+        ? "Включите вычитание или замену фона на вкладке «Работа с видеорядом»"
         : combinedVideoAnalysisNotice;
 
     // включаем новый проход только при изменении неизменяемого снимка настроек
@@ -123,14 +123,16 @@ public partial class MainViewModel {
         downstream?.ValidateBudget(source.FrameSize);
 
         var foregroundSize = upstream?.GetOutputSize(source.FrameSize) ?? source.FrameSize;
-        long required = VideoForegroundModel.GetRequiredBufferBytes(foregroundSize, source.ReadScratchBytes);
+        long backgroundBytes = CanUseVideoBackgroundReplacement && videoBackgroundImage is { } image
+            ? GetVideoBackgroundBytes(image, foregroundSize) : 0;
+        long required = checked(VideoForegroundModel.GetRequiredBufferBytes(foregroundSize, source.ReadScratchBytes) + backgroundBytes);
         if (required > resources.ForegroundBudgetBytes) {
             long needed = (long)Math.Ceiling(required / (1024d * 1024));
             throw new InvalidOperationException($"Недостаточно бюджета видеоряда. Нужно от {needed} МиБ, выбрано " +
                 $"{resources.ForegroundBudgetMiB} МиБ. Измените бюджет в настройках медиаконтейнера.");
         }
 
-        long persistent = VideoForegroundModel.GetPersistentBytes(foregroundSize);
+        long persistent = checked(VideoForegroundModel.GetPersistentBytes(foregroundSize) + backgroundBytes);
         long foregroundFrame = VideoEditorFrame.GetBufferBytes(foregroundSize);
         long analysisFrame = downstream is null ? 0 : VideoEditorFrame.GetBufferBytes(downstream.GetOutputSize(source.FrameSize));
         long analysisScratch = Math.Max(upstream?.GetResources(source.FrameSize).AnalysisBytes ?? 0,
@@ -145,9 +147,10 @@ public partial class MainViewModel {
         long generation = combinedMeasurementGeneration;
         VideoEditorPlan editor = videoEditorPlan;
         bool maskOnly = VideoForegroundViewIndex == 1;
+        VideoBackgroundRaster? background = downstream is not null ? GetReplacementBackground(foregroundSize) : null;
         bool needsEditing = upstream?.NeedsEditing == true || downstream?.NeedsEditing == true;
         return new(() => new VideoCombinedFrameProcessor(source.FrameSize, upstream, downstream, editor, maskOnly,
-            combinedMeasurements, generation, source.ReadScratchBytes), persistent, scratch, retained, capacity, needsEditing);
+            combinedMeasurements, generation, source.ReadScratchBytes, background), persistent, scratch, retained, capacity, needsEditing);
     }
 
     private readonly record struct CombinedVideoWork(Func<IVideoStrictPipelineProcessor> Create, long PersistentBytes,

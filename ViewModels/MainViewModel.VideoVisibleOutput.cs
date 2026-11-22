@@ -78,7 +78,8 @@ public partial class MainViewModel {
         VideoPreviewMeasurements.Window? window = visibleVideoOutput.Last;
         string picture = IsCombinedAnalysisOutputSelected ? "Результат видеоряда" :
             IsFrameAnalysisOutputSelected ? "Покадровый результат" :
-            IsVideoForegroundOutputSelected ? "Вычитание фона" : IsOriginalVideoOutputSelected ? "Оригинал" : "Изменённое";
+            IsVideoForegroundOutputSelected ? ShowsReplacedVideoBackground ? "Замена фона" : "Вычитание фона" :
+            IsOriginalVideoOutputSelected ? "Оригинал" : "Изменённое";
         string stage = IsCombinedAnalysisOutputSelected || IsFrameAnalysisOutputSelected ? "Анализ" :
             videoForegroundVisible ? "Работа с видеорядом" :
             videoEditorVisible ? "Редактирование" : "Информация";

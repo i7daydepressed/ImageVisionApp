@@ -62,8 +62,8 @@ public partial class MainViewModel {
 
         OnPropertyChanged(nameof(CurrentDocument));
         OnPropertyChanged(nameof(IsVideoOpen));
-        OnPropertyChanged(nameof(CanDisplayVideoForegroundEffect));
-        OnPropertyChanged(nameof(CanApplyVideoForeground));
+        VideoBackgroundSelectionNotice = null;
+        NotifyVideoBackgroundState();
         OnPropertyChanged(nameof(CurrentVideoInfo));
         OnPropertyChanged(nameof(VideoFirstFrame));
         OnPropertyChanged(nameof(VideoPreviewFrame));
