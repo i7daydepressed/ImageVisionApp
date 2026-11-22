@@ -10,6 +10,8 @@ namespace ImageVisionApp.Services;
 internal sealed record VideoForegroundFrame(
     VideoPresentationTime Time, VideoPresentationTime? Until, long Ordinal, PixelSize Size,
     ReadOnlyMemory<byte> Rgb, ReadOnlyMemory<byte> Mask) {
+    public VideoMotionBlurRaster? MotionBlur { get; init; }
+    public long BufferBytes => Rgb.Length + (long)Mask.Length + (MotionBlur?.BufferBytes ?? 0);
 
     // проверяем точный кадр или временной интервал даже при одинаковых метках
     public bool Covers(VideoFrameReadRequest request) => Covers(Time, Until, Ordinal, request);

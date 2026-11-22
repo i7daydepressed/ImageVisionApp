@@ -6,6 +6,7 @@ using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Templates;
 using Avalonia.Data;
 using Avalonia.Data.Converters;
 using Avalonia.Input;
@@ -19,16 +20,27 @@ using ImageVisionApp.ViewModels;
 namespace ImageVisionApp.Views;
 
 public partial class MainWindow {
+    private const string MovingBlurTitle = "Размытие движущихся областей";
     private readonly TabStrip videoForegroundTabs = new() { HorizontalAlignment = HorizontalAlignment.Left };
     private readonly TabStripItem videoForegroundResultTab = new() { Content = "Результат", IsEnabled = false };
     private readonly ListBox videoForegroundViews = new();
     private readonly ComboBox videoForegroundSourcePicker = CreateVideoForegroundSourcePicker("Источник вычитания фона");
     private readonly ComboBox videoReplacementSourcePicker = CreateVideoForegroundSourcePicker("Источник замены фона");
+    private readonly ComboBox videoMovingBlurSourcePicker = CreateVideoForegroundSourcePicker("Источник размытия");
     private readonly CheckBox videoForegroundMethod = new() { Content = "Вычитание фона" };
     private readonly Button videoForegroundMethodSettings = new() { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
     private readonly CheckBox videoReplacementMethod = new() { Content = "Замена фона" };
     private readonly Button videoReplacementSettings = new() { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
     private readonly Button videoBackgroundPicker = new() { Content = "Выбрать фон…" };
+    private readonly CheckBox videoMovingBlurMethod = new() {
+        Content = MovingBlurTitle,
+        ContentTemplate = new FuncDataTemplate<string>((title, _) => new TextBlock { Text = title, TextWrapping = TextWrapping.Wrap })
+    };
+    private readonly Button videoMovingBlurSettings = new() { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
+    private readonly Slider videoMovingBlurRadius = new() {
+        Minimum = 1, Maximum = 12, TickFrequency = 1, IsSnapToTickEnabled = true,
+        SmallChange = 1, LargeChange = 1, HorizontalAlignment = HorizontalAlignment.Stretch
+    };
     private readonly Button videoForegroundApply = new() { Content = "Применить", HorizontalAlignment = HorizontalAlignment.Stretch };
     private Button? videoForegroundDisplayButton;
     private int videoForegroundLastVideoTab = 1;
@@ -51,6 +63,14 @@ public partial class MainWindow {
             nameof(MainViewModel.VideoForegroundEnabled));
         Grid replacementRow = CreateVideoForegroundMethodRow(videoReplacementMethod, videoReplacementSettings,
             nameof(MainViewModel.VideoBackgroundReplacementEnabled));
+        Grid blurRow = CreateVideoForegroundMethodRow(videoMovingBlurMethod, videoMovingBlurSettings,
+            nameof(MainViewModel.VideoMovingBlurEnabled));
+        AutomationProperties.SetName(videoMovingBlurMethod, MovingBlurTitle);
+        videoMovingBlurMethod.Click += (_, _) => {
+            if (DataContext is MainViewModel { IsVideoOpen: true } vm) {
+                vm.VideoMovingBlurEnabled = videoMovingBlurMethod.IsChecked == true;
+            }
+        };
         videoForegroundMethod.Click += (_, _) => {
             if (DataContext is MainViewModel { IsVideoOpen: true } vm) {
                 vm.VideoForegroundEnabled = videoForegroundMethod.IsChecked == true;
@@ -62,7 +82,7 @@ public partial class MainWindow {
         ScrollViewer methods = new() {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Content = new StackPanel { Spacing = 8, Children = { methodRow, replacementRow, hint } }
+            Content = new StackPanel { Spacing = 8, Children = { methodRow, replacementRow, blurRow, hint } }
         };
 
         StackPanel details = new() {
@@ -87,6 +107,11 @@ public partial class MainWindow {
             parametersContent.Content = replacementDetails;
         }
         videoReplacementSettings.Click += (_, _) => ShowReplacementSettings();
+        StackPanel blurDetails = CreateVideoMovingBlurSettings();
+        videoMovingBlurSettings.Click += (_, _) => {
+            parametersTitle.Text = "Параметры размытия";
+            parametersContent.Content = blurDetails;
+        };
         videoReplacementMethod.Click += async (_, _) => {
             if (DataContext is not MainViewModel { IsVideoOpen: true } vm) {
                 return;
@@ -135,7 +160,7 @@ public partial class MainWindow {
         return row;
     }
 
-    // оба параметра меняют один источник, по которому MOG2 строит маску
+    // все методы меняют один источник, по которому MOG2 строит маску
     private static ComboBox CreateVideoForegroundSourcePicker(string label) {
         ComboBox picker = new() {
             ItemsSource = new[] { "Оригинал", "Результат редактирования", "Результат анализа" },
@@ -145,6 +170,20 @@ public partial class MainWindow {
         picker.Bind(SelectingItemsControl.SelectedIndexProperty,
             new Binding(nameof(MainViewModel.SelectedVideoForegroundSourceIndex)) { Mode = BindingMode.TwoWay });
         return picker;
+    }
+
+    // радиус передается в модель целыми пикселями, в том числе при вводе стрелками
+    private StackPanel CreateVideoMovingBlurSettings() {
+        AutomationProperties.SetName(videoMovingBlurRadius, "Радиус размытия");
+        videoMovingBlurRadius.Bind(RangeBase.ValueProperty, new Binding(nameof(MainViewModel.VideoMovingBlurRadius)) {
+            Mode = BindingMode.TwoWay
+        });
+        TextBlock radius = new();
+        radius.Bind(TextBlock.TextProperty, new Binding(nameof(MainViewModel.VideoMovingBlurRadius)) {
+            StringFormat = "Радиус {0} пикс."
+        });
+        return new StackPanel { Spacing = 4, Children = { radius, videoMovingBlurRadius,
+            new TextBlock { Text = "Источник" }, videoMovingBlurSourcePicker } };
     }
 
     // выбранное имя остается доступным целиком даже в узкой панели
@@ -214,6 +253,7 @@ public partial class MainWindow {
         AddView("Передний план", nameof(MainViewModel.VideoForegroundEnabled));
         AddView("Маска", nameof(MainViewModel.VideoForegroundEnabled));
         AddView("Заменённый фон", nameof(MainViewModel.CanUseVideoBackgroundReplacement));
+        AddView(MovingBlurTitle, nameof(MainViewModel.CanUseVideoMovingBlur));
         BindAnalysisPopup(videoForegroundViews, SelectingItemsControl.SelectedIndexProperty,
             nameof(MainViewModel.VideoForegroundViewIndex), BindingMode.TwoWay);
         BindAnalysisPopup(videoForegroundViews, IsEnabledProperty, nameof(MainViewModel.CanDisplayVideoForegroundEffect));
@@ -290,9 +330,11 @@ public partial class MainWindow {
         source.GetSelfAndVisualAncestors().Any(control =>
             ReferenceEquals(control, videoForegroundTabs) || ReferenceEquals(control, videoForegroundViews) ||
             ReferenceEquals(control, videoForegroundSourcePicker) || ReferenceEquals(control, videoReplacementSourcePicker) ||
+            ReferenceEquals(control, videoMovingBlurSourcePicker) || ReferenceEquals(control, videoMovingBlurRadius) ||
             e.Key == Key.Space && (ReferenceEquals(control, videoForegroundDisplayButton) ||
                 ReferenceEquals(control, videoForegroundMethod) || ReferenceEquals(control, videoForegroundMethodSettings) ||
                 ReferenceEquals(control, videoReplacementMethod) || ReferenceEquals(control, videoReplacementSettings) ||
+                ReferenceEquals(control, videoMovingBlurMethod) || ReferenceEquals(control, videoMovingBlurSettings) ||
                 ReferenceEquals(control, videoBackgroundPicker) ||
                 ReferenceEquals(control, videoForegroundApply) || ReferenceEquals(control, videoForegroundPageButton)));
 }

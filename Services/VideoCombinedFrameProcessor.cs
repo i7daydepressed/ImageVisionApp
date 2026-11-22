@@ -25,11 +25,13 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
     private readonly VideoEditorPlan? editor;
     private readonly bool maskOnly;
     private readonly VideoBackgroundRaster? background;
+    private readonly int? motionBlurRadius;
     private readonly VideoPipelineMeasurements? measurements;
     private readonly long generation;
     private readonly IDisposable? originalReserve;
     private readonly IDisposable? modelReserve;
     private readonly long foregroundBytes;
+    private readonly long motionBlurBytes;
     private readonly long editingBytes;
     private readonly long analysisBytes;
 
@@ -37,7 +39,7 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
     public VideoCombinedFrameProcessor(PixelSize size, VideoForegroundInputPlan? upstream = null,
         VideoSequenceAnalysisPlan? downstream = null, VideoEditorPlan? editor = null, bool maskOnly = false,
         VideoPipelineMeasurements? measurements = null, long generation = 0, long readerBytes = 0,
-        VideoBackgroundRaster? background = null) {
+        VideoBackgroundRaster? background = null, int? motionBlurRadius = null) {
         this.upstream = upstream;
         this.downstream = downstream;
         this.editor = editor;
@@ -49,12 +51,16 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
         editingBytes = Math.Max(first.EditorBytes, last.EditorBytes);
         analysisBytes = Math.Max(first.AnalysisBytes, last.AnalysisBytes);
         PixelSize modelSize = upstream?.GetOutputSize(size) ?? size;
-        this.background = maskOnly ? null : background;
+        this.motionBlurRadius = maskOnly ? null : motionBlurRadius;
+        this.background = maskOnly || this.motionBlurRadius is not null ? null : background;
         if (this.background is { } fitted && fitted.Size != modelSize) {
             throw new ArgumentException("Подготовленный фон не совпадает с размером видеоряда", nameof(background));
         }
         long persistent = VideoForegroundModel.GetPersistentBytes(modelSize);
         foregroundBytes = VideoForegroundModel.GetRequiredBufferBytes(modelSize, 0) - persistent;
+        motionBlurBytes = this.motionBlurRadius is { } radius
+            ? checked(VideoMotionBlurRaster.GetScratchBytes(modelSize, radius) + VideoMotionBlurRaster.GetBufferBytes(modelSize))
+            : 0;
         model = new(modelSize);
         originalReserve = measurements?.Reserve(generation, VideoPipelineStage.Original, readerBytes);
         modelReserve = measurements?.Reserve(generation, VideoPipelineStage.VideoSequence,
@@ -70,22 +76,26 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
         using VideoEditorFrame? composition = upstream?.UsesAnalysis == true ? AnalyzeInput(input, prepared, token) : null;
         VideoEditorFrame pixels = composition ?? (upstream is not null ? prepared : input.Pixels);
         VideoForegroundFrame? foreground;
-        using (var stage = measurements?.BeginStage(generation, VideoPipelineStage.VideoSequence, foregroundBytes)) {
+        long workingBytes = checked(foregroundBytes + (publish ? motionBlurBytes : 0));
+        using (var stage = measurements?.BeginStage(generation, VideoPipelineStage.VideoSequence, workingBytes)) {
             foreground = model.Process(input, pixels, publish, token);
+            if (foreground is not null && motionBlurRadius is { } radius) {
+                foreground = foreground with { MotionBlur = VideoMotionBlurRaster.Create(foreground, radius, token) };
+            }
             stage?.Complete();
         }
         if (foreground is null) {
             return ValueTask.FromResult<VideoPipelineOutput?>(null);
         }
 
-        IDisposable? foregroundLease = measurements?.Reserve(generation, VideoPipelineStage.VideoSequence,
-            foreground.Rgb.Length + (long)foreground.Mask.Length);
+        IDisposable? foregroundLease = measurements?.Reserve(generation, VideoPipelineStage.VideoSequence, foreground.BufferBytes);
         VideoEditorFrame? analysis = null;
         IDisposable? analysisLease = null;
         try {
             if (downstream is not null) {
                 using var stage = measurements?.BeginStage(generation, VideoPipelineStage.Analysis, analysisBytes);
-                using VideoEditorFrame temporal = VideoEditorFrame.FromForeground(foreground, maskOnly, token, background);
+                using VideoEditorFrame temporal = VideoEditorFrame.FromForeground(foreground, maskOnly, token, background,
+                    motionBlur: motionBlurRadius is not null);
                 analysis = downstream.Transform(input, temporal, token, prepared);
                 stage?.Complete();
                 analysisLease = measurements?.Reserve(generation, VideoPipelineStage.Analysis,

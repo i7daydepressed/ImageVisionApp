@@ -188,7 +188,11 @@ internal sealed partial class PreviewCoordinator {
             if (pixels <= 0 || foreground.Rgb.Length != checked(pixels * 3) || foreground.Mask.Length != pixels) {
                 throw new InvalidDataException("Получен неполный результат видеоряда");
             }
-            bytes = checked(bytes + foreground.Rgb.Length + foreground.Mask.Length);
+            if (foreground.MotionBlur is { } blur &&
+                (blur.Size != foreground.Size || !blur.Bgra.IsEmpty && blur.Bgra.Length != checked(pixels * 4))) {
+                throw new InvalidDataException("Получен неполный результат размытия видеоряда");
+            }
+            bytes = checked(bytes + foreground.BufferBytes);
         }
         else if (pipeline.RequiresHistory || output.Foreground is not null || output.Analysis is null ||
             output.AnalysisFrame is not { } cursor || cursor.Ordinal != frame.Ordinal || cursor.Time != frame.Time ||

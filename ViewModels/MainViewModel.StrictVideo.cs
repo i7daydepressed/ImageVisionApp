@@ -7,6 +7,7 @@ namespace ImageVisionApp.ViewModels;
 
 public partial class MainViewModel {
     private const int StrictResumeMilliseconds = 200;
+    private const int StrictPresentationLagLimitMilliseconds = 100;
     private VideoFrameCursor? strictStartAnchor;
     private long? strictClockStartedAt;
     private double strictClockOrigin;
@@ -161,14 +162,20 @@ public partial class MainViewModel {
                     preparedPosition = StrictTimelinePosition(strictPosition, duration);
                 }
                 else if (next.Until is { } after && after.Milliseconds <= playhead) {
-                    // при опоздании UI показываем только этот кадр и снова согласуем звук с остановленной шкалой
-                    strictPosition = Math.Max(strictPosition, next.Time.Milliseconds);
-                    preparedPosition = StrictTimelinePosition(strictPosition, duration);
-                    if (state == VLCState.Playing) {
+                    // Готовые кадры выдаём по одному за тик. При коротком опоздании
+                    // шкала ждёт показ, а непрерывные часы позволяют догнать звук.
+                    double shownThrough = after.Milliseconds;
+                    bool missingNext = preparedVideo.Snapshot.ReadyFrames == 0;
+                    bool excessiveLag = playhead - shownThrough >= StrictPresentationLagLimitMilliseconds;
+                    playhead = shownThrough;
+                    if (missingNext || excessiveLag) {
+                        strictPosition = Math.Max(strictPosition, shownThrough);
+                        preparedPosition = StrictTimelinePosition(strictPosition, duration);
                         HoldStrictVideo(playback, state);
+                        ReportStrictVideo(playback, state, duration,
+                            missingNext ? "Ждем следующий кадр…" : "Согласуем показ со звуком…");
+                        return;
                     }
-                    ReportStrictVideo(playback, state, duration, null);
-                    return;
                 }
             }
             if (nativeEnded && preparedUntil is null) {

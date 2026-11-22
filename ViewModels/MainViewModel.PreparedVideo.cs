@@ -679,7 +679,7 @@ public partial class MainViewModel {
             VideoPreviewRevision++;
             if (strictPipelineActive && frame.PipelineOutput is { } output) {
                 if (IsCombinedStrictOutputSelected) {
-                    PublishCombinedOutput(output);
+                    PublishCombinedOutput(output, hasPreparedInput: true);
                 }
                 else if (IsStrictFrameAnalysisSelected && output.Analysis is { } analyzed) {
                     PublishFrameAnalysisPlayback(analyzed, frame.Time, output.Ready, exactTime: true);

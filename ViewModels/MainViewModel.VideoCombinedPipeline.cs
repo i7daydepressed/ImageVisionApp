@@ -25,7 +25,7 @@ public partial class MainViewModel {
     private bool IsCombinedStrictOutputSelected => IsStrictVideo && WantsVideoTemporalPipeline;
     private bool IsStrictPipelineOutputSelected => IsCombinedStrictOutputSelected || IsStrictFrameAnalysisSelected;
     private string? CombinedVideoAnalysisNotice => !HasActiveVideoSequenceEffect
-        ? "Включите вычитание или замену фона на вкладке «Работа с видеорядом»"
+        ? "Включите метод на вкладке «Работа с видеорядом»"
         : combinedVideoAnalysisNotice;
 
     // включаем новый проход только при изменении неизменяемого снимка настроек
@@ -64,7 +64,7 @@ public partial class MainViewModel {
     }
 
     // храним отдельно окончательный растр анализа и готовую пару входа и маски видеоряда
-    private void PublishCombinedOutput(VideoPipelineOutput output) {
+    private void PublishCombinedOutput(VideoPipelineOutput output, bool hasPreparedInput = false) {
         if (output.Foreground is not { } foreground) {
             return;
         }
@@ -94,7 +94,8 @@ public partial class MainViewModel {
             }
         }
         else if (IsVideoForegroundOutputSelected) {
-            PublishVideoForeground(foreground);
+            PublishVideoForeground(foreground,
+                hasPreparedInput && VideoForegroundSource is VideoPipelineStage.Original or VideoPipelineStage.Editing);
         }
         if (output.Ready is { } sample) {
             combinedMeasurements.RecordPublished(sample);
@@ -125,7 +126,11 @@ public partial class MainViewModel {
         var foregroundSize = upstream?.GetOutputSize(source.FrameSize) ?? source.FrameSize;
         long backgroundBytes = CanUseVideoBackgroundReplacement && videoBackgroundImage is { } image
             ? GetVideoBackgroundBytes(image, foregroundSize) : 0;
-        long required = checked(VideoForegroundModel.GetRequiredBufferBytes(foregroundSize, source.ReadScratchBytes) + backgroundBytes);
+        int? movingBlurRadius = ShowsVideoMovingBlur ? VideoMovingBlurRadius : null;
+        long blurFrame = movingBlurRadius is not null ? VideoMotionBlurRaster.GetBufferBytes(foregroundSize) : 0;
+        long blurScratch = movingBlurRadius is { } radius ? VideoMotionBlurRaster.GetScratchBytes(foregroundSize, radius) : 0;
+        long required = checked(VideoForegroundModel.GetRequiredBufferBytes(foregroundSize, source.ReadScratchBytes) +
+            backgroundBytes + blurFrame + blurScratch);
         if (required > resources.ForegroundBudgetBytes) {
             long needed = (long)Math.Ceiling(required / (1024d * 1024));
             throw new InvalidOperationException($"Недостаточно бюджета видеоряда. Нужно от {needed} МиБ, выбрано " +
@@ -133,7 +138,7 @@ public partial class MainViewModel {
         }
 
         long persistent = checked(VideoForegroundModel.GetPersistentBytes(foregroundSize) + backgroundBytes);
-        long foregroundFrame = VideoEditorFrame.GetBufferBytes(foregroundSize);
+        long foregroundFrame = checked(VideoEditorFrame.GetBufferBytes(foregroundSize) + blurFrame);
         long analysisFrame = downstream is null ? 0 : VideoEditorFrame.GetBufferBytes(downstream.GetOutputSize(source.FrameSize));
         long analysisScratch = Math.Max(upstream?.GetResources(source.FrameSize).AnalysisBytes ?? 0,
             downstream?.GetResources(source.FrameSize).AnalysisBytes ?? 0);
@@ -150,7 +155,8 @@ public partial class MainViewModel {
         VideoBackgroundRaster? background = downstream is not null ? GetReplacementBackground(foregroundSize) : null;
         bool needsEditing = upstream?.NeedsEditing == true || downstream?.NeedsEditing == true;
         return new(() => new VideoCombinedFrameProcessor(source.FrameSize, upstream, downstream, editor, maskOnly,
-            combinedMeasurements, generation, source.ReadScratchBytes, background), persistent, scratch, retained, capacity, needsEditing);
+            combinedMeasurements, generation, source.ReadScratchBytes, background, movingBlurRadius),
+            persistent, scratch, retained, capacity, needsEditing);
     }
 
     private readonly record struct CombinedVideoWork(Func<IVideoStrictPipelineProcessor> Create, long PersistentBytes,

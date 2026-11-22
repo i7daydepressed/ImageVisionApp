@@ -199,15 +199,16 @@ internal sealed class VideoEditorFrame : IDisposable {
         }
     }
 
-    // передаем анализу те же пиксели переднего плана, маски или замены фона, которые видны в интерфейсе
+    // передаем анализу готовые пиксели того же вида видеоряда, который виден в интерфейсе
     public static VideoEditorFrame FromForeground(VideoForegroundFrame input, bool maskOnly, CancellationToken token,
-        VideoBackgroundRaster? background = null) {
+        VideoBackgroundRaster? background = null, bool motionBlur = false) {
         VideoEditorFrame frame = new(input.Size);
         try {
             int rowBytes = checked(input.Size.Width * 4);
             for (int y = 0; y < input.Size.Height; y++) {
                 token.ThrowIfCancellationRequested();
-                VideoForegroundCompositor.CopyRow(input, y, frame.pixels.AsSpan(y * rowBytes, rowBytes), maskOnly, background);
+                VideoForegroundCompositor.CopyRow(input, y, frame.pixels.AsSpan(y * rowBytes, rowBytes), maskOnly, background,
+                    motionBlur: motionBlur);
             }
             return frame;
         }

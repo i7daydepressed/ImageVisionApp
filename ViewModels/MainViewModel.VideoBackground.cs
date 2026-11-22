@@ -27,7 +27,7 @@ public partial class MainViewModel {
     }
 
     public bool CanUseVideoBackgroundReplacement => IsVideoOpen && VideoBackgroundReplacementEnabled && HasVideoBackgroundImage;
-    private bool HasActiveVideoSequenceEffect => VideoForegroundEnabled || CanUseVideoBackgroundReplacement;
+    private bool HasActiveVideoSequenceEffect => VideoForegroundEnabled || CanUseVideoBackgroundReplacement || CanUseVideoMovingBlur;
     private bool ShowsReplacedVideoBackground => CanUseVideoBackgroundReplacement && VideoForegroundViewIndex == ReplacedBackgroundView;
 
     // отключение замены сохраняет выбранную картинку и возвращает предыдущий вид вычитания
@@ -39,15 +39,16 @@ public partial class MainViewModel {
             }
 
             bool wasActive = HasActiveVideoSequenceEffect;
+            bool wasMovingBlur = ShowsVideoMovingBlur;
             videoBackgroundReplacementEnabled = value;
             if (value) {
                 SelectVideoForegroundView(ReplacedBackgroundView);
             }
             else if (VideoForegroundViewIndex == ReplacedBackgroundView) {
-                SelectVideoForegroundView(previousSubtractionView);
+                SelectVideoForegroundView(!VideoForegroundEnabled && CanUseVideoMovingBlur ? MovingBlurView : previousSubtractionView);
             }
             NotifyVideoBackgroundState();
-            RefreshSelectedVideoForegroundView(wasActive);
+            RefreshSelectedVideoForegroundView(wasActive, wasMovingBlur != ShowsVideoMovingBlur);
         }
     }
 
@@ -88,6 +89,7 @@ public partial class MainViewModel {
                 decoderBytes, PreviewSettings.ForegroundBudgetBytes);
 
             bool wasActive = HasActiveVideoSequenceEffect;
+            bool wasMovingBlur = ShowsVideoMovingBlur;
             videoBackgroundImage = loaded.Image;
             videoBackgroundRaster = loaded.Raster;
             videoBackgroundImageName = name;
@@ -95,7 +97,7 @@ public partial class MainViewModel {
             SelectVideoForegroundView(ReplacedBackgroundView);
             VideoBackgroundSelectionNotice = null;
             NotifyVideoBackgroundState();
-            RefreshSelectedVideoForegroundView(wasActive);
+            RefreshSelectedVideoForegroundView(wasActive, wasMovingBlur != ShowsVideoMovingBlur);
         }
         catch (Exception failure) {
             if (IsCurrentSelection()) {
@@ -142,19 +144,26 @@ public partial class MainViewModel {
         OnPropertyChanged(nameof(VideoBackgroundReplacementEnabled));
         OnPropertyChanged(nameof(HasVideoBackgroundImage));
         OnPropertyChanged(nameof(VideoBackgroundImageName));
+        NotifyVideoSequenceEffectAvailability();
+    }
+
+    // доступность представлений зависит от включённых методов и открытого документа
+    private void NotifyVideoSequenceEffectAvailability() {
         OnPropertyChanged(nameof(CanUseVideoBackgroundReplacement));
+        OnPropertyChanged(nameof(CanUseVideoMovingBlur));
         OnPropertyChanged(nameof(CanDisplayVideoForegroundEffect));
         OnPropertyChanged(nameof(CanApplyVideoForeground));
     }
 
     // при выборе вида на вкладке видеоряда повторно используем готовую маску
-    private void RefreshSelectedVideoForegroundView(bool wasActive) {
-        if (wasActive != HasActiveVideoSequenceEffect || IsCombinedAnalysisOutputSelected || videoForegroundFailed) {
+    private void RefreshSelectedVideoForegroundView(bool wasActive, bool movingBlurChanged = false) {
+        if (wasActive != HasActiveVideoSequenceEffect || IsCombinedAnalysisOutputSelected || videoForegroundFailed ||
+            movingBlurChanged) {
             RestartVideoForeground();
         }
         else if (videoForegroundFrame is { } frame && videoForegroundOutput is { } output) {
             PaintVideoForeground(output, frame, result: true, maskOnly: VideoForegroundViewIndex == 1,
-                GetReplacementBackground(frame.Size));
+                GetReplacementBackground(frame.Size), motionBlur: ShowsVideoMovingBlur);
             NotifyVideoForegroundPixelsChanged();
             DescribeVideoForegroundFrame(frame);
         }
