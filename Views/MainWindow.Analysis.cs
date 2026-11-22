@@ -25,7 +25,7 @@ public partial class MainWindow {
         Border imageCard = CreateAnalysisImageCard();
         Grid.SetColumn(imageCard, 1);
         workspace.Children.Add(imageCard);
-        return workspace;
+        return CreateAnalysisSections(workspace);
     }
 
     private Border CreateAnalysisMethodsCard() {
@@ -350,12 +350,16 @@ public partial class MainWindow {
         header.Children.Add(pipeline);
         Button displayButton = CreateAnalysisDisplayButton();
         displayButton.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)) { Converter = BoolConverters.Not });
-        Grid.SetColumn(displayButton, 2);
-        header.Children.Add(displayButton);
         Border videoDisplayHost = new() { Child = videoDisplay };
         videoDisplayHost.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
-        Grid.SetColumn(videoDisplayHost, 2);
-        header.Children.Add(videoDisplayHost);
+        StackPanel actions = new() {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { openComparisonButton, displayButton, videoDisplayHost }
+        };
+        Grid.SetColumn(actions, 2);
+        header.Children.Add(actions);
         layout.Children.Add(header);
 
         StackPanel descriptions = new StackPanel { Spacing = 4 };

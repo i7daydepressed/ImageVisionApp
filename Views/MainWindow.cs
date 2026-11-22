@@ -19,6 +19,7 @@ public partial class MainWindow : Window {
 
     private readonly ContentControl pageHost = new ContentControl();
     private ScrollViewer? simplePage;
+    private Border? videoPlaybackHost;
 
     private readonly HistogramPanel histogramPanel = new HistogramPanel();
     private readonly HistogramPanel advancedHistogramPanel = new HistogramPanel();
@@ -34,6 +35,7 @@ public partial class MainWindow : Window {
         DataContextChanged += MainWindow_OnDataContextChanged;
         Closed += (_, _) => {
             mediaWindowClosed = true;
+            DisposeComparisonView();
             if (DataContext is MainViewModel viewModel) {
                 viewModel.DisposeAnalysis();
                 viewModel.DisposeMediaPreviews();
@@ -46,9 +48,9 @@ public partial class MainWindow : Window {
             RowDefinitions = new RowDefinitions("Auto,Auto,*")// ров дефенишен -
         };
         layout.Children.Add(CreateToolbar());
-        Control videoControls = CreateVideoPlaybackControls();
-        Grid.SetRow(videoControls, 1);
-        layout.Children.Add(videoControls);
+        videoPlaybackHost = new Border { Child = CreateVideoPlaybackControls() };
+        Grid.SetRow(videoPlaybackHost, 1);
+        layout.Children.Add(videoPlaybackHost);
 
         // осн обл
         // боковой панели оставляем 310, остальное место отдаем картинке
@@ -103,7 +105,7 @@ public partial class MainWindow : Window {
             histogramViewModel.PropertyChanged += HistogramViewModel_OnPropertyChanged;
             histogramViewModel.AttachVideoPlayback();
             histogramViewModel.SetVideoEditorVisible(ReferenceEquals(pageHost.Content, editingPage));
-            histogramViewModel.SetVideoAnalysisVisible(ReferenceEquals(pageHost.Content, analysisPage));
+            UpdateAnalysisSection();
         }
 
         histogramPanel.ShowComparison(histogramViewModel?.HistogramComparison);

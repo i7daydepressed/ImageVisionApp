@@ -59,7 +59,7 @@ public partial class MainWindow {
             viewModel?.PauseVideoPlayback();
             pageHost.Content = page;
             viewModel?.SetVideoEditorVisible(ReferenceEquals(page, editingPage));
-            viewModel?.SetVideoAnalysisVisible(ReferenceEquals(page, analysisPage));
+            UpdateAnalysisSection();
         }
 
         // повторный щелчок по активной кнопке оставляет ее выбранной
