@@ -36,6 +36,11 @@ public partial class MainViewModel {
         if (CurrentDocument is not { Kind: MediaKind.Video } document) {
             return Task.CompletedTask;
         }
+        if (VideoAnalysisUsesSequence) {
+            CancelVideoAnalysisApply();
+            ApplyCombinedVideoAnalysis();
+            return Task.CompletedTask;
+        }
 
         CancelVideoAnalysisApply();
         TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);

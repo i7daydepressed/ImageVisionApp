@@ -309,6 +309,10 @@ public partial class MainViewModel {
             previous.AnalysisBudgetMiB != settings.AnalysisBudgetMiB;
         bool foregroundSettingsChanged = previous.ForegroundBudgetMiB != settings.ForegroundBudgetMiB ||
             previous.ForegroundDecoderThreads != settings.ForegroundDecoderThreads;
+        bool foregroundWorkChanged = foregroundSettingsChanged ||
+            VideoForegroundSource != VideoPipelineStage.Original && previous.BudgetMiB != settings.BudgetMiB ||
+            VideoForegroundSource == VideoPipelineStage.Analysis && analysisChanged ||
+            IsCombinedAnalysisOutputSelected && (analysisChanged || previous.BudgetMiB != settings.BudgetMiB);
         bool retrySource = !analysisChanged && !foregroundSettingsChanged && settings.Mode != VideoPreviewMode.Live && preparedSource is null &&
             preparedOpening is null && IsVideoOpen;
         if (settings == PreviewSettings && !retrySource) {
@@ -317,7 +321,7 @@ public partial class MainViewModel {
         if (!retrySource && previous.Mode == settings.Mode && previous.MaximumWorkers == settings.MaximumWorkers &&
             previous.BudgetMiB == settings.BudgetMiB) {
             PreviewSettings = settings;
-            if (foregroundSettingsChanged) {
+            if (foregroundWorkChanged) {
                 RestartVideoForeground();
             }
             return;
@@ -331,11 +335,12 @@ public partial class MainViewModel {
             ChangeVideoPreviewMode();
             return;
         }
-        if (foregroundSettingsChanged) {
+        if (foregroundWorkChanged) {
             RestartVideoForeground();
         }
         if (preparedSource is not null) {
-            if ((previous.BudgetMiB != settings.BudgetMiB ||
+            if (!(foregroundWorkChanged && IsCombinedStrictOutputSelected) &&
+                (previous.BudgetMiB != settings.BudgetMiB ||
                  IsStrictVideo && previous.MaximumWorkers != settings.MaximumWorkers) &&
                 videoFrameStep is null && !RecalculatePinnedPreparedFrame()) {
                 RequestPreparedVideo(preparedPosition, preparedAtEnd, preservePlay: true);

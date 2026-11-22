@@ -118,6 +118,7 @@ internal sealed class VideoPipelinePlan {
     public static VideoPipelineStage FromAnalysisSource(AnalysisImageSource source) => source switch {
         AnalysisImageSource.Original => VideoPipelineStage.Original,
         AnalysisImageSource.Edited => VideoPipelineStage.Editing,
+        AnalysisImageSource.VideoSequence => VideoPipelineStage.VideoSequence,
         _ => throw new ArgumentOutOfRangeException(nameof(source))
     };
 

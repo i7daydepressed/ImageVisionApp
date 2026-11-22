@@ -24,37 +24,49 @@ internal static class VideoFrameAnalysisService {
     // учитываем снимки, общие каналы, выходные карты и одновременно занятые рабочие буферы
     public static (int Workers, long Bytes) FitWorkers(PixelSize original, PixelSize? edited,
         AnalysisImageSource edgeSource, AnalysisImageSource segmentationSource, VideoFrameAnalysisSettings settings,
+        int limit, long budget) => FitPipelineWorkers(original, edited, null, edgeSource, segmentationSource, settings, limit, budget);
+
+    // учитываем отдельные растры редактора и видеоряда, даже если у них одинаковые размеры
+    public static (int Workers, long Bytes) FitPipelineWorkers(PixelSize original, PixelSize? edited, PixelSize? sequence,
+        AnalysisImageSource edgeSource, AnalysisImageSource segmentationSource, VideoFrameAnalysisSettings settings,
         int limit, long budget) {
         long sourcePixels = (long)original.Width * original.Height;
         long editedPixels = edited is { } size ? (long)size.Width * size.Height : 0;
-        long baseBytes = 4 * (sourcePixels + editedPixels);
+        long sequencePixels = sequence is { } temporal ? (long)temporal.Width * temporal.Height : 0;
+        long baseBytes = 4 * (sourcePixels + editedPixels + sequencePixels);
         bool originalEdges = settings.EdgeMethod is not null && edgeSource == AnalysisImageSource.Original;
         bool originalSegmentation = settings.Clusters is not null && segmentationSource == AnalysisImageSource.Original;
         bool fast = settings.FastThreshold is not null;
         if (originalEdges || originalSegmentation || fast || settings.Plate) {
             baseBytes += 3 * sourcePixels;
         }
-        if (editedPixels > 0) {
-            baseBytes += 3 * editedPixels;
-        }
+        baseBytes += 3 * (editedPixels + sequencePixels);
         if (originalEdges || fast || settings.Plate) {
             baseBytes += sourcePixels;
         }
-        if (settings.EdgeMethod is not null && !originalEdges) {
-            baseBytes += editedPixels;
-        }
+        PixelSize EdgeOrSegmentationSize(AnalysisImageSource source) => source switch {
+            AnalysisImageSource.Original => original,
+            AnalysisImageSource.Edited when edited is { } value => value,
+            AnalysisImageSource.VideoSequence when sequence is { } value => value,
+            _ => throw new InvalidOperationException("Нет растра для выбранного источника анализа")
+        };
 
         Span<long> scratch = stackalloc long[4];
         int count = 0;
         if (settings.EdgeMethod is { } method) {
-            long pixels = originalEdges ? sourcePixels : editedPixels;
+            PixelSize edgeSize = EdgeOrSegmentationSize(edgeSource);
+            long pixels = (long)edgeSize.Width * edgeSize.Height;
+            if (!originalEdges) {
+                baseBytes += pixels;
+            }
             baseBytes += pixels;
             // Canny создает три явные одноканальные Mat, у Робертса общая яркость уже учтена
             scratch[count++] = method == AnalysisEdgeMethod.Canny ? 3 * pixels : 0;
         }
         if (settings.Clusters is { } clusters) {
-            long pixels = originalSegmentation ? sourcePixels : editedPixels;
-            int width = originalSegmentation ? original.Width : edited!.Value.Width;
+            PixelSize segmentationSize = EdgeOrSegmentationSize(segmentationSource);
+            int width = segmentationSize.Width;
+            long pixels = (long)width * segmentationSize.Height;
             baseBytes += 7 * pixels + 12L * clusters;
             scratch[count++] = 16 * pixels + 12L * (width + clusters);
         }
@@ -81,24 +93,34 @@ internal static class VideoFrameAnalysisService {
     // готовим общие каналы один раз, затем выполняем независимые методы на неизменяемых входах
     public static VideoFrameAnalysisResult Analyze(AnalysisInputSnapshot original, AnalysisInputSnapshot? edited,
         AnalysisImageSource edgeSource, AnalysisImageSource segmentationSource, VideoFrameAnalysisSettings settings,
-        CancellationToken token, int workers = 1) {
+        CancellationToken token, int workers = 1) =>
+        AnalyzePipeline(original, edited, null, edgeSource, segmentationSource, settings, token, workers);
+
+    // каждый метод получает собственный выбранный растр той же позы, FAST и номера всегда читают оригинал
+    public static VideoFrameAnalysisResult AnalyzePipeline(AnalysisInputSnapshot original, AnalysisInputSnapshot? edited,
+        AnalysisInputSnapshot? sequence, AnalysisImageSource edgeSource, AnalysisImageSource segmentationSource,
+        VideoFrameAnalysisSettings settings, CancellationToken token, int workers) {
         long started = Stopwatch.GetTimestamp();
         VideoAnalysisCapture source = original.Video ?? throw new ArgumentException("Отсутствует снимок оригинала");
-        if (original.Source != AnalysisImageSource.Original || edited is not null &&
-            (edited.Video is not { } processed || !source.Key.IsSameFrame(processed.Key))) {
+        if (original.Source != AnalysisImageSource.Original || !Matches(edited, AnalysisImageSource.Edited) ||
+            !Matches(sequence, AnalysisImageSource.VideoSequence)) {
             throw new InvalidOperationException("Входы анализа относятся к разным кадрам");
         }
-        AnalysisInputSnapshot edgeInput = edgeSource == AnalysisImageSource.Edited ? edited ?? original : original;
-        AnalysisInputSnapshot segInput = segmentationSource == AnalysisImageSource.Edited ? edited ?? original : original;
-        if (settings.EdgeMethod is not null && edgeInput.Source != edgeSource ||
-            settings.Clusters is not null && segInput.Source != segmentationSource) {
-            throw new InvalidOperationException("Нет снимка для выбранного источника метода");
-        }
+        bool Matches(AnalysisInputSnapshot? input, AnalysisImageSource expected) => input is null ||
+            input.Source == expected && input.Video is { } capture && source.Key.IsSameFrame(capture.Key);
+        AnalysisInputSnapshot Resolve(AnalysisImageSource kind) => kind switch {
+            AnalysisImageSource.Original => original,
+            AnalysisImageSource.Edited when edited is not null => edited,
+            AnalysisImageSource.VideoSequence when sequence is not null => sequence,
+            _ => throw new InvalidOperationException("Нет снимка для выбранного источника метода")
+        };
 
         byte[]? originalRgb = null;
         byte[]? editedRgb = null;
         byte[]? originalGray = null;
         byte[]? editedGray = null;
+        byte[]? sequenceRgb = null;
+        byte[]? sequenceGray = null;
         AnalysisEdgeResult? edges = null;
         AnalysisSegmentationResult? segmentation = null;
         AnalysisKeypointResult? keypoints = null;
@@ -107,6 +129,7 @@ internal static class VideoFrameAnalysisService {
         Action[] methods = new Action[4];
         int count = 0;
         if (settings.EdgeMethod is { } method) {
+            AnalysisInputSnapshot edgeInput = Resolve(edgeSource);
             PixelSize size = edgeInput.Video!.Pixels.Size;
             byte[] rgb = ReadRgb(edgeInput);
             byte[] gray = ReadGray(edgeInput, rgb);
@@ -120,6 +143,7 @@ internal static class VideoFrameAnalysisService {
             };
         }
         if (settings.Clusters is { } clusters) {
+            AnalysisInputSnapshot segInput = Resolve(segmentationSource);
             PixelSize size = segInput.Video!.Pixels.Size;
             byte[] rgb = ReadRgb(segInput);
             methods[count++] = () => {
@@ -188,17 +212,21 @@ internal static class VideoFrameAnalysisService {
             if (capture.Pixels.Size != capture.Key.Geometry.OutputSize) {
                 throw new InvalidOperationException("Размер кадра не соответствует выбранному источнику");
             }
-            return input.Source == AnalysisImageSource.Original
-                ? originalRgb ??= capture.Pixels.CopyRgb(token)
-                : editedRgb ??= capture.Pixels.CopyRgb(token);
+            return input.Source switch {
+                AnalysisImageSource.Original => originalRgb ??= capture.Pixels.CopyRgb(token),
+                AnalysisImageSource.Edited => editedRgb ??= capture.Pixels.CopyRgb(token),
+                _ => sequenceRgb ??= capture.Pixels.CopyRgb(token)
+            };
         }
 
         // Робертс, Canny и FAST на общем источнике делят один яркостный буфер
         byte[] ReadGray(AnalysisInputSnapshot input, byte[] rgb) {
             PixelSize size = input.Video!.Pixels.Size;
-            return input.Source == AnalysisImageSource.Original
-                ? originalGray ??= AnalysisImageDecoder.ToLuminance(rgb, size.Width, size.Height, token)
-                : editedGray ??= AnalysisImageDecoder.ToLuminance(rgb, size.Width, size.Height, token);
+            return input.Source switch {
+                AnalysisImageSource.Original => originalGray ??= AnalysisImageDecoder.ToLuminance(rgb, size.Width, size.Height, token),
+                AnalysisImageSource.Edited => editedGray ??= AnalysisImageDecoder.ToLuminance(rgb, size.Width, size.Height, token),
+                _ => sequenceGray ??= AnalysisImageDecoder.ToLuminance(rgb, size.Width, size.Height, token)
+            };
         }
     }
 }

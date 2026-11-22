@@ -28,11 +28,16 @@ internal sealed partial class PreviewCoordinator {
 
     // от нуля читаем физический первый кадр, даже если следующая метка совпадает с его временем
     public long RequestStrict(IVideoMediaSource source, VideoFrameReadRequest start,
-        VideoEditorPlan plan, long budgetBytes, int workers) {
+        VideoEditorPlan plan, long budgetBytes, int workers, StrictVideoPipeline? pipeline = null) {
+        if (pipeline is { } combined && (combined.PersistentBytes < 0 || combined.ScratchBytes < 0 ||
+            combined.SelectedFrameBytes <= 0 || combined.Capacity < 0 || start.FrameOffset != 0 ||
+            start.DecodedAnchor is not null || start.Anchor is { } anchor && (anchor.Ordinal < 0 || !anchor.Time.IsKnown))) {
+            throw new ArgumentException("Неверные параметры строгой комбинированной очереди", nameof(pipeline));
+        }
         if (!start.AtEnd && start.PositionMilliseconds == 0 && start.Anchor is null) {
             start = start with { Anchor = new(new(0, 1000), 0, false) };
         }
-        return RequestCore(source, start, plan, budgetBytes, strict: true, workers);
+        return RequestCore(source, start, plan, budgetBytes, strict: true, workers, pipeline);
     }
 
     // выдаем ровно голову непрерывной очереди, включая разные кадры одного времени
@@ -70,10 +75,7 @@ internal sealed partial class PreviewCoordinator {
                     }
                     frame = input.Current;
                     token.ThrowIfCancellationRequested();
-                    if (frame.Pixels is null || frame.Pixels.Size != request.Size || frame.Ordinal < 0 ||
-                        !frame.Time.IsKnown || frame.Until is { } boundary && (!boundary.IsKnown || boundary.CompareTo(frame.Time) < 0) ||
-                        previous is { } prior && (frame.Ordinal != checked(prior.Ordinal + 1) ||
-                            prior.Until is not { } next || frame.Time.CompareTo(next) != 0) ||
+                    if (!IsValidStrictInput(frame, request.Size, previous) ||
                         (request.Start is { AtEnd: true, SingleFrame: false } && !frame.IsLast) ||
                         (previous is null && request.Start.Anchor is { } anchor &&
                             (frame.Ordinal != anchor.Ordinal || frame.Time.CompareTo(anchor.Time) != 0))) {
@@ -131,8 +133,9 @@ internal sealed partial class PreviewCoordinator {
                     throw new OperationCanceledException(token);
                 }
                 VideoPresentationTime horizon = new(position + AheadMilliseconds, 1000);
+                int capacity = request.Pipeline is null ? MaximumReadyFrames : request.ResumeCapacity;
                 if (stage.Active < request.WorkerLimit && bytes <= request.Budget - reserved &&
-                    ready.Count + stage.Completed.Count + stage.Active < MaximumReadyFrames &&
+                    ready.Count + stage.Completed.Count + stage.Active < capacity &&
                     (through is null || through.Value.CompareTo(horizon) < 0)) {
                     stage.Active++;
                     peakActiveWorkers = Math.Max(peakActiveWorkers, stage.Active);
@@ -144,6 +147,13 @@ internal sealed partial class PreviewCoordinator {
             await changed.WaitAsync(token).ConfigureAwait(false);
         }
     }
+
+    // переход по порядку сверяет правую границу предыдущего кадра, включая одинаковые метки
+    private static bool IsValidStrictInput(TimedVideoInput frame, Avalonia.PixelSize size, TimedVideoInput? previous) =>
+        frame.Pixels is not null && frame.Pixels.Size == size && frame.Ordinal >= 0 && frame.Time.IsKnown &&
+        (frame.Until is not { } boundary || boundary.IsKnown && boundary.CompareTo(frame.Time) >= 0) &&
+        (previous is not { } prior || frame.Ordinal == checked(prior.Ordinal + 1) &&
+            prior.Until is { } next && frame.Time.CompareTo(next) == 0);
 
     // готовый поздний кадр занимает свой резерв, пока не заполнится пропуск перед ним
     private void ProcessStrictFrame(Reading work, StrictStage stage, TimedVideoInput frame, long remaining, long acceptedAt) {

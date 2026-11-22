@@ -18,11 +18,12 @@ internal readonly record struct PreparedVideoWindow(
     public int ResumeCapacity { get; init; }
 }
 
-// обе картинки принадлежат вызывающей стороне до окончания копирования в интерфейс
+// все картинки принадлежат вызывающей стороне до окончания копирования в интерфейс
 internal sealed class PreparedVideoFrame(
     TimedVideoInput input, VideoEditorFrame edited, VideoEditorGeometry geometry, Action release,
-    long? acceptedAt = null) : IDisposable {
+    long? acceptedAt = null, VideoPipelineOutput? pipelineOutput = null) : IDisposable {
     private Action? releaseReservation = release;
+    private VideoPipelineOutput? ownedOutput = pipelineOutput;
 
     public VideoPresentationTime Time => input.Time;
     public VideoPresentationTime? Until => input.Until;
@@ -31,6 +32,7 @@ internal sealed class PreparedVideoFrame(
     public VideoEditorFrame Edited => edited;
     public VideoEditorGeometry Geometry => geometry;
     public long? AcceptedAt => acceptedAt;
+    public VideoPipelineOutput? PipelineOutput => ownedOutput;
 
     // кадр действует на полуоткрытом интервале до следующей подтвержденной метки
     public bool Contains(VideoPresentationTime time) =>
@@ -39,11 +41,16 @@ internal sealed class PreparedVideoFrame(
     // возвращаем резерв один раз, даже если исходник и результат используют один буфер
     public void Dispose() {
         if (Interlocked.Exchange(ref releaseReservation, null) is { } free) {
-            if (!ReferenceEquals(Original, Edited)) {
-                Edited.Dispose();
+            try {
+                Interlocked.Exchange(ref ownedOutput, null)?.Dispose();
             }
-            Original.Dispose();
-            free();
+            finally {
+                if (!ReferenceEquals(Original, Edited)) {
+                    Edited.Dispose();
+                }
+                Original.Dispose();
+                free();
+            }
         }
     }
 }
@@ -52,7 +59,7 @@ internal sealed class PreparedVideoFrame(
 internal sealed partial class PreviewCoordinator : IAsyncDisposable {
     private sealed record RequestData(long Generation, IVideoMediaSource Source, VideoFrameReadRequest Start,
         VideoEditorPlan Plan, long Budget, PixelSize Size, long ReaderBytes, long ResultBytes, long ScratchBytes,
-        bool Strict, int WorkerLimit, int ResumeCapacity);
+        bool Strict, int WorkerLimit, int ResumeCapacity, StrictVideoPipeline? Pipeline);
 
     private sealed class Reading(RequestData request) {
         public RequestData Request { get; } = request;
@@ -105,7 +112,7 @@ internal sealed partial class PreviewCoordinator : IAsyncDisposable {
 
     // используем тот же бюджет и поколение, сохраняя особый порядок потребления строгого запроса
     private long RequestCore(IVideoMediaSource source, VideoFrameReadRequest start, VideoEditorPlan plan, long budgetBytes,
-        bool strict, int workers) {
+        bool strict, int workers, StrictVideoPipeline? pipeline = null) {
         PixelSize size = source.FrameSize;
         long readerBytes = source.ReadScratchBytes;
         if (size.Width <= 0 || size.Height <= 0 || readerBytes < 0 || budgetBytes <= 0 ||
@@ -119,6 +126,15 @@ internal sealed partial class PreviewCoordinator : IAsyncDisposable {
         int limit = strict ? (int)Math.Min(plan.HasSteps ? workers : 1, frameBudget / frameBytes) : 1;
         int capacity = strict && limit > 0
             ? (int)Math.Min(MaximumReadyFrames, 1 + (frameBudget - frameBytes) / resultBytes) : 0;
+        if (pipeline is not null) {
+            capacity = Math.Min(capacity, pipeline.Capacity);
+            limit = capacity > 0 ? 1 : 0;
+            readerBytes = checked(readerBytes + pipeline.PersistentBytes);
+            resultBytes = checked(resultBytes + pipeline.SelectedFrameBytes);
+            scratchBytes = checked(scratchBytes + pipeline.ScratchBytes);
+            // лимит очереди определяет самый тесный участок, остальные буферы учитываются по факту владения
+            budgetBytes = capacity > 0 ? checked(readerBytes + capacity * resultBytes + scratchBytes) : 0;
+        }
         lock (gate) {
             ObjectDisposedException.ThrowIf(disposed, this);
             Invalidate();
@@ -129,7 +145,7 @@ internal sealed partial class PreviewCoordinator : IAsyncDisposable {
             resumeCapacity = capacity;
             strictMeasuring = strictRequest = strict;
             pending = new(generation, source, start, plan, budgetBytes, size, readerBytes, resultBytes, scratchBytes,
-                strict, limit, capacity);
+                strict, limit, capacity, pipeline);
             producer ??= Task.Run(RunAsync);
             return generation;
         }
@@ -239,7 +255,10 @@ internal sealed partial class PreviewCoordinator : IAsyncDisposable {
                 reading = work = new(request);
             }
             try {
-                if (work.Request.Strict) {
+                if (work.Request.Pipeline is { } pipeline) {
+                    await PrepareStrictPipelineAsync(work, pipeline).ConfigureAwait(false);
+                }
+                else if (work.Request.Strict) {
                     await PrepareStrictAsync(work).ConfigureAwait(false);
                 }
                 else {
@@ -354,7 +373,8 @@ internal sealed partial class PreviewCoordinator : IAsyncDisposable {
     }
 
     // ждём свободной памяти и места в ближайшем участке до следующего чтения или копирования
-    private async Task ReserveAsync(RequestData request, long bytes, bool limitWindow, CancellationToken token) {
+    private async Task ReserveAsync(RequestData request, long bytes, bool limitWindow, CancellationToken token,
+        bool waitForPrevious = false) {
         while (true) {
             token.ThrowIfCancellationRequested();
             lock (gate) {
@@ -364,7 +384,8 @@ internal sealed partial class PreviewCoordinator : IAsyncDisposable {
                 VideoPresentationTime horizon = new(position + AheadMilliseconds, 1000);
                 bool windowHasRoom = ready.Count < MaximumReadyFrames &&
                     (through is null || through.Value.CompareTo(horizon) < 0);
-                if ((!limitWindow || windowHasRoom) && bytes <= request.Budget - reserved) {
+                if ((!limitWindow || windowHasRoom) && (!waitForPrevious || reserved == 0) &&
+                    bytes <= request.Budget - reserved) {
                     reserved += bytes;
                     peakReserved = Math.Max(peakReserved, reserved);
                     return;

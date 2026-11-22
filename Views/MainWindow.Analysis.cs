@@ -14,6 +14,8 @@ using ImageVisionApp.ViewModels;
 namespace ImageVisionApp.Views;
 
 public partial class MainWindow {
+    private TabStrip? analysisPreviewTabs;
+
     private Grid CreateAnalysisPage() {
         Grid workspace = new Grid {
             ColumnDefinitions = new ColumnDefinitions("280,*"),
@@ -113,6 +115,12 @@ public partial class MainWindow {
         Button run = new Button { HorizontalAlignment = HorizontalAlignment.Stretch };
         run.Bind(ContentProperty, new Binding(nameof(MainViewModel.AnalysisRunButtonText)));
         run.Bind(IsEnabledProperty, new Binding(nameof(MainViewModel.CanRunAnalysis)));
+        // ручной запрос видеоряда запускает расчет для видимого конечного результата
+        run.Click += (_, _) => {
+            if (DataContext is MainViewModel { VideoAnalysisUsesSequence: true } && analysisPreviewTabs is { } tabs) {
+                tabs.SelectedIndex = 1;
+            }
+        };
         run.Click += RunAnalysisButton_OnClick;
         StackPanel actions = new StackPanel { Spacing = 8 };
         actions.Children.Add(automatic);
@@ -264,15 +272,30 @@ public partial class MainWindow {
 
     // показываем отдельно выбранный источник вычисления для каждого видео-метода
     private static StackPanel CreateVideoAnalysisSourcePicker(string label, string selectedProperty) {
+        ComboBoxItem sequence = new() { Content = "Результат видеоряда" };
         ComboBox source = new() {
-            ItemsSource = new[] { "Оригинал", "Результат редактирования" },
+            Items = { new ComboBoxItem { Content = "Оригинал" }, new ComboBoxItem { Content = "Результат редактирования" }, sequence },
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
+        BindSequenceAnalysisChoice(sequence, source);
         AutomationProperties.SetName(source, label);
         source.Bind(SelectingItemsControl.SelectedIndexProperty, new Binding(selectedProperty) { Mode = BindingMode.TwoWay });
         StackPanel panel = new() { Spacing = 4, Children = { new TextBlock { Text = label }, source } };
         panel.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
         return panel;
+    }
+
+    // недоступный вход остается видимым, подсказка объясняет встречную зависимость
+    private static void BindSequenceAnalysisChoice(Control control, Control owner) {
+        string path = $"DataContext.{nameof(MainViewModel.SelectedVideoForegroundSourceIndex)}";
+        control.Bind(IsEnabledProperty, new Binding(path) { Source = owner,
+            Converter = new FuncValueConverter<int, bool>(value => value != 2)
+        });
+        control.Bind(ToolTip.TipProperty, new Binding(path) { Source = owner,
+            Converter = new FuncValueConverter<int, string?>(value => value == 2
+                ? "Связь недоступна: Анализ → Видеоряд → Анализ образует цикл" : null)
+        });
+        ToolTip.SetShowOnDisabled(control, true);
     }
 
     private Border CreateAnalysisImageCard() {
@@ -320,6 +343,7 @@ public partial class MainWindow {
             SelectedIndex = 0,
             HorizontalAlignment = HorizontalAlignment.Left
         };
+        analysisPreviewTabs = tabs;
         Button videoDisplay = CreateVideoAnalysisDisplayButton();
         videoDisplay.IsVisible = false;
         tabs.SelectionChanged += (_, e) => {
@@ -394,11 +418,15 @@ public partial class MainWindow {
             nameof(MainViewModel.SelectedVideoAnalysisSourceIndex), (viewModel, value) => viewModel.SelectedVideoAnalysisSourceIndex = value));
         options.Children.Add(new Separator());
         options.Children.Add(new TextBlock { Text = "Подложка результата", FontWeight = FontWeight.SemiBold });
-        string[] backgrounds = ["Оригинал", "Результат редактирования", "Сегментация", "Без изображения"];
+        string[] backgrounds = ["Оригинал", "Результат редактирования", "Сегментация", "Без изображения", "Результат видеоряда"];
         for (int i = 0; i < backgrounds.Length; i++) {
-            options.Children.Add(CreateVideoAnalysisDisplayChoice(backgrounds[i], "VideoAnalysisBackground", i,
+            RadioButton choice = CreateVideoAnalysisDisplayChoice(backgrounds[i], "VideoAnalysisBackground", i,
                 nameof(MainViewModel.SelectedVideoAnalysisBackgroundIndex),
-                (viewModel, value) => viewModel.SelectedVideoAnalysisBackgroundIndex = value));
+                (viewModel, value) => viewModel.SelectedVideoAnalysisBackgroundIndex = value);
+            if (i == 4) {
+                BindSequenceAnalysisChoice(choice, this);
+            }
+            options.Children.Add(choice);
         }
         return CreateAnalysisDisplayFlyout(options);
     }

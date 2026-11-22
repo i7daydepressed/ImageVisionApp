@@ -10,7 +10,7 @@ using ImageVisionApp.Services;
 namespace ImageVisionApp.ViewModels;
 
 public partial class MainViewModel {
-    private enum VideoAnalysisBackground { Original, Edited, Segmentation, Black }
+    private enum VideoAnalysisBackground { Original, Edited, Segmentation, Black, VideoSequence }
     private readonly record struct VideoAnalysisView(VideoAnalysisFrameKey Key, Bitmap? Bitmap,
         AnalysisSegmentationResult? Segmentation, bool WaitForEdited);
 
@@ -54,16 +54,24 @@ public partial class MainViewModel {
     public int SelectedVideoAnalysisBackgroundIndex {
         get => (int)videoAnalysisBackground;
         set {
-            if (IsVideoOpen && value >= 0 && value <= (int)VideoAnalysisBackground.Black) {
-                ChangeVideoAnalysisBackground((VideoAnalysisBackground)value);
+            if (IsVideoOpen && value >= 0 && value <= (int)VideoAnalysisBackground.VideoSequence) {
+                ChangeVideoAnalysisBackground((VideoAnalysisBackground)value, fromSelector: true);
             }
         }
     }
 
     // связываем галочку сегментации с подложкой и сохраняем последний выбор остальных подложек
-    private void ChangeVideoAnalysisBackground(VideoAnalysisBackground background) {
+    private void ChangeVideoAnalysisBackground(VideoAnalysisBackground background, bool fromSelector = false) {
         VideoAnalysisBackground previous = videoAnalysisBackground;
         if (previous == background) {
+            return;
+        }
+        // пока была выбрана сегментация, встречная связь могла сделать запомненную подложку недоступной
+        if (!fromSelector && previous == VideoAnalysisBackground.Segmentation && background == VideoAnalysisBackground.VideoSequence &&
+            VideoForegroundSource == VideoPipelineStage.Analysis) {
+            background = VideoAnalysisBackground.Original;
+        }
+        if (!AcceptVideoAnalysisChoice(videoEdgeSource, videoSegmentationSource, background)) {
             return;
         }
         if (previous != VideoAnalysisBackground.Segmentation) {
@@ -102,12 +110,12 @@ public partial class MainViewModel {
         videoAnalysisRequest is { } request && NeedsEditedVideoAnalysisInput(request);
     private bool WantsVideoAnalysisEditedInput => VideoAnalysisManualNeedsEditedInput ||
         videoAnalysisVisible && (videoAnalysisResultTabSelected
-            ? videoAnalysisBackground == VideoAnalysisBackground.Edited ||
-              videoAnalysisBackground == VideoAnalysisBackground.Segmentation && videoSegmentationSource == AnalysisImageSource.Edited
+            ? !VideoAnalysisUsesSequence && (videoAnalysisBackground == VideoAnalysisBackground.Edited ||
+              videoAnalysisBackground == VideoAnalysisBackground.Segmentation && videoSegmentationSource == AnalysisImageSource.Edited)
             : videoAnalysisDisplayedSource == AnalysisImageSource.Edited);
     private bool ShouldRetryVideoAnalysisEditedInput =>
         videoAnalysisEditedFailure is not null && videoAnalysisEditedBudget != PreviewSettings.BudgetBytes;
-    private Bitmap? VideoAnalysisResultImage => videoAnalysisComposition ??
+    private Bitmap? VideoAnalysisResultImage => VideoAnalysisUsesSequence ? combinedVideoAnalysisResult : videoAnalysisComposition ??
         (TryResolveVideoAnalysisView(out VideoAnalysisView view) ? view.Bitmap : null);
 
     // показываем ожидание вычислений отдельно от уже доступных пикселей подложки
@@ -163,6 +171,7 @@ public partial class MainViewModel {
 
     // меняем только показ и сразу возвращаем подложку, если прежние отметки уже не актуальны
     private void RefreshVideoAnalysisComposition() {
+        UpdateCombinedVideoAnalysisRoute();
         UpdateVideoAnalysisPipelineDescription();
         videoAnalysisViewRevision++;
         videoAnalysisCompositionFailure = null;
@@ -192,7 +201,7 @@ public partial class MainViewModel {
                         edited.Plan is { } plan) {
                         await PrepareVideoAnalysisEditedInputAsync(edited, plan, stop.Token);
                     }
-                    if (stop.IsCancellationRequested || revision != videoAnalysisViewRevision || !videoAnalysisVisible ||
+                    if (stop.IsCancellationRequested || revision != videoAnalysisViewRevision || !videoAnalysisVisible || VideoAnalysisUsesSequence ||
                         !TryResolveVideoAnalysisView(out VideoAnalysisView view) || view.WaitForEdited) {
                         continue;
                     }

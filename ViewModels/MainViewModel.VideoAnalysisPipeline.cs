@@ -1,12 +1,60 @@
 using System;
 using System.Collections.Generic;
 using ImageVisionApp.Models;
+using ImageVisionApp.Services;
 
 namespace ImageVisionApp.ViewModels;
 
 public partial class MainViewModel {
     private readonly record struct VideoAnalysisPipeline(VideoPipelinePlan Queue,
         AnalysisImageSource? EdgeSource, AnalysisImageSource? SegmentationSource, bool Fast, bool Plate);
+
+    internal bool VideoAnalysisUsesSequence => IsVideoOpen && (videoAnalysisBackground == VideoAnalysisBackground.VideoSequence ||
+        isEdgesAnalysisEnabled && videoEdgeSource == AnalysisImageSource.VideoSequence ||
+        IsSegmentationAnalysisEnabled && videoSegmentationSource == AnalysisImageSource.VideoSequence);
+
+    // проверяем и сохраненные входы выключенных методов, чтобы их включение не замыкало очередь
+    private bool TryValidateVideoSequenceSource(VideoPipelineStage candidate, out string? error) =>
+        TryValidateAnalysisSources(videoEdgeSource, videoSegmentationSource, videoAnalysisBackground, candidate, out error);
+
+    // при неудаче оставляем прежние источники и показываем тот же путь цикла, что проверил граф
+    private bool AcceptVideoAnalysisChoice(AnalysisImageSource edge, AnalysisImageSource segmentation, VideoAnalysisBackground background) {
+        if (TryValidateAnalysisSources(edge, segmentation, background, VideoForegroundSource, out string? error)) {
+            return true;
+        }
+        AnalysisStatusMessage = error!;
+        return false;
+    }
+
+    // проверяем предполагаемую связь до смены состояния и отмены нужного пользователю расчета
+    private static bool TryValidateAnalysisSources(AnalysisImageSource edge, AnalysisImageSource segmentation,
+        VideoAnalysisBackground background, VideoPipelineStage sequenceInput, out string? error) {
+        VideoPipelineStage inputs = VideoPipelinePlan.FromAnalysisSource(edge) | VideoPipelinePlan.FromAnalysisSource(segmentation) |
+            GetAnalysisBackdropStage(background, segmentation);
+        return VideoPipelinePlan.TryCreate(inputs, sequenceInput, VideoPipelineStage.Analysis, out _, out error);
+    }
+
+    // источник сегментированной подложки задает ее систему координат
+    private static VideoPipelineStage GetAnalysisBackdropStage(VideoAnalysisBackground background, AnalysisImageSource segmentation) =>
+        background switch {
+            VideoAnalysisBackground.Original => VideoPipelineStage.Original,
+            VideoAnalysisBackground.Edited => VideoPipelineStage.Editing,
+            VideoAnalysisBackground.Segmentation => VideoPipelinePlan.FromAnalysisSource(segmentation),
+            VideoAnalysisBackground.VideoSequence => VideoPipelineStage.VideoSequence,
+            _ => VideoPipelineStage.None
+        };
+
+    // фиксируем все настройки одного последовательного прохода без обращения рабочего потока к экрану
+    private VideoSequenceAnalysisPlan CaptureVideoSequenceAnalysisPlan(MediaDocument document, VideoPreviewSettings resources) {
+        if (!AreAllAnalysisParametersValid) {
+            throw new InvalidOperationException("Проверьте параметры выбранных методов анализа");
+        }
+        VideoAnalysisPipeline pipeline = CaptureVideoAnalysisPipeline();
+        return new(document, videoEditorPlan, resources, VideoForegroundSource, CaptureVideoFrameAnalysisSettings(pipeline),
+            pipeline.EdgeSource ?? AnalysisImageSource.Original, pipeline.SegmentationSource ?? AnalysisImageSource.Original,
+            GetAnalysisBackdropStage(videoAnalysisBackground, videoSegmentationSource),
+            videoAnalysisBackground == VideoAnalysisBackground.Segmentation, VisiblePlateRegionLimit);
+    }
 
     private string? videoAnalysisPipelineDescription;
     public string? VideoAnalysisPipelineDescription {
@@ -24,11 +72,12 @@ public partial class MainViewModel {
         VideoAnalysisPipeline pipeline = CaptureVideoAnalysisPipeline();
         List<string> original = [];
         List<string> edited = [];
+        List<string> sequence = [];
         if (pipeline.EdgeSource is { } edge) {
-            (edge == AnalysisImageSource.Edited ? edited : original).Add(IsCannyEdgeMethod ? "Canny" : "Робертс");
+            Branch(edge).Add(IsCannyEdgeMethod ? "Canny" : "Робертс");
         }
         if (pipeline.SegmentationSource is { } segmentation) {
-            (segmentation == AnalysisImageSource.Edited ? edited : original).Add("K-means");
+            Branch(segmentation).Add("K-means");
         }
         if (pipeline.Fast) {
             original.Add("FAST");
@@ -43,9 +92,13 @@ public partial class MainViewModel {
         if (original.Count > 0) {
             lines.Add(DescribeCalculationBranch(VideoPipelineStage.Original, original));
         }
+        if (sequence.Count > 0) {
+            lines.Add(DescribeCalculationBranch(VideoPipelineStage.VideoSequence, sequence));
+        }
         string backdrop = videoAnalysisBackground switch {
             VideoAnalysisBackground.Original => DescribePaths(VideoPipelineStage.Original),
             VideoAnalysisBackground.Edited => DescribePaths(VideoPipelineStage.Editing),
+            VideoAnalysisBackground.VideoSequence => DescribePaths(VideoPipelineStage.VideoSequence),
             VideoAnalysisBackground.Segmentation => $"{DescribePaths(VideoPipelinePlan.FromAnalysisSource(
                 pipeline.SegmentationSource ?? AnalysisImageSource.Original))} → Сегментация",
             _ => "Без изображения"
@@ -53,12 +106,26 @@ public partial class MainViewModel {
         lines.Add($"Подложка: {backdrop}");
         VideoAnalysisPipelineDescription = string.Join(Environment.NewLine, lines);
 
+        List<string> Branch(AnalysisImageSource source) => source switch {
+            AnalysisImageSource.Edited => edited, AnalysisImageSource.VideoSequence => sequence, _ => original
+        };
+
         // ветвь метода заканчивается анализом и использует фактический путь входного участка
         string DescribeCalculationBranch(VideoPipelineStage source, List<string> methods) =>
             $"Расчёт: {DescribePaths(source)} → {VideoPipelinePlan.GetStageName(VideoPipelineStage.Analysis)} ({string.Join(", ", methods)})";
 
         // перечисляем подтвержденные пути источника с сохранением их ветвления
         string DescribePaths(VideoPipelineStage source) => string.Join(" или ", pipeline.Queue.DescribePathsTo(source));
+    }
+
+    // берем те же методы и параметры для ручного анализа и кадров комбинированной очереди
+    private VideoFrameAnalysisSettings CaptureVideoFrameAnalysisSettings(VideoAnalysisPipeline pipeline) {
+        TryGetCannyThresholds(out double lower, out double upper);
+        TryGetSegmentationClusterCount(out int clusters);
+        TryGetFastThreshold(out int threshold);
+        return new(pipeline.EdgeSource is not null ? selectedEdgeMethod : null, lower, upper,
+            pipeline.SegmentationSource is not null ? clusters : null, pipeline.Fast ? threshold : null,
+            fastNonmaxSuppression) { Plate = pipeline.Plate };
     }
 
     // фиксируем маршруты включенных методов тем же снимком для подготовки кадра и подписи
@@ -73,7 +140,8 @@ public partial class MainViewModel {
         if (segmentation is { } segmentationSource) {
             inputs |= VideoPipelinePlan.FromAnalysisSource(segmentationSource);
         }
-        if (!VideoPipelinePlan.TryCreate(inputs, VideoPipelineStage.Original, VideoPipelineStage.Analysis,
+        inputs |= GetAnalysisBackdropStage(videoAnalysisBackground, videoSegmentationSource);
+        if (!VideoPipelinePlan.TryCreate(inputs, VideoForegroundSource, VideoPipelineStage.Analysis,
             out VideoPipelinePlan? plan, out string? error)) {
             throw new InvalidOperationException(error);
         }

@@ -29,6 +29,9 @@ public partial class MainViewModel {
 
     // первый кадр может быть выдан до запуска звука, в том числе при запросе точного начала или конца
     private bool TryShowFirstStrictFrame() {
+        if (combinedStrictError is not null) {
+            return false;
+        }
         if (preparedFrom is not null) {
             return true;
         }
@@ -61,6 +64,10 @@ public partial class MainViewModel {
     private void RefreshStrictVideo(VideoPlaybackSession playback) {
         VLCState state = playback.State;
         long duration = Math.Max(PlaybackStatus.Duration, playback.Duration);
+        if (combinedStrictError is { } unavailable) {
+            ReportStrictVideo(playback, state, duration, unavailable);
+            return;
+        }
         if (videoPinnedFrame is not null && preparedFrom is not null && !videoWantsToPlay) {
             ReportStrictVideo(playback, state, duration, videoFrameStepNotice);
             return;
@@ -73,7 +80,7 @@ public partial class MainViewModel {
                     if (state == VLCState.Playing) {
                         playback.SetPaused(true);
                     }
-                    ReportStrictVideo(playback, state, duration, "Подготовка строгого кадра…");
+                    ReportStrictVideo(playback, state, duration, combinedStrictError ?? "Подготовка строгого кадра…");
                 }
                 return;
             }

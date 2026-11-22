@@ -55,6 +55,8 @@ public partial class MainViewModel {
 
     // очищаем источник предыдущего файла и применяем текущий выбор к новому видео
     private void ResetPreparedVideoDocument() {
+        combinedStrictActive = false;
+        combinedStrictError = null;
         CancelPreviewModeHandoff();
         preparedVideo?.Cancel();
         preparedSource = null;
@@ -195,6 +197,8 @@ public partial class MainViewModel {
         CancelVideoFrameStep();
         bool wasPrepared = preparedSource is not null;
         bool wasStrict = IsStrictVideo || PreviewSettings.Mode == VideoPreviewMode.Strict;
+        combinedStrictActive = false;
+        combinedStrictError = null;
         long duration = PlaybackStatus.Duration;
         bool atEnd = duration > 0 && position >= duration ||
             wasPrepared && preparedAtEnd && position == preparedPosition;
@@ -243,9 +247,12 @@ public partial class MainViewModel {
         videoAnalysisApplyingPlan || IsReadingVideoAnalysisLiveFallback || HasLivePreviewSourceWork;
     private bool HasLivePreviewSourceWork => readingVideoSeek || videoPreviewExecutor is { Metrics.ReservedBytes: > 0 };
 
+    private bool WaitingForPreparedVideoBuffers => HasLivePreviewWork ||
+        IsCombinedStrictOutputSelected && videoForegroundStop is not null;
+
     // начинаем новые расчеты только после возврата буферов другого режима
     private bool WaitForVideoModeHandoff(VideoPlaybackSession? playback) {
-        if (preparedOpening is not null || preparedStartPending && HasLivePreviewWork) {
+        if (preparedOpening is not null || preparedStartPending && WaitingForPreparedVideoBuffers) {
             ShowVideoModeHandoff(playback, preparedPosition,
                 preparedOpening is not null ? VideoPreviewModeNotice! : "Освобождаем буферы живого предпросмотра…");
             return true;
@@ -321,12 +328,19 @@ public partial class MainViewModel {
         if (!preservePlay) {
             videoHandoffReplay = false;
         }
+        combinedStrictActive = IsCombinedStrictOutputSelected;
+        combinedStrictError = null;
+        if (combinedStrictActive) {
+            videoForegroundStop?.Cancel();
+            ClearVideoForeground();
+        }
         try {
             (preparedSource as FfprobeVideoMediaSource)?.EnsureCurrentFile();
         }
         catch (VideoFileChangedException error) {
             videoWantsToPlay &= preservePlay;
-            SwitchPreparedPreviewToLive(position, error.Message);
+            preparedPosition = position;
+            FailPreparedVideo(error.Message);
             return;
         }
         VideoPresentationTime time = new(position, 1000);
@@ -351,7 +365,7 @@ public partial class MainViewModel {
         }
         if (!keepWindow) {
             preparedStartPending = true;
-            if (!HasLivePreviewWork) {
+            if (!WaitingForPreparedVideoBuffers) {
                 StartPreparedVideoRequest();
                 if (preparedSource is null) {
                     return;
@@ -360,7 +374,7 @@ public partial class MainViewModel {
         }
         EnsureVideoPlaybackTimer();
         UpdatePlaybackStatus(PlaybackStatus with { Position = preparedPosition, IsPlaying = videoWantsToPlay,
-            Notice = "Подготовка кадра…" });
+            Notice = combinedStrictError ?? "Подготовка кадра…" });
         if (keepWindow && videoPlayback is { } playback) {
             RefreshPreparedVideo(playback);
         }
@@ -380,9 +394,25 @@ public partial class MainViewModel {
             try {
                 preparedVideo ??= new PreviewCoordinator();
                 VideoFrameReadRequest start = new(preparedPosition, preparedAtEnd);
+                combinedStrictActive = IsCombinedStrictOutputSelected;
+                StrictVideoPipeline? pipeline = null;
+                VideoEditorPlan editor = videoEditorPlan;
+                if (combinedStrictActive && CurrentDocument is { } document) {
+                    if (source is FfprobeVideoMediaSource concrete) {
+                        source = concrete.WithDecoderThreads(PreviewSettings.ForegroundDecoderThreads);
+                    }
+                    ResetCombinedOutputMeasurements();
+                    CombinedVideoWork work = CaptureCombinedVideoWork(document, source);
+                    if (!work.NeedsEditing && editor.HasSteps) {
+                        editor = new(editor.Revision, []);
+                    }
+                    long generation = combinedMeasurementGeneration;
+                    pipeline = new(work.Create, work.PersistentBytes, work.ScratchBytes, work.SelectedFrameBytes, work.Capacity,
+                        (stage, bytes) => combinedMeasurements.Reserve(generation, stage, bytes));
+                }
                 preparedGeneration = IsStrictVideo
                     ? preparedVideo.RequestStrict(source, start with { Anchor = strictStartAnchor },
-                        videoEditorPlan, PreviewSettings.BudgetBytes, PreviewSettings.EffectiveWorkers)
+                        editor, PreviewSettings.BudgetBytes, PreviewSettings.EffectiveWorkers, pipeline)
                     : preparedVideo.Request(source, start, videoEditorPlan, PreviewSettings.BudgetBytes);
             }
             catch (Exception error) {
@@ -397,7 +427,7 @@ public partial class MainViewModel {
             bool covered = IsStrictVideo ? TryShowFirstStrictFrame() : AdvancePreparedVideo(preparedPosition);
             if (preparedSource is not null) {
                 UpdatePlaybackStatus(PlaybackStatus with {
-                    Notice = covered ? "Подготовка воспроизведения…" : "Подготовка кадра…"
+                    Notice = combinedStrictError ?? (covered ? "Подготовка воспроизведения…" : "Подготовка кадра…")
                 });
             }
         }
@@ -459,8 +489,11 @@ public partial class MainViewModel {
             InvalidateVideoForeground();
             RequestPreparedVideo(0, atEnd: false);
         }
-        else if (pin is not null) {
+        else if (pin is not null || combinedStrictError is not null) {
             RequestPreparedVideo(preparedPosition, atEnd: false, strictAnchor: IsStrictVideo ? pin : null);
+        }
+        if (combinedStrictError is not null) {
+            return;
         }
         videoWantsToPlay = true;
         if (IsStrictVideo && !preparedStartPending) {
@@ -628,6 +661,9 @@ public partial class MainViewModel {
             videoEditorSourceError = null;
             videoEditorError = null;
             VideoPreviewRevision++;
+            if (combinedStrictActive && frame.PipelineOutput is { } output && IsCombinedStrictOutputSelected) {
+                PublishCombinedOutput(output);
+            }
             OnPropertyChanged(nameof(VideoPreviewFrame));
             OnPropertyChanged(nameof(VideoPreviewRevision));
             NotifyVideoEditorSource();
@@ -667,6 +703,24 @@ public partial class MainViewModel {
 
     // при отказе проверенного источника передаем ту же позицию и команду живому предпросмотру
     private void FailPreparedVideo(string reason) {
+        if (IsCombinedStrictOutputSelected && combinedStrictActive) {
+            videoWantsToPlay = false;
+            videoHandoffReplay = false;
+            preparedNeedsSeek = false;
+            preparedStartPending = false;
+            strictClockStartedAt = null;
+            videoPlayback?.SetPaused(true);
+            preparedVideo?.Cancel();
+            ClearVideoForeground();
+            combinedStrictError = $"Строгий показ недоступен: {reason}";
+            SetVideoForegroundStatus(combinedStrictError);
+            combinedVideoAnalysisNotice = combinedStrictError;
+            if (IsCombinedAnalysisOutputSelected) {
+                RefreshVideoAnalysisStatus();
+            }
+            UpdatePlaybackStatus(PlaybackStatus with { IsPlaying = false, Notice = combinedStrictError });
+            return;
+        }
         if (IsStrictVideo || PreviewSettings.Mode == VideoPreviewMode.Strict) {
             videoWantsToPlay = false;
             videoHandoffReplay = false;

@@ -22,6 +22,8 @@ public partial class MainViewModel {
     private bool videoForegroundApplying;
     private int videoForegroundInputRevision = -1;
     private int videoForegroundViewIndex;
+    private int videoForegroundSourceIndex;
+    private string? videoForegroundPath;
     private (long Position, long ObservedAt, long Target)? videoForegroundLiveClock;
     private CancellationTokenSource? videoForegroundStop;
     private SemaphoreSlim? videoForegroundWake;
@@ -35,7 +37,8 @@ public partial class MainViewModel {
         ? null
         : CurrentDocument?.Kind switch {
             MediaKind.Image => OriginalImage,
-            MediaKind.Video => videoForegroundOriginal ?? VideoPreviewFrame,
+            MediaKind.Video => videoForegroundOriginal ??
+                (!VideoForegroundEnabled || VideoForegroundSource == VideoPipelineStage.Original ? VideoPreviewFrame : null),
             _ => null
         };
     public Bitmap? VideoForegroundPreview => !VideoForegroundEnabled && IsVideoOpen
@@ -44,6 +47,10 @@ public partial class MainViewModel {
     public bool CanApplyVideoForeground => IsVideoForegroundOutputSelected && IsVideoOpen &&
         PlaybackStatus.CanPlay && !mediaPreviewsDisposed;
     public string VideoForegroundStatus => videoForegroundStatus;
+    public string? VideoForegroundPath {
+        get => videoForegroundPath;
+        private set => SetProperty(ref videoForegroundPath, value);
+    }
     public int VideoForegroundRevision { get; private set; }
     internal bool IsVideoForegroundOutputSelected => videoForegroundVisible && VideoForegroundEnabled;
 
@@ -56,10 +63,36 @@ public partial class MainViewModel {
             }
             OnPropertyChanged(nameof(CanDisplayVideoForegroundEffect));
             OnPropertyChanged(nameof(CanApplyVideoForeground));
-            if (videoForegroundVisible) {
-                ResetVisibleVideoOutput();
-            }
             RestartVideoForeground();
+        }
+    }
+
+    private VideoPipelineStage VideoForegroundSource => videoForegroundSourceIndex switch {
+        1 => VideoPipelineStage.Editing,
+        2 => VideoPipelineStage.Analysis,
+        _ => VideoPipelineStage.Original
+    };
+
+    // новая цепочка начинает предысторию с нуля на той же позиции общего плеера
+    public int SelectedVideoForegroundSourceIndex {
+        get => videoForegroundSourceIndex;
+        set {
+            if (!IsVideoOpen || value is < 0 or > 2 || value == videoForegroundSourceIndex) {
+                return;
+            }
+            VideoPipelineStage candidate = value switch {
+                1 => VideoPipelineStage.Editing,
+                2 => VideoPipelineStage.Analysis,
+                _ => VideoPipelineStage.Original
+            };
+            if (!TryValidateVideoSequenceSource(candidate, out string? error)) {
+                SetVideoForegroundStatus(error ?? "Невозможно выбрать источник");
+                OnPropertyChanged(nameof(SelectedVideoForegroundSourceIndex));
+                return;
+            }
+            if (SetProperty(ref videoForegroundSourceIndex, value)) {
+                RestartVideoForeground();
+            }
         }
     }
 
@@ -98,12 +131,19 @@ public partial class MainViewModel {
         videoForegroundFailed = false;
         videoForegroundApplying = true;
         PauseVideoPlayback();
+        if (combinedStrictError is not null && IsCombinedStrictOutputSelected) {
+            RestartCombinedStrictOutput();
+        }
         RefreshVideoForeground();
     }
 
     // пересчитываем на текущей позиции при смене метода или его бюджета
     private void RestartVideoForeground() {
+        if (videoForegroundVisible) {
+            ResetVisibleVideoOutput();
+        }
         InvalidateVideoForeground();
+        RestartCombinedStrictOutput();
         RefreshVideoForeground();
     }
 
@@ -112,8 +152,10 @@ public partial class MainViewModel {
         videoForegroundFailed = false;
         videoForegroundApplying = false;
         videoForegroundLiveClock = null;
+        VideoForegroundPath = null;
         videoForegroundStop?.Cancel();
         ClearVideoForeground();
+        ResetCombinedOutputMeasurements();
         SetVideoForegroundStatus(!IsVideoOpen ? ForegroundNoVideo :
             VideoForegroundEnabled ? ForegroundPreparing : ForegroundDisabled);
     }
@@ -121,7 +163,8 @@ public partial class MainViewModel {
     // обновляем цель из общей шкалы, а точный кадр берем по номеру при одинаковых PTS
     private bool TryGetVideoForegroundRequest(out VideoFrameReadRequest request) {
         request = default;
-        if (!videoForegroundVisible || mediaPreviewsDisposed || !CanDisplayVideoForegroundEffect ||
+        if (!WantsVideoTemporalPipeline || mediaPreviewsDisposed ||
+            IsCombinedStrictOutputSelected && videoPinnedFrame is null ||
             videoPlayback?.State is not (VLCState.Playing or VLCState.Paused or VLCState.Ended) ||
             requestedVideoSeek is not null || liveAnalysisSeekTarget is not null || videoFrameStep is not null ||
             preparedOpening is not null || livePreviewHandoff is not null || videoRestarting ||
@@ -173,7 +216,7 @@ public partial class MainViewModel {
 
     // оставляем одну цель чтения и будим уже открытый последовательный источник
     private void RefreshVideoForeground() {
-        if (!videoForegroundVisible || mediaPreviewsDisposed) {
+        if ((!videoForegroundVisible && !IsCombinedAnalysisOutputSelected) || mediaPreviewsDisposed) {
             return;
         }
         if (videoForegroundOriginal is null) {
@@ -196,6 +239,9 @@ public partial class MainViewModel {
         }
         if (!VideoForegroundEnabled) {
             SetVideoForegroundStatus(ForegroundDisabled);
+            return;
+        }
+        if (IsCombinedStrictOutputSelected && videoPinnedFrame is null) {
             return;
         }
         if (videoForegroundFailed || !TryGetVideoForegroundRequest(out VideoFrameReadRequest request) ||
@@ -224,20 +270,13 @@ public partial class MainViewModel {
         try {
             SetVideoForegroundStatus(ForegroundPreparing);
             VideoPreviewSettings settings = PreviewSettings;
-            var source = await Task.Run(() => FfprobeVideoMediaSource.OpenWithDecoderThreadsAsync(path, identity,
+            IVideoMediaSource source = await Task.Run(() => FfprobeVideoMediaSource.OpenWithDecoderThreadsAsync(path, identity,
                 settings.ForegroundDecoderThreads, stop.Token), stop.Token);
             if (!IsCurrentVideoForegroundWork()) {
                 return;
             }
-            long required = VideoForegroundSession.GetRequiredBufferBytes(source);
-            if (required > settings.ForegroundBudgetBytes) {
-                videoForegroundFailed = true;
-                long neededMiB = (long)Math.Ceiling(required / (1024d * 1024));
-                SetVideoForegroundStatus($"Недостаточно бюджета видеоряда. Нужно от {neededMiB} МиБ, выбрано " +
-                    $"{settings.ForegroundBudgetMiB} МиБ. Измените бюджет в настройках медиаконтейнера.");
-                return;
-            }
-            session = await Task.Run(() => new VideoForegroundSession(source, stop.Token), stop.Token);
+            CombinedVideoWork plan = CaptureCombinedVideoWork(document, source);
+            session = new VideoForegroundSession(source, stop.Token, plan.Create);
             while (IsCurrentVideoForegroundWork()) {
                 if (!TryGetVideoForegroundRequest(out VideoFrameReadRequest request) ||
                     videoForegroundFrame?.Covers(request) == true) {
@@ -245,7 +284,8 @@ public partial class MainViewModel {
                     continue;
                 }
 
-                VideoForegroundFrame frame = await Task.Run(() => session.ReadAsync(request), stop.Token);
+                VideoPipelineOutput output = await Task.Run(() => session.ReadPipelineAsync(request), stop.Token);
+                VideoForegroundFrame frame = output.Foreground;
                 if (!IsCurrentVideoForegroundWork() || !TryGetVideoForegroundRequest(out VideoFrameReadRequest latest)) {
                     continue;
                 }
@@ -255,7 +295,7 @@ public partial class MainViewModel {
                         frame.Time.CompareTo(new(latest.PositionMilliseconds, 1000)) <= 0);
                 if (frame.Covers(latest) || inPlaybackOrder) {
                     identity?.EnsureCurrent(path);
-                    PublishVideoForeground(frame);
+                    PublishCombinedOutput(output);
                 }
             }
         }
@@ -265,6 +305,10 @@ public partial class MainViewModel {
             videoForegroundFailed = true;
             ClearVideoForeground();
             SetVideoForegroundStatus($"Не удалось выделить передний план. {error.Message}");
+            combinedVideoAnalysisNotice = error.Message;
+            if (IsCombinedAnalysisOutputSelected) {
+                RefreshVideoAnalysisStatus();
+            }
         }
         catch (Exception) when (!IsCurrentVideoForegroundWork()) {
             // ошибка относится к закрытому или замененному проходу
@@ -290,11 +334,56 @@ public partial class MainViewModel {
         }
 
         // устаревший проход не публикует даже при одинаковом времени в другом ролике
-        bool IsCurrentVideoForegroundWork() => IsVideoForegroundOutputSelected && !mediaPreviewsDisposed &&
+        bool IsCurrentVideoForegroundWork() => WantsVideoTemporalPipeline && !mediaPreviewsDisposed &&
+            (!IsCombinedStrictOutputSelected || videoPinnedFrame is not null) &&
             !stop.IsCancellationRequested && ReferenceEquals(CurrentDocument, document);
     }
 
-    // показываем исходные пиксели и маску одного кадра, оба изображения имеют одинаковую геометрию
+    // сохраняем настройки выбранного входа вместе с путём, который получит каждый физический кадр
+    private VideoForegroundInputPlan? CaptureVideoForegroundInput(MediaDocument document, VideoPreviewSettings settings) {
+        VideoPipelineStage source = VideoForegroundSource;
+        VideoPipelineStage analysisInputs = VideoPipelineStage.None;
+        VideoPipelineStage backdrop = VideoPipelineStage.Original;
+        VideoFrameAnalysisSettings analysis = default;
+        AnalysisImageSource edge = videoEdgeSource;
+        AnalysisImageSource segmentation = videoSegmentationSource;
+        bool segmentedBackdrop = false;
+
+        if (source == VideoPipelineStage.Analysis) {
+            if (!AreAllAnalysisParametersValid) {
+                throw new InvalidOperationException("Проверьте параметры выбранных методов на вкладке «Анализ»");
+            }
+            VideoAnalysisPipeline pipeline = CaptureVideoAnalysisPipeline();
+            analysis = CaptureVideoFrameAnalysisSettings(pipeline);
+            segmentedBackdrop = videoAnalysisBackground == VideoAnalysisBackground.Segmentation;
+            backdrop = videoAnalysisBackground switch {
+                VideoAnalysisBackground.Edited => VideoPipelineStage.Editing,
+                VideoAnalysisBackground.Segmentation => VideoPipelinePlan.FromAnalysisSource(segmentation),
+                VideoAnalysisBackground.Black => VideoPipelineStage.None,
+                _ => VideoPipelineStage.Original
+            };
+            analysisInputs = backdrop;
+            if (pipeline.EdgeSource is { } edgeSource) {
+                analysisInputs |= VideoPipelinePlan.FromAnalysisSource(edgeSource);
+            }
+            if (pipeline.SegmentationSource is { } segmentationSource) {
+                analysisInputs |= VideoPipelinePlan.FromAnalysisSource(segmentationSource);
+            }
+            if (pipeline.Fast || pipeline.Plate || analysisInputs == VideoPipelineStage.None) {
+                analysisInputs |= VideoPipelineStage.Original;
+            }
+        }
+
+        if (!VideoPipelinePlan.TryCreate(analysisInputs, source, VideoPipelineStage.VideoSequence,
+            out VideoPipelinePlan? queue, out string? error)) {
+            throw new InvalidOperationException(error);
+        }
+        VideoForegroundPath = string.Join(Environment.NewLine, queue.DescribePathsTo(VideoPipelineStage.VideoSequence));
+        return source == VideoPipelineStage.Original ? null : new(document, source, videoEditorPlan, settings,
+            analysis, edge, segmentation, backdrop, segmentedBackdrop, VisiblePlateRegionLimit);
+    }
+
+    // показываем пиксели выбранного входа и маску одного кадра в одинаковой геометрии
     private void PublishVideoForeground(VideoForegroundFrame frame) {
         WriteableBitmap? oldOriginal = videoForegroundOriginal;
         WriteableBitmap? oldOutput = videoForegroundOutput;
@@ -316,6 +405,9 @@ public partial class MainViewModel {
         videoForegroundFrame = frame;
         videoForegroundOriginal = original;
         videoForegroundOutput = output;
+        if (PlaybackStatus.IsPlaying && videoWantsToPlay) {
+            RecordVisibleVideoOutput();
+        }
         OnPropertyChanged(nameof(VideoForegroundInputPreview));
         OnPropertyChanged(nameof(VideoForegroundPreview));
         NotifyVideoForegroundPixelsChanged();
@@ -329,7 +421,11 @@ public partial class MainViewModel {
         string stamp = time.ToString(time.TotalHours >= 1 ? @"hh\:mm\:ss\.fff" : @"mm\:ss\.fff");
         SetVideoForegroundStatus(frame.Ordinal == 0
             ? $"{stamp} · Первый кадр задаёт модель фона"
-            : $"{stamp} · Вычитание фона по оригиналу");
+            : $"{stamp} · Вычитание фона по {VideoForegroundSource switch {
+                VideoPipelineStage.Editing => "результату редактирования",
+                VideoPipelineStage.Analysis => "результату анализа",
+                _ => "оригиналу"
+            }}");
     }
 
     // переносим RGB и бинарную маску в BGRA-строки предпросмотра
@@ -364,6 +460,7 @@ public partial class MainViewModel {
 
     // снимаем привязки к прежним изображениям до освобождения их ресурсов
     private void ClearVideoForeground() {
+        ClearCombinedAnalysisOutput();
         WriteableBitmap? original = videoForegroundOriginal;
         WriteableBitmap? output = videoForegroundOutput;
         videoForegroundFrame = null;

@@ -18,6 +18,10 @@ public partial class MainWindow {
     private readonly TabStrip videoForegroundTabs = new() { HorizontalAlignment = HorizontalAlignment.Left };
     private readonly TabStripItem videoForegroundResultTab = new() { Content = "Результат", IsEnabled = false };
     private readonly ListBox videoForegroundViews = new() { ItemsSource = new[] { "Передний план", "Маска" } };
+    private readonly ComboBox videoForegroundSourcePicker = new() {
+        ItemsSource = new[] { "Оригинал", "Результат редактирования", "Результат анализа" },
+        HorizontalAlignment = HorizontalAlignment.Stretch
+    };
     private readonly CheckBox videoForegroundMethod = new() { Content = "Вычитание фона" };
     private readonly Button videoForegroundMethodSettings = new() { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
     private readonly Button videoForegroundApply = new() { Content = "Применить", HorizontalAlignment = HorizontalAlignment.Stretch };
@@ -62,17 +66,14 @@ public partial class MainWindow {
             Content = new StackPanel { Spacing = 8, Children = { methodRow, hint } }
         };
 
-        TextBlock source = new() { Text = "Источник" };
-        TextBlock algorithmName = new() { Text = "MOG2" };
-        TextBlock sourceName = new() { Text = "Оригинал" };
-        Grid.SetRow(source, 1);
-        Grid.SetColumn(algorithmName, 1);
-        Grid.SetColumn(sourceName, 1);
-        Grid.SetRow(sourceName, 1);
-        Grid details = new() {
-            RowDefinitions = new RowDefinitions("Auto,Auto"), ColumnDefinitions = new ColumnDefinitions("Auto,*"),
-            RowSpacing = 6, ColumnSpacing = 12,
-            Children = { new TextBlock { Text = "Алгоритм" }, algorithmName, source, sourceName }
+        AutomationProperties.SetName(videoForegroundSourcePicker, "Источник вычитания фона");
+        videoForegroundSourcePicker.Bind(SelectingItemsControl.SelectedIndexProperty,
+            new Binding(nameof(MainViewModel.SelectedVideoForegroundSourceIndex)) { Mode = BindingMode.TwoWay });
+        StackPanel details = new() {
+            Spacing = 6,
+            Children = {
+                new TextBlock { Text = "Алгоритм · MOG2" }, new TextBlock { Text = "Источник" }, videoForegroundSourcePicker
+            }
         };
         TextBlock parametersTitle = new() { Text = "Параметры метода" };
         ScrollViewer parametersContent = new() {
@@ -123,7 +124,15 @@ public partial class MainWindow {
 
         Grid header = new() { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = 8 };
         Grid.SetColumn(videoForegroundDisplayButton, 2);
+        TextBlock path = CreateBoundText(vm => vm.VideoForegroundPath);
+        path.FontSize = 12;
+        path.TextTrimming = TextTrimming.CharacterEllipsis;
+        path.MaxLines = 2;
+        path.VerticalAlignment = VerticalAlignment.Center;
+        path.Bind(ToolTip.TipProperty, new Binding(nameof(MainViewModel.VideoForegroundPath)));
+        Grid.SetColumn(path, 1);
         header.Children.Add(videoForegroundTabs);
+        header.Children.Add(path);
         header.Children.Add(videoForegroundDisplayButton);
 
         VideoPreviewImage input = new() { Stretch = Stretch.Uniform };
@@ -180,6 +189,7 @@ public partial class MainWindow {
         (e.Key is Key.Space or Key.Left or Key.Right) && e.Source is Visual source &&
         source.GetSelfAndVisualAncestors().Any(control =>
             ReferenceEquals(control, videoForegroundTabs) || ReferenceEquals(control, videoForegroundViews) ||
+            ReferenceEquals(control, videoForegroundSourcePicker) ||
             e.Key == Key.Space && (ReferenceEquals(control, videoForegroundDisplayButton) ||
                 ReferenceEquals(control, videoForegroundMethod) || ReferenceEquals(control, videoForegroundMethodSettings) ||
                 ReferenceEquals(control, videoForegroundApply) || ReferenceEquals(control, videoForegroundPageButton)));

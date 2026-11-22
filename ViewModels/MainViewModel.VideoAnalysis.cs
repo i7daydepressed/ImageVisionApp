@@ -52,7 +52,8 @@ public partial class MainViewModel {
     public int SelectedVideoEdgeSourceIndex {
         get => (int)videoEdgeSource;
         set {
-            if (IsVideoOpen && value is 0 or 1 && SetProperty(ref videoEdgeSource, (AnalysisImageSource)value)) {
+            if (IsVideoOpen && value is >= 0 and <= 2 && AcceptVideoAnalysisChoice((AnalysisImageSource)value,
+                videoSegmentationSource, videoAnalysisBackground) && SetProperty(ref videoEdgeSource, (AnalysisImageSource)value)) {
                 InvalidateEdgeAnalysis();
             }
         }
@@ -61,7 +62,8 @@ public partial class MainViewModel {
     public int SelectedVideoSegmentationSourceIndex {
         get => (int)videoSegmentationSource;
         set {
-            if (IsVideoOpen && value is 0 or 1 && SetProperty(ref videoSegmentationSource, (AnalysisImageSource)value)) {
+            if (IsVideoOpen && value is >= 0 and <= 2 && AcceptVideoAnalysisChoice(videoEdgeSource,
+                (AnalysisImageSource)value, videoAnalysisBackground) && SetProperty(ref videoSegmentationSource, (AnalysisImageSource)value)) {
                 InvalidateSegmentationAnalysis();
             }
         }
@@ -72,8 +74,8 @@ public partial class MainViewModel {
 
     private bool HasAnalysisVideoMethods => isEdgesAnalysisEnabled || IsSegmentationAnalysisEnabled || isKeypointAnalysisEnabled || isPlateAnalysisEnabled;
     private bool HasVideoAnalysisInput => TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Original, out _);
-    private bool HasVideoAnalysisResult => edgesResult is not null || segmentationResult is not null || keypointsResult is not null ||
-        isPlateAnalysisEnabled && plateResult is not null;
+    private bool HasVideoAnalysisResult => VideoAnalysisUsesSequence ? combinedVideoAnalysisResult is not null :
+        edgesResult is not null || segmentationResult is not null || keypointsResult is not null || isPlateAnalysisEnabled && plateResult is not null;
     internal VideoAnalysisFrameKey? AnalyzedVideoFrame =>
         edgesResult?.VideoFrame ?? segmentationResult?.VideoFrame ?? keypointsResult?.VideoFrame ??
         (isPlateAnalysisEnabled ? plateResult?.VideoFrame : null);
@@ -101,7 +103,7 @@ public partial class MainViewModel {
     // связываем источник с текущей паузой и используем подготовленную или сохраненную редакторскую пару
     private bool TryResolveVideoAnalysisInput(AnalysisImageSource source, out VideoAnalysisInput input) {
         input = default;
-        if (mediaPreviewsDisposed || CurrentDocument is not { Kind: MediaKind.Video } document ||
+        if (source == AnalysisImageSource.VideoSequence || mediaPreviewsDisposed || CurrentDocument is not { Kind: MediaKind.Video } document ||
             videoWantsToPlay || PlaybackStatus.IsPlaying || videoAnalysisWaitingForLivePause ||
             videoPlayback?.State is not (VLCState.Paused or VLCState.Ended) ||
             videoEditorWaitingForFrame || requestedVideoSeek is not null || videoFrameStep is not null ||
@@ -194,14 +196,8 @@ public partial class MainViewModel {
         if (!TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Original, out VideoAnalysisInput original)) {
             return;
         }
-        TryGetCannyThresholds(out double lower, out double upper);
-        TryGetSegmentationClusterCount(out int clusters);
-        TryGetFastThreshold(out int threshold);
         VideoAnalysisPipeline pipeline = CaptureVideoAnalysisPipeline();
-        VideoFrameAnalysisSettings settings = new(pipeline.EdgeSource is not null ? selectedEdgeMethod : null, lower, upper,
-            pipeline.SegmentationSource is not null ? clusters : null, pipeline.Fast ? threshold : null, fastNonmaxSuppression) {
-            Plate = pipeline.Plate
-        };
+        VideoFrameAnalysisSettings settings = CaptureVideoFrameAnalysisSettings(pipeline);
         VideoAnalysisRequest request = new(original.Key, GetVideoAnalysisEditedKey(original.Key), pipeline,
             settings, edgesWorkRevision, segmentationWorkRevision, keypointsWorkRevision, plateWorkRevision);
 
@@ -417,6 +413,11 @@ public partial class MainViewModel {
     // показываем позу плеера, готовность подложки и методы с действительными результатами
     private void RefreshVideoAnalysisStatus() {
         NotifyAnalysisControls();
+        if (VideoAnalysisUsesSequence && videoAnalysisResultTabSelected) {
+            AnalysisStatusMessage = CombinedVideoAnalysisNotice ??
+                (combinedVideoAnalysisResult is null ? "Ожидание результата очереди видеоряда" : "Готов результат очереди видеоряда");
+            return;
+        }
         string? error = videoAnalysisFailure ?? videoEditorSourceError ??
             (WantsVideoAnalysisEditedInput ? videoAnalysisEditedFailure : null) ?? videoAnalysisCompositionFailure ??
             (isPlateAnalysisEnabled && plateFailure.Length > 0 ? plateFailure : null);
@@ -484,6 +485,7 @@ public partial class MainViewModel {
         else if (!visible) {
             CancelVideoAnalysisApply();
             CancelVideoAnalysisComposition();
+            UpdateCombinedVideoAnalysisRoute();
             if (IsVideoOpen && !analysisDisposed) {
                 RefreshVideoAnalysisStatus();
             }

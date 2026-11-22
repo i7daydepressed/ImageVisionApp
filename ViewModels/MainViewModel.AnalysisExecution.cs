@@ -172,7 +172,7 @@ public partial class MainViewModel {
     public bool IsAnalysisSegmentationBackground => selectedAnalysisBackground == AnalysisResultBackground.Segmentation;
     public bool IsAnalysisRunning => IsVideoOpen
         ? videoAnalysisApply is not null || videoAnalysisRequest is not null : analysisWorkerRunning;
-    public bool CanRunAnalysis => !analysisDisposed && HasEnabledAnalysisMethods && AreAllAnalysisParametersValid &&
+    public bool CanRunAnalysis => !analysisDisposed && (HasEnabledAnalysisMethods || VideoAnalysisUsesSequence) && AreAllAnalysisParametersValid &&
         (IsVideoOpen ? CanApplyVideoAnalysis : HasAnalysisInput && !analysisWorkerRunning);
     public string AnalysisRunButtonText => IsVideoOpen ? "Применить" : "Выполнить выбранное";
     public bool HasAnalysisResult => IsVideoOpen ? HasVideoAnalysisResult :

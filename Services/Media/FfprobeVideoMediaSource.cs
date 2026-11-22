@@ -24,6 +24,9 @@ internal sealed class FfprobeVideoMediaSource(
         (sourceSize == FrameSize ? 0 : (long)FrameSize.Width * FrameSize.Height * 3) +
         VideoEditorFrame.GetBufferBytes(FrameSize) + (long)FrameSize.Width * 3);
 
+    internal FfprobeVideoMediaSource WithDecoderThreads(int threads) =>
+        threads == decodeThreads ? this : new(path, ffprobe, sourceSize, timescale, timeUnit, identity, threads);
+
     // подтверждаем общую нулевую шкалу и размер единственной дорожки той же версии файла
     public static Task<FfprobeVideoMediaSource> OpenAsync(string path, VideoFileIdentity? expected,
         CancellationToken token) => OpenWithDecoderThreadsAsync(path, expected, 1, token);

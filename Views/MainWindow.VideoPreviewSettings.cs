@@ -215,7 +215,7 @@ public partial class MainWindow {
             load.Children.Add(row);
         }
         ComboBox metricScope = new() {
-            ItemsSource = new[] { "Весь выход", "Редактирование", "Анализ" },
+            ItemsSource = new[] { "Весь выход", "Редактирование", "Анализ", "Работа с видеорядом" },
             SelectedIndex = 0,
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
@@ -225,12 +225,13 @@ public partial class MainWindow {
         TextBlock visibleRate = new();
         TextBlock visibleInterval = new();
         TextBlock visibleReserve = new() { TextWrapping = TextWrapping.Wrap };
+        Grid visibleReserveRow = BuildPreviewSettingsRow("Резерв буферов пути показа", visibleReserve);
         StackPanel visibleLoad = new() { Spacing = 8, Children = {
             visibleStatus,
             BuildPreviewSettingsRow("Частота исходной дорожки", nominalRate),
             BuildPreviewSettingsRow("Выдано в видимый предпросмотр", visibleRate),
             BuildPreviewSettingsRow("Между выдачами (95% замеров)", visibleInterval),
-            BuildPreviewSettingsRow("Резерв буферов пути показа", visibleReserve),
+            visibleReserveRow,
             new TextBlock { Text = "Время ожидания кадров при воспроизведении входит в замер.",
                 TextWrapping = TextWrapping.Wrap }
         } };
@@ -248,7 +249,8 @@ public partial class MainWindow {
         foreach (var (label, value) in analysisRows) {
             analysisLoad.Children.Add(BuildPreviewSettingsRow(label, value));
         }
-        StackPanel measurements = new() { Spacing = 8, Children = { metricScope, visibleLoad, load, analysisLoad } };
+        VideoPipelineMeasurementPanel pipelineLoad = new();
+        StackPanel measurements = new() { Spacing = 8, Children = { metricScope, visibleLoad, load, analysisLoad, pipelineLoad } };
 
         // выбор среза показывает фактический выход или отдельный этап, не меняя настройки работы
         void RefreshMeasurements() {
@@ -263,11 +265,14 @@ public partial class MainWindow {
             measurementNote.Text = isStrict
                 ? "Итоги относятся к текущему строгому проходу. Частота и интервалы считаются по окну замера. Задержка до показа включает ожидание готового кадра."
                 : "За замер считаются вытеснения, подтверждённые к его концу. Общий счётчик включает поздние вытеснения.";
-            bool displayed = metricScope.SelectedIndex == 0;
-            bool displayAnalysis = displayed && viewModel.IsVideoAnalysisOutputSelected;
-            load.IsVisible = metricScope.SelectedIndex == 1;
-            analysisLoad.IsVisible = metricScope.SelectedIndex == 2 || displayAnalysis;
+            int scope = metricScope.SelectedIndex;
+            VideoPipelineMeasurements.Snapshot? pipeline = viewModel.ReadVideoPipelineMeasurements();
+            bool displayed = scope == 0;
+            bool displayAnalysis = displayed && pipeline is null && viewModel.IsVideoAnalysisOutputSelected;
+            load.IsVisible = scope == 1 && pipeline is null;
+            analysisLoad.IsVisible = (scope == 2 && pipeline is null) || displayAnalysis;
             visibleLoad.IsVisible = displayed && !displayAnalysis;
+            pipelineLoad.Refresh(scope, pipeline);
             if (visibleLoad.IsVisible) {
                 var (window, picture) = viewModel.ReadVisibleVideoOutput();
                 visibleStatus.Text = picture;
@@ -276,10 +281,8 @@ public partial class MainWindow {
                     ? FormatPreviewRate(sourceRate) : VideoInfo.UnknownValue);
                 SetMetric(visibleRate, "Выдано в видимый предпросмотр", FormatPreviewRate(window?.OutputRate));
                 SetMetric(visibleInterval, "Между выдачами (95% замеров)", FormatPreviewPercentile(window?.IntervalP95Ms));
-                if (viewModel.IsVideoForegroundOutputSelected) {
-                    SetMetric(visibleReserve, "Резерв буферов пути показа", "—");
-                }
-                else {
+                visibleReserveRow.IsVisible = pipeline is null && !viewModel.IsVideoForegroundOutputSelected;
+                if (visibleReserveRow.IsVisible) {
                     var (bytes, path) = viewModel.ReadVisibleVideoOutputBuffers();
                     SetMetric(visibleReserve, "Резерв буферов пути показа", $"{bytes / (1024.0 * 1024):0.##} МиБ\n{path}");
                 }
