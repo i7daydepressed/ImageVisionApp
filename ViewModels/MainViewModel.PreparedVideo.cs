@@ -110,6 +110,7 @@ public partial class MainViewModel {
         CancelVideoFrameStep();
         preparedInterruptedLiveSeek = requestedVideoSeek is not null || livePreviewHandoff is { Seek: true };
         requestedVideoSeek = null;
+        verifiedVideoSeekStop?.Cancel();
         livePreviewHandoff = null;
         livePreviewAnchor = null;
         preparedUnavailable = null;
@@ -224,7 +225,7 @@ public partial class MainViewModel {
             if (preparedPresentedFrame is { } cursor) {
                 videoLiveSeekHint = new(cursor.Time.Milliseconds, cursor.Ordinal, FromStart: cursor.Ordinal == 0);
             }
-            SetVideoSeekPreview(retained);
+            SetVideoSeekPreview(retained, preparedPresentedFrame);
         }
         else {
             if (position == 0 && !readFrame && videoPinnedFrame is null) {
@@ -455,6 +456,7 @@ public partial class MainViewModel {
         VideoFrameCursor? pin = videoPinnedFrame;
         videoPinnedFrame = null;
         if (preparedAtEnd || !IsStrictVideo && playback.State == VLCState.Ended) {
+            InvalidateVideoForeground();
             RequestPreparedVideo(0, atEnd: false);
         }
         else if (pin is not null) {

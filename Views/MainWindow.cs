@@ -96,6 +96,7 @@ public partial class MainWindow : Window {
             histogramViewModel.PropertyChanged -= HistogramViewModel_OnPropertyChanged;
             histogramViewModel.SetVideoEditorVisible(false);
             histogramViewModel.SetVideoAnalysisVisible(false);
+            histogramViewModel.SetVideoForegroundVisible(false);
             histogramViewModel.DetachVideoPlayback();
         }
 
@@ -106,11 +107,13 @@ public partial class MainWindow : Window {
             histogramViewModel.AttachVideoPlayback();
             histogramViewModel.SetVideoEditorVisible(ReferenceEquals(pageHost.Content, editingPage));
             UpdateAnalysisSection();
+            histogramViewModel.SetVideoForegroundVisible(ReferenceEquals(pageHost.Content, videoForegroundPage));
         }
 
         histogramPanel.ShowComparison(histogramViewModel?.HistogramComparison);
         advancedHistogramPanel.ShowComparison(histogramViewModel?.HistogramComparison);
         UpdateHistogramAvailability();
+        UpdateVideoForegroundDocument();
         UpdateVideoPlaybackControls();
     }
 
@@ -124,6 +127,7 @@ public partial class MainWindow : Window {
 
         if (e.PropertyName == nameof(MainViewModel.CurrentDocument)) {
             UpdateHistogramAvailability();
+            UpdateVideoForegroundDocument();
         }
 
         if (e.PropertyName == nameof(MainViewModel.HistogramComparison) &&

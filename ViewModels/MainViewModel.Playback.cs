@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Media.Imaging;
@@ -14,9 +15,9 @@ internal readonly record struct VideoPlaybackStatus(
     long Position, long Duration, bool IsPlaying, bool CanPlay, bool CanSeek, string? Notice);
 
 public partial class MainViewModel {
-    private readonly record struct VideoSeek(
+    private sealed record VideoSeek(
         VideoPlaybackSession Session, string Path, long Position, long Duration, bool RestartOnPlay,
-        bool KeepPosition = false, bool ReadFrame = true);
+        bool KeepPosition = false, bool ReadFrame = true, bool VerifyFrame = false);
     private const int VideoTrackReadLimit = 4;
     private const int VideoTrackReadIntervalMilliseconds = 250;
 
@@ -24,6 +25,7 @@ public partial class MainViewModel {
     private DispatcherTimer? videoPlaybackTimer;
     private WriteableBitmap? videoLiveFrame;
     private Bitmap? videoSeekPreview;
+    private VideoFrameCursor? retainedVideoSeekCursor;
     private long videoLiveRevision;
     private bool videoWantsToPlay;
     private bool videoWasPlaying;
@@ -39,6 +41,7 @@ public partial class MainViewModel {
     private long nextVideoTrackRead;
     private VideoSeek? requestedVideoSeek;
     private bool readingVideoSeek;
+    private CancellationTokenSource? verifiedVideoSeekStop;
 
     public Bitmap? VideoPreviewFrame => preparedSource is not null
         ? preparedFrom is not null ? preparedOriginal : null
@@ -172,6 +175,7 @@ public partial class MainViewModel {
 
     // начинаем новый проход в том же живом плеере после последнего кадра
     private void RestartLiveVideo(VideoPlaybackSession playback) {
+        InvalidateVideoForeground();
         liveAnalysisSeekTarget = null;
         liveAnalysisSeekRecovery = null;
         livePreviewAnchor = null;
@@ -228,14 +232,17 @@ public partial class MainViewModel {
         long position = Math.Clamp(PlaybackStatus.Position + offset, 0, PlaybackStatus.Duration);
         if (SeekDuringPreviewModeHandoff(position, PlaybackStatus.Duration,
             preserveLivePlay: position < PlaybackStatus.Duration)) {
+            InvalidateVideoForeground();
             return;
         }
         if (preparedSource is not null) {
+            InvalidateVideoForeground();
             RequestPreparedVideo(position, position == PlaybackStatus.Duration, reuseReady: true);
             return;
         }
         bool isPlaying = PlaybackStatus.IsPlaying;
         if (isPlaying && position < PlaybackStatus.Duration) {
+            InvalidateVideoForeground();
             livePreviewAnchor = null;
             videoLiveSeekHint = null;
             InvalidateVideoEditorSource();
@@ -263,6 +270,7 @@ public partial class MainViewModel {
         CancelVideoFrameStep(clearPin: true);
         long duration = PlaybackStatus.Duration;
         long target = Math.Clamp(position, 0, duration);
+        InvalidateVideoForeground();
         if (SeekDuringPreviewModeHandoff(target, duration)) {
             return;
         }
@@ -279,7 +287,9 @@ public partial class MainViewModel {
         liveAnalysisSeekTarget = null;
         livePreviewAnchor = null;
         videoLiveSeekHint = null;
-        requestedVideoSeek = new VideoSeek(playback, sourcePath, target, duration, restartOnPlay);
+        verifiedVideoSeekStop?.Cancel();
+        requestedVideoSeek = new VideoSeek(playback, sourcePath, target, duration, restartOnPlay,
+            VerifyFrame: videoForegroundVisible);
         InvalidateVideoEditorSource();
         PauseVideoPlayback();
         if (!readingVideoSeek) {
@@ -294,15 +304,41 @@ public partial class MainViewModel {
             while (requestedVideoSeek is { } request) {
                 Bitmap? preparedFrame = null;
                 try {
-                    while (IsReadingVideoAnalysisLiveFallback && requestedVideoSeek == request) {
+                    while (IsReadingVideoAnalysisLiveFallback && ReferenceEquals(requestedVideoSeek, request)) {
                         await Task.Delay(25);
                     }
-                    if (requestedVideoSeek != request) {
+                    if (!ReferenceEquals(requestedVideoSeek, request)) {
                         continue;
                     }
                     long seekPosition = request.Position;
                     VideoDecodedFrameHint? hint = null;
-                    if (request.ReadFrame) {
+                    VideoFrameCursor? confirmedFrame = null;
+                    if (request is { ReadFrame: true, VerifyFrame: true }) {
+                        using CancellationTokenSource seekStop = new();
+                        verifiedVideoSeekStop = seekStop;
+                        try {
+                            VideoFileIdentity? identity = videoFileIdentity;
+                            TimedVideoInput frame = await Task.Run(async () => {
+                                FfprobeVideoMediaSource source = await FfprobeVideoMediaSource.OpenAsync(
+                                    request.Path, identity, seekStop.Token).ConfigureAwait(false);
+                                return await ReadConfirmedVideoFrameAsync(source, request.Position, request.Duration,
+                                    seekStop.Token).ConfigureAwait(false);
+                            }, seekStop.Token);
+                            using VideoEditorFrame pixels = frame.Pixels;
+                            if (!ReferenceEquals(requestedVideoSeek, request) || !ReferenceEquals(videoPlayback, request.Session)) {
+                                continue;
+                            }
+                            preparedFrame = CreateVideoAnalysisBitmap(pixels);
+                            confirmedFrame = new(frame.Time, frame.Ordinal, frame.IsLast);
+                            if (frame.IsLast && request.Position >= request.Duration) {
+                                seekPosition = (long)frame.Time.Milliseconds;
+                            }
+                        }
+                        finally {
+                            verifiedVideoSeekStop = null;
+                        }
+                    }
+                    else if (request.ReadFrame) {
                         VideoFileIdentity? identity = videoFileIdentity;
                         (byte[] png, long framePosition, VideoDecodedFrameHint? decoded) = await Task.Run(() => {
                             identity?.EnsureCurrent(request.Path);
@@ -310,7 +346,7 @@ public partial class MainViewModel {
                             identity?.EnsureCurrent(request.Path);
                             return loaded;
                         });
-                        if (requestedVideoSeek != request || !ReferenceEquals(videoPlayback, request.Session)) {
+                        if (!ReferenceEquals(requestedVideoSeek, request) || !ReferenceEquals(videoPlayback, request.Session)) {
                             continue;
                         }
 
@@ -333,13 +369,13 @@ public partial class MainViewModel {
                     }
 
                     await WaitForPausedVideoAsync(request);
-                    if (requestedVideoSeek != request || !ReferenceEquals(videoPlayback, request.Session)) {
+                    if (!ReferenceEquals(requestedVideoSeek, request) || !ReferenceEquals(videoPlayback, request.Session)) {
                         continue;
                     }
 
                     request.Session.Seek(seekPosition);
                     await WaitForPausedVideoAsync(request, seekPosition);
-                    if (requestedVideoSeek != request || !ReferenceEquals(videoPlayback, request.Session)) {
+                    if (!ReferenceEquals(requestedVideoSeek, request) || !ReferenceEquals(videoPlayback, request.Session)) {
                         continue;
                     }
 
@@ -350,15 +386,19 @@ public partial class MainViewModel {
                         videoLiveSeekHint = hint;
                         preparedFrame = null;
                     }
+                    if (confirmedFrame is { } cursor) {
+                        videoPinnedFrame = cursor;
+                        livePreviewAnchor = request.Position;
+                    }
                     videoRestartOnPlay = request.RestartOnPlay;
                     UpdatePlaybackStatus(PlaybackStatus with {
-                        Position = request.KeepPosition ? request.Position : seekPosition,
+                        Position = request.KeepPosition || confirmedFrame is not null ? request.Position : seekPosition,
                         IsPlaying = videoWantsToPlay, CanPlay = true, Notice = preparedUnavailable
                     });
                     AcceptVideoEditorFrame();
                 }
                 catch (Exception error) {
-                    if (requestedVideoSeek == request) {
+                    if (ReferenceEquals(requestedVideoSeek, request)) {
                         requestedVideoSeek = null;
                         videoWantsToPlay = false;
                         videoHandoffReplay = false;
@@ -383,7 +423,7 @@ public partial class MainViewModel {
     // ждёт подтверждения паузы, включая случай повторного открытия после конца видео
     private async Task WaitForPausedVideoAsync(VideoSeek request, long? framePosition = null) {
         long deadline = Environment.TickCount64 + 3000;
-        while (requestedVideoSeek == request && ReferenceEquals(videoPlayback, request.Session)) {
+        while (ReferenceEquals(requestedVideoSeek, request) && ReferenceEquals(videoPlayback, request.Session)) {
             if (request.Session.State == VLCState.Paused && request.Session.CanSeek &&
                 (framePosition is null || Math.Abs(request.Session.Position - framePosition.Value) <= 25)) {
                 return;
@@ -616,9 +656,10 @@ public partial class MainViewModel {
     }
 
     // меняет неподвижный кадр перемотки и возвращает живой кадр только после первого обновления
-    private void SetVideoSeekPreview(Bitmap? bitmap) {
+    private void SetVideoSeekPreview(Bitmap? bitmap, VideoFrameCursor? cursor = null) {
         Bitmap? previous = videoSeekPreview;
         videoSeekPreview = bitmap;
+        retainedVideoSeekCursor = bitmap is null ? null : cursor;
         if (bitmap is not null) {
             liveAnalysisSeekTarget = null;
             liveAnalysisSeekRecovery = null;
@@ -630,15 +671,21 @@ public partial class MainViewModel {
     // обновляет таймлайн одним связным изменением
     private void UpdatePlaybackStatus(VideoPlaybackStatus status) {
         if (PlaybackStatus != status) {
+            bool canApplyForeground = CanApplyVideoForeground;
             PlaybackStatus = status;
             OnPropertyChanged(nameof(PlaybackStatus));
+            if (canApplyForeground != CanApplyVideoForeground) {
+                OnPropertyChanged(nameof(CanApplyVideoForeground));
+            }
         }
         RefreshVideoAnalysisInput();
+        RefreshVideoForeground();
         StopVisibleVideoOutputOnPause();
     }
 
     // прекращает публикацию и освобождает один источник перед заменой файла или закрытием окна
     private void ReleaseVideoPlayback() {
+        InvalidateVideoForeground();
         liveAnalysisSeekTarget = null;
         liveAnalysisSeekRecovery = null;
         CancelVideoAnalysisApply();
@@ -656,6 +703,7 @@ public partial class MainViewModel {
         }
 
         requestedVideoSeek = null;
+        verifiedVideoSeekStop?.Cancel();
         videoWantsToPlay = false;
         videoWasPlaying = false;
         videoRestarting = false;

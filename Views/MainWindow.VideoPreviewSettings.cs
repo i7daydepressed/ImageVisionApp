@@ -73,6 +73,16 @@ public partial class MainWindow {
             SelectedIndex = Array.IndexOf(budgets, settings.AnalysisBudgetMiB),
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
+        ComboBox foregroundThreads = new() {
+            ItemsSource = Enumerable.Range(1, VideoPreviewSettings.WorkerLimit).ToArray(),
+            SelectedIndex = settings.ForegroundDecoderThreads - 1,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        ComboBox foregroundBudget = new() {
+            ItemsSource = budgets,
+            SelectedIndex = Array.IndexOf(budgets, settings.ForegroundBudgetMiB),
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
         ComboBox mode = new() {
             ItemsSource = new[] { "Живой предпросмотр", "С подготовкой участка", "Строгий показ" },
             SelectedIndex = (int)settings.Mode,
@@ -91,9 +101,12 @@ public partial class MainWindow {
         AutomationProperties.SetName(budget, "Редактирование. Бюджет буферов, МиБ");
         AutomationProperties.SetName(analysisWorkers, "Анализ. Максимум обработчиков");
         AutomationProperties.SetName(analysisBudget, "Анализ. Бюджет буферов, МиБ");
+        AutomationProperties.SetName(foregroundThreads, "Работа с видеорядом. Потоки декодирования");
+        AutomationProperties.SetName(foregroundBudget, "Работа с видеорядом. Бюджет буферов, МиБ");
         const string budgetHelp = "Предел для учитываемых кадровых буферов в оперативной памяти.";
         ToolTip.SetTip(budget, budgetHelp);
         ToolTip.SetTip(analysisBudget, budgetHelp);
+        ToolTip.SetTip(foregroundBudget, budgetHelp);
 
         TextBlock modeHelp = new() { TextWrapping = TextWrapping.Wrap };
         TextBlock actualMode = new() { TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold };
@@ -126,6 +139,14 @@ public partial class MainWindow {
             }
         } };
 
+        StackPanel foregroundPerformance = new() { Spacing = 8, Children = {
+            BuildPreviewSettingsRow("Потоки декодирования", foregroundThreads),
+            BuildPreviewSettingsRow("Бюджет буферов, МиБ", foregroundBudget),
+            new TextBlock {
+                Text = "Декодер может готовить кадры параллельно. MOG2 обновляет модель в порядке кадров.",
+                TextWrapping = TextWrapping.Wrap
+            }
+        } };
         TextBlock status = new() { TextWrapping = TextWrapping.Wrap, MinHeight = 22, Margin = new Thickness(0, 0, 0, 4) };
         StackPanel load = new() { Children = { status } };
         IBrush rowDivider = new SolidColorBrush(Color.FromArgb(64, 128, 128, 128));
@@ -255,8 +276,13 @@ public partial class MainWindow {
                     ? FormatPreviewRate(sourceRate) : VideoInfo.UnknownValue);
                 SetMetric(visibleRate, "Выдано в видимый предпросмотр", FormatPreviewRate(window?.OutputRate));
                 SetMetric(visibleInterval, "Между выдачами (95% замеров)", FormatPreviewPercentile(window?.IntervalP95Ms));
-                var (bytes, path) = viewModel.ReadVisibleVideoOutputBuffers();
-                SetMetric(visibleReserve, "Резерв буферов пути показа", $"{bytes / (1024.0 * 1024):0.##} МиБ\n{path}");
+                if (viewModel.IsVideoForegroundOutputSelected) {
+                    SetMetric(visibleReserve, "Резерв буферов пути показа", "—");
+                }
+                else {
+                    var (bytes, path) = viewModel.ReadVisibleVideoOutputBuffers();
+                    SetMetric(visibleReserve, "Резерв буферов пути показа", $"{bytes / (1024.0 * 1024):0.##} МиБ\n{path}");
+                }
             }
             if (analysisLoad.IsVisible) {
                 UpdateVideoAnalysisLoad(viewModel, displayed, analysisStatus, analysisRows);
@@ -276,13 +302,16 @@ public partial class MainWindow {
         cancel.Click += (_, _) => dialog.Close(null);
         apply.Click += (_, _) => {
             if (mode.SelectedIndex >= 0 && workers.SelectedIndex >= 0 && budget.SelectedIndex >= 0 &&
-                arrowStep.SelectedIndex >= 0 && analysisWorkers.SelectedIndex >= 0 && analysisBudget.SelectedIndex >= 0) {
+                arrowStep.SelectedIndex >= 0 && analysisWorkers.SelectedIndex >= 0 && analysisBudget.SelectedIndex >= 0 &&
+                foregroundThreads.SelectedIndex >= 0 && foregroundBudget.SelectedIndex >= 0) {
                 dialog.Close(new VideoPreviewSettings(workers.SelectedIndex, budgets[budget.SelectedIndex]) {
                     Mode = (VideoPreviewMode)mode.SelectedIndex,
                     BufferBeforeStrictResume = strictBuffer.IsChecked == true,
                     ArrowStep = steps[arrowStep.SelectedIndex],
                     AnalysisMaximumWorkers = analysisWorkers.SelectedIndex + 1,
-                    AnalysisBudgetMiB = budgets[analysisBudget.SelectedIndex]
+                    AnalysisBudgetMiB = budgets[analysisBudget.SelectedIndex],
+                    ForegroundDecoderThreads = foregroundThreads.SelectedIndex + 1,
+                    ForegroundBudgetMiB = budgets[foregroundBudget.SelectedIndex]
                 });
             }
         };
@@ -299,6 +328,7 @@ public partial class MainWindow {
                             BuildPreviewSettingsCard("Управление воспроизведением", playback),
                             BuildPreviewSettingsCard("Производительность · Редактирование", performance),
                             BuildPreviewSettingsCard("Производительность · Анализ", analysisPerformance),
+                            BuildPreviewSettingsCard("Производительность · Работа с видеорядом", foregroundPerformance),
                             BuildPreviewSettingsCard("Нагрузка предпросмотра", measurements)
                         }
                     }

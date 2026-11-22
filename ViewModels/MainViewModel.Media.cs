@@ -62,9 +62,12 @@ public partial class MainViewModel {
 
         OnPropertyChanged(nameof(CurrentDocument));
         OnPropertyChanged(nameof(IsVideoOpen));
+        OnPropertyChanged(nameof(CanDisplayVideoForegroundEffect));
+        OnPropertyChanged(nameof(CanApplyVideoForeground));
         OnPropertyChanged(nameof(CurrentVideoInfo));
         OnPropertyChanged(nameof(VideoFirstFrame));
         OnPropertyChanged(nameof(VideoPreviewFrame));
+        RefreshVideoForeground();
 
         previousOriginal?.Dispose();
         previousModified?.Dispose();

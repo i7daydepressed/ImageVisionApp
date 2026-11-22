@@ -76,6 +76,7 @@ public partial class MainWindow {
     // управляет плеером с клавиатуры, сохраняя обычный ввод в текстовых полях
     private void VideoPlayback_OnKeyDown(object? sender, KeyEventArgs e) {
         if (IsComparisonPageVisible || (e.Key == Key.Space && IsComparisonButtonInput(e.Source)) ||
+            UsesVideoForegroundControlKey(e) ||
             e.KeyModifiers != KeyModifiers.None || e.Source is TextBox ||
             DataContext is not MainViewModel viewModel) {
             return;

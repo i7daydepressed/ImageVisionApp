@@ -307,7 +307,9 @@ public partial class MainViewModel {
         VideoPreviewSettings previous = PreviewSettings;
         bool analysisChanged = previous.AnalysisMaximumWorkers != settings.AnalysisMaximumWorkers ||
             previous.AnalysisBudgetMiB != settings.AnalysisBudgetMiB;
-        bool retrySource = !analysisChanged && settings.Mode != VideoPreviewMode.Live && preparedSource is null &&
+        bool foregroundSettingsChanged = previous.ForegroundBudgetMiB != settings.ForegroundBudgetMiB ||
+            previous.ForegroundDecoderThreads != settings.ForegroundDecoderThreads;
+        bool retrySource = !analysisChanged && !foregroundSettingsChanged && settings.Mode != VideoPreviewMode.Live && preparedSource is null &&
             preparedOpening is null && IsVideoOpen;
         if (settings == PreviewSettings && !retrySource) {
             return;
@@ -315,15 +317,22 @@ public partial class MainViewModel {
         if (!retrySource && previous.Mode == settings.Mode && previous.MaximumWorkers == settings.MaximumWorkers &&
             previous.BudgetMiB == settings.BudgetMiB) {
             PreviewSettings = settings;
+            if (foregroundSettingsChanged) {
+                RestartVideoForeground();
+            }
             return;
         }
         StopVideoPreviewMonitoring(keepLast: false);
         PreviewSettings = settings;
         ResetVideoPreviewAuto();
         if (previous.Mode != settings.Mode || retrySource) {
+            InvalidateVideoForeground();
             ResetVisibleVideoOutput();
             ChangeVideoPreviewMode();
             return;
+        }
+        if (foregroundSettingsChanged) {
+            RestartVideoForeground();
         }
         if (preparedSource is not null) {
             if ((previous.BudgetMiB != settings.BudgetMiB ||

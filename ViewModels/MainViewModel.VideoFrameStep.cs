@@ -80,6 +80,7 @@ public partial class MainViewModel {
             return;
         }
 
+        InvalidateVideoForeground();
         VideoFrameCursor? anchor = videoPinnedFrame;
         bool atEnd = preparedSource is not null ? preparedAtEnd :
             videoRestartOnPlay || playback.State == VLCState.Ended ||
@@ -121,6 +122,7 @@ public partial class MainViewModel {
         VideoFrameCursor? anchor, bool atEnd) {
         CancelVideoFrameStep();
         requestedVideoSeek = null;
+        verifiedVideoSeekStop?.Cancel();
         videoHandoffReplay = false;
         videoWantsToPlay = false;
         videoWasPlaying = false;

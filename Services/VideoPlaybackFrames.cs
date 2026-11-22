@@ -102,6 +102,11 @@ internal sealed class VideoPlaybackFrames : IDisposable {
                 bitmap = new WriteableBitmap(size, new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
             }
 
+            // у RV32 четвертый байт не задан, а Avalonia для показа нужен непрозрачный кадр
+            for (int alpha = 3; alpha < pixels.Length; alpha += 4) {
+                pixels[alpha] = byte.MaxValue;
+            }
+
             using ILockedFramebuffer target = bitmap.Lock();
             if (target.RowBytes == stride) {
                 Marshal.Copy(pixels, 0, target.Address, stride * height);

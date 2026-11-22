@@ -148,7 +148,7 @@ public partial class MainViewModel {
             reservedBytes = frameBytes;
             videoAnalysisReservedBytes += reservedBytes;
             TimedVideoInput frame = await Task.Run(
-                () => ReadVideoAnalysisPausedFrameAsync(source, position, duration, stop.Token), stop.Token);
+                () => ReadConfirmedVideoFrameAsync(source, position, duration, stop.Token), stop.Token);
             using VideoEditorFrame pixels = frame.Pixels;
             if (!IsCurrentFallback()) {
                 return;
@@ -182,7 +182,7 @@ public partial class MainViewModel {
     }
 
     // проверяем, что интервал декодированного кадра действительно покрывает позицию остановки
-    private static async Task<TimedVideoInput> ReadVideoAnalysisPausedFrameAsync(FfprobeVideoMediaSource source,
+    private static async Task<TimedVideoInput> ReadConfirmedVideoFrameAsync(FfprobeVideoMediaSource source,
         long position, long duration, CancellationToken token) {
         bool atEnd = duration > 0 && position >= duration;
         VideoPresentationTime target = new(position, 1000);

@@ -13,7 +13,8 @@ using OpenCvSharp;
 namespace ImageVisionApp.Services;
 
 internal sealed class FfprobeVideoMediaSource(
-    string path, string ffprobe, PixelSize sourceSize, int timescale, int timeUnit, VideoFileIdentity identity) : IVideoMediaSource {
+    string path, string ffprobe, PixelSize sourceSize, int timescale, int timeUnit, VideoFileIdentity identity,
+    int decodeThreads) : IVideoMediaSource {
     // свойство CAP_PROP_N_THREADS открытого в проекте OpenCV 4.13
     private const int DecodeThreadCountProperty = 70;
     private const double TimestampToleranceMs = 0.000001;
@@ -24,8 +25,12 @@ internal sealed class FfprobeVideoMediaSource(
         VideoEditorFrame.GetBufferBytes(FrameSize) + (long)FrameSize.Width * 3);
 
     // подтверждаем общую нулевую шкалу и размер единственной дорожки той же версии файла
-    public static async Task<FfprobeVideoMediaSource> OpenAsync(string path, VideoFileIdentity? expected,
-        CancellationToken token) {
+    public static Task<FfprobeVideoMediaSource> OpenAsync(string path, VideoFileIdentity? expected,
+        CancellationToken token) => OpenWithDecoderThreadsAsync(path, expected, 1, token);
+
+    // задаем предел потоков декодера при открытии, отдельный от порядка выдачи кадров
+    internal static async Task<FfprobeVideoMediaSource> OpenWithDecoderThreadsAsync(string path, VideoFileIdentity? expected,
+        int decodeThreads, CancellationToken token) {
         VideoFileIdentity identity = expected ??
             throw new InvalidDataException("Не удалось подтвердить версию открытого файла");
         identity.EnsureCurrent(path);
@@ -79,7 +84,7 @@ internal sealed class FfprobeVideoMediaSource(
             throw new InvalidDataException("Не удалось подтвердить общий ноль времени видео");
         }
         identity.EnsureCurrent(path);
-        return new(path, executable, size.Value, scale, unit, identity);
+        return new(path, executable, size.Value, scale, unit, identity, decodeThreads);
     }
 
     // допускаем только ортогональный поворот с единичным масштабом, без отражения и сдвига
@@ -298,10 +303,10 @@ internal sealed class FfprobeVideoMediaSource(
         }
     }
 
-    // открываем тот же файл с одним потоком декодирования
+    // открываем тот же файл с настроенным пределом потоков FFmpeg
     private VideoCapture OpenCapture() {
         identity.EnsureCurrent(path);
-        VideoCapture capture = new(path, VideoCaptureAPIs.FFMPEG, [DecodeThreadCountProperty, 1]);
+        VideoCapture capture = new(path, VideoCaptureAPIs.FFMPEG, [DecodeThreadCountProperty, decodeThreads]);
         try {
             if (!capture.IsOpened()) {
                 throw new InvalidDataException("OpenCV не смог открыть видеодорожку");
