@@ -139,6 +139,7 @@ public partial class MainViewModel {
 
     // снимаем старый результат в момент запроса перехода, пока новый кадр не подтвержден
     private void InvalidateVideoEditorSource() {
+        InvalidateFrameAnalysisPlayback();
         ResetVisibleVideoOutput();
         videoEditorStoppedOutput = null;
         videoEditorSource++;
@@ -321,6 +322,7 @@ public partial class MainViewModel {
         if (!retrySource && previous.Mode == settings.Mode && previous.MaximumWorkers == settings.MaximumWorkers &&
             previous.BudgetMiB == settings.BudgetMiB) {
             PreviewSettings = settings;
+            UpdateFrameAnalysisPlaybackPlan();
             if (foregroundWorkChanged) {
                 RestartVideoForeground();
             }
@@ -328,6 +330,7 @@ public partial class MainViewModel {
         }
         StopVideoPreviewMonitoring(keepLast: false);
         PreviewSettings = settings;
+        UpdateFrameAnalysisPlaybackPlan(restartStrict: false);
         ResetVideoPreviewAuto();
         if (previous.Mode != settings.Mode || retrySource) {
             InvalidateVideoForeground();

@@ -272,6 +272,7 @@ public partial class MainWindow {
             load.IsVisible = scope == 1 && pipeline is null;
             analysisLoad.IsVisible = (scope == 2 && pipeline is null) || displayAnalysis;
             visibleLoad.IsVisible = displayed && !displayAnalysis;
+            pipelineLoad.ShowPhysicalFrameNumber = viewModel.HasPhysicalAnalysisPlaybackOrdinal;
             pipelineLoad.Refresh(scope, pipeline);
             if (visibleLoad.IsVisible) {
                 var (window, picture) = viewModel.ReadVisibleVideoOutput();

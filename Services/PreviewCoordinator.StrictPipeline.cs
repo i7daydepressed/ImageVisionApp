@@ -10,7 +10,8 @@ namespace ImageVisionApp.Services;
 
 // расчет ограничивает запас по бюджетам всех дополнительных участков до запуска декодера
 internal sealed record StrictVideoPipeline(Func<IVideoStrictPipelineProcessor> Create, long PersistentBytes,
-    long ScratchBytes, long SelectedFrameBytes, int Capacity, Func<VideoPipelineStage, long, IDisposable>? ReserveFrame = null);
+    long ScratchBytes, long SelectedFrameBytes, int Capacity,
+    Func<VideoPipelineStage, long, IDisposable>? ReserveFrame = null, bool RequiresHistory = true);
 
 internal interface IVideoStrictPipelineProcessor : IAsyncDisposable {
     // берем оба кадра взаймы, для предыстории обновляем состояние без выдачи готового результата
@@ -32,13 +33,16 @@ internal sealed partial class PreviewCoordinator {
         await ReserveAsync(request, request.ReaderBytes, limitWindow: false, token, waitForPrevious: true).ConfigureAwait(false);
         try {
             await using IVideoStrictPipelineProcessor processor = pipeline.Create();
-            VideoFrameReadRequest history = new(0) { Anchor = new(new(0, 1), 0, false) };
+            // временной метод получает всю предысторию, обычный анализ сразу берет заданный кадр
+            VideoFrameReadRequest start = pipeline.RequiresHistory
+                ? new VideoFrameReadRequest(0) { Anchor = new(new(0, 1), 0, false) }
+                : request.Start;
             await using IAsyncEnumerator<TimedVideoInput> input =
-                request.Source.ReadFramesAsync(history, token).GetAsyncEnumerator(token);
+                request.Source.ReadFramesAsync(start, token).GetAsyncEnumerator(token);
             long inputBytes = VideoEditorFrame.GetBufferBytes(request.Size);
             long editorScratch = request.Plan.GetScratchBytes(request.Size);
             TimedVideoInput? previous = null;
-            bool reachedTarget = false;
+            bool reachedTarget = !pipeline.RequiresHistory;
             while (true) {
                 await ReserveStrictSlotAsync(work, stage, frameBytes, token).ConfigureAwait(false);
                 long remaining = frameBytes;
@@ -54,8 +58,8 @@ internal sealed partial class PreviewCoordinator {
                     frame = input.Current;
                     token.ThrowIfCancellationRequested();
                     if (!IsValidStrictInput(frame, request.Size, previous) ||
-                        previous is null && (frame.Ordinal != 0 || frame.Time.Value != 0)) {
-                        throw new InvalidDataException("Не удалось подтвердить порядок или начало предыстории видеоряда");
+                        previous is null && !MatchesPipelineStart(frame, start, pipeline.RequiresHistory)) {
+                        throw new InvalidDataException("Не удалось подтвердить порядок или первый кадр строгой цепочки");
                     }
                     previous = frame;
                     reachedTarget = reachedTarget ||
@@ -97,7 +101,7 @@ internal sealed partial class PreviewCoordinator {
                         continue;
                     }
 
-                    long outputBytes = CheckPipelineOutput(output, frame, pipeline.SelectedFrameBytes);
+                    long outputBytes = CheckPipelineOutput(output, frame, pipeline);
                     long retainedBytes = request.ResultBytes - pipeline.SelectedFrameBytes + outputBytes;
                     lock (gate) {
                         if (!IsCurrent(request) || error is not null) {
@@ -167,21 +171,32 @@ internal sealed partial class PreviewCoordinator {
         }
     }
 
-    // сверяем метки итогового кадра и возвращаем резерв только тех пикселей, которые останутся в очереди
-    private static long CheckPipelineOutput(VideoPipelineOutput? output, TimedVideoInput frame, long reservedBytes) {
-        if (output is null || output.Foreground.Ordinal != frame.Ordinal || output.Foreground.Time != frame.Time ||
-            output.Foreground.Until != frame.Until) {
+    // проверяем физическое начало предыстории или точную первую позицию обычного анализа
+    private static bool MatchesPipelineStart(TimedVideoInput frame, VideoFrameReadRequest start, bool requiresHistory) =>
+        requiresHistory ? frame is { Ordinal: 0, Time.Value: 0 } :
+            VideoForegroundFrame.Covers(frame.Time, frame.Until, frame.Ordinal, start);
+
+    // проверяем идентичность результата и считаем только пиксели, которые останутся в очереди
+    private static long CheckPipelineOutput(VideoPipelineOutput? output, TimedVideoInput frame, StrictVideoPipeline pipeline) {
+        if (output is null) {
+            throw new InvalidDataException("Нет готового результата для показанного кадра");
+        }
+        long bytes = output.Analysis is { } analysis ? VideoEditorFrame.GetBufferBytes(analysis.Size) : 0;
+        if (pipeline.RequiresHistory && output.Foreground is { } foreground &&
+            foreground.Ordinal == frame.Ordinal && foreground.Time == frame.Time && foreground.Until == frame.Until) {
+            long pixels = (long)foreground.Size.Width * foreground.Size.Height;
+            if (pixels <= 0 || foreground.Rgb.Length != checked(pixels * 3) || foreground.Mask.Length != pixels) {
+                throw new InvalidDataException("Получен неполный результат видеоряда");
+            }
+            bytes = checked(bytes + foreground.Rgb.Length + foreground.Mask.Length);
+        }
+        else if (pipeline.RequiresHistory || output.Foreground is not null || output.Analysis is null ||
+            output.AnalysisFrame is not { } cursor || cursor.Ordinal != frame.Ordinal || cursor.Time != frame.Time ||
+            cursor.AtEnd != frame.IsLast) {
             throw new InvalidDataException("Комбинированный результат относится к другому видеокадру");
         }
-        VideoForegroundFrame foreground = output.Foreground;
-        long pixels = (long)foreground.Size.Width * foreground.Size.Height;
-        if (pixels <= 0 || foreground.Rgb.Length != checked(pixels * 3) || foreground.Mask.Length != pixels) {
-            throw new InvalidDataException("Получен неполный результат видеоряда");
-        }
-        long bytes = checked((long)foreground.Rgb.Length + foreground.Mask.Length +
-            (output.Analysis is { } analysis ? VideoEditorFrame.GetBufferBytes(analysis.Size) : 0));
-        if (bytes > reservedBytes) {
-            throw new InvalidOperationException("Комбинированный результат превышает предельный размер буфера");
+        if (bytes <= 0 || bytes > pipeline.SelectedFrameBytes) {
+            throw new InvalidOperationException("Результат строгой цепочки не помещается в кадровый резерв");
         }
         return bytes;
     }

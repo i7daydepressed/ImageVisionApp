@@ -32,6 +32,8 @@ public partial class MainWindow {
             Children.Add(stage);
         }
 
+        public bool ShowPhysicalFrameNumber { get; set; } = true;
+
         public void Refresh(int scope, VideoPipelineMeasurements.Snapshot? sample) {
             IsVisible = sample is not null || scope == 3;
             status.Text = sample is null ? "Данных замера пока нет." :
@@ -47,7 +49,7 @@ public partial class MainWindow {
                 RefreshRows(outputRows, [
                     FormatCount(value.ReadyFrames, value.LastReadyOrdinal is not null),
                     FormatCount(value.PublishedFrames, value.LastReadyOrdinal is not null),
-                    value.LastReadyOrdinal is long ordinal ? $"№{ordinal}" : Missing,
+                    ShowPhysicalFrameNumber && value.LastReadyOrdinal is long ordinal ? $"№{ordinal}" : Missing,
                     FormatTime(value.LastReadyLatency), FormatTime(value.LastPresentationWait),
                     FormatTime(value.LastPresentationLatency),
                     FormatTime(value.AutomaticWait > TimeSpan.Zero || value.ReadyFrames > 0 ? value.AutomaticWait : null),

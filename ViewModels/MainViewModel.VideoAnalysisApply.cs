@@ -42,6 +42,8 @@ public partial class MainViewModel {
             return Task.CompletedTask;
         }
 
+        manualAnalysisPlaybackPaused = true;
+        InvalidateFrameAnalysisPlayback();
         CancelVideoAnalysisApply();
         TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         videoAnalysisApply = (document, completion);
@@ -93,7 +95,8 @@ public partial class MainViewModel {
                             throw new InvalidOperationException("Нет подтверждённого видеокадра на этой позиции");
                         }
                         if (!analysisWorkerRunning && hasInput &&
-                            TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Original, out VideoAnalysisInput input)) {
+                            TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Original, out VideoAnalysisInput input) &&
+                            IsAnalysisBudgetAvailableForApply()) {
                             await RunVideoAnalysisAsync();
                             if (IsCurrentAnalysisLayer(input.Key)) {
                                 break;

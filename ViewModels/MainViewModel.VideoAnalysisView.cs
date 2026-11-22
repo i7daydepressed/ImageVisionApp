@@ -110,12 +110,13 @@ public partial class MainViewModel {
         videoAnalysisRequest is { } request && NeedsEditedVideoAnalysisInput(request);
     private bool WantsVideoAnalysisEditedInput => VideoAnalysisManualNeedsEditedInput ||
         videoAnalysisVisible && (videoAnalysisResultTabSelected
-            ? !VideoAnalysisUsesSequence && (videoAnalysisBackground == VideoAnalysisBackground.Edited ||
+            ? !VideoAnalysisUsesSequence && !ShowsFrameAnalysisPlayback && (videoAnalysisBackground == VideoAnalysisBackground.Edited ||
               videoAnalysisBackground == VideoAnalysisBackground.Segmentation && videoSegmentationSource == AnalysisImageSource.Edited)
             : videoAnalysisDisplayedSource == AnalysisImageSource.Edited);
     private bool ShouldRetryVideoAnalysisEditedInput =>
         videoAnalysisEditedFailure is not null && videoAnalysisEditedBudget != PreviewSettings.BudgetBytes;
-    private Bitmap? VideoAnalysisResultImage => VideoAnalysisUsesSequence ? combinedVideoAnalysisResult : videoAnalysisComposition ??
+    private Bitmap? VideoAnalysisResultImage => VideoAnalysisUsesSequence ? combinedVideoAnalysisResult :
+        ShowsFrameAnalysisPlayback ? videoAnalysisPlaybackBitmap : videoAnalysisComposition ??
         (TryResolveVideoAnalysisView(out VideoAnalysisView view) ? view.Bitmap : null);
 
     // показываем ожидание вычислений отдельно от уже доступных пикселей подложки
@@ -171,11 +172,13 @@ public partial class MainViewModel {
 
     // меняем только показ и сразу возвращаем подложку, если прежние отметки уже не актуальны
     private void RefreshVideoAnalysisComposition() {
-        UpdateCombinedVideoAnalysisRoute();
+        bool restartedTemporal = UpdateCombinedVideoAnalysisRoute();
+        UpdateFrameAnalysisPlaybackPlan(restartStrict: !restartedTemporal);
         UpdateVideoAnalysisPipelineDescription();
         videoAnalysisViewRevision++;
         videoAnalysisCompositionFailure = null;
-        videoAnalysisViewRequested = (videoAnalysisVisible || VideoAnalysisManualNeedsEditedInput) && IsVideoOpen && !analysisDisposed;
+        videoAnalysisViewRequested = (videoAnalysisVisible && !ShowsFrameAnalysisPlayback || VideoAnalysisManualNeedsEditedInput) &&
+            IsVideoOpen && !analysisDisposed;
         if (videoAnalysisApplyingPlan && !WantsVideoAnalysisEditedInput) {
             videoAnalysisViewCancellation?.Cancel();
         }

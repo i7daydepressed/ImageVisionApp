@@ -37,7 +37,7 @@ public partial class MainViewModel {
 
     // во время Play учитываем и ожидание кадра, на паузе сохраняем только законченное окно
     private void StopVisibleVideoOutputOnPause() {
-        if (videoAnalysisVisible && !IsCombinedAnalysisOutputSelected ||
+        if (videoAnalysisVisible && !IsCombinedAnalysisOutputSelected && !IsFrameAnalysisOutputSelected ||
             !IsVideoOpen || mediaPreviewsDisposed) {
             return;
         }
@@ -77,10 +77,12 @@ public partial class MainViewModel {
         StopVisibleVideoOutputOnPause();
         VideoPreviewMeasurements.Window? window = visibleVideoOutput.Last;
         string picture = IsCombinedAnalysisOutputSelected ? "Результат видеоряда" :
+            IsFrameAnalysisOutputSelected ? "Покадровый результат" :
             IsVideoForegroundOutputSelected ? "Вычитание фона" : IsOriginalVideoOutputSelected ? "Оригинал" : "Изменённое";
-        string stage = IsCombinedAnalysisOutputSelected ? "Анализ" : videoForegroundVisible ? "Работа с видеорядом" :
+        string stage = IsCombinedAnalysisOutputSelected || IsFrameAnalysisOutputSelected ? "Анализ" :
+            videoForegroundVisible ? "Работа с видеорядом" :
             videoEditorVisible ? "Редактирование" : "Информация";
-        string? notice = combinedStrictError ?? (videoForegroundVisible && videoForegroundFailed ? VideoForegroundStatus :
+        string? notice = strictPipelineError ?? (videoForegroundVisible && videoForegroundFailed ? VideoForegroundStatus :
             videoAnalysisVisible && videoForegroundFailed ? combinedVideoAnalysisNotice :
             videoEditorVisible ? IsOriginalVideoOutputSelected ? VideoEditorSourceNotice : VideoEditorNotice : null);
         string state = notice ?? (visibleVideoOutput.IsActive

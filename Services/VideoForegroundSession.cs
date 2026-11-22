@@ -56,7 +56,8 @@ internal sealed class VideoForegroundSession : IAsyncDisposable {
 
     // возвращаем маску одиночного сеанса без зависимости от представления анализа
     public async Task<VideoForegroundFrame> ReadAsync(VideoFrameReadRequest request) =>
-        (await ReadPipelineAsync(request).ConfigureAwait(false)).Foreground;
+        (await ReadPipelineAsync(request).ConfigureAwait(false)).Foreground
+        ?? throw new InvalidDataException("Нет результата выделения переднего плана");
 
     // обучаем модель на всех кадрах от начала, а сохраняем только нужный RGB и маску
     public async Task<VideoPipelineOutput> ReadPipelineAsync(VideoFrameReadRequest request) {
@@ -107,8 +108,8 @@ internal sealed class VideoForegroundSession : IAsyncDisposable {
     // передаем процессору каждый физический кадр, а для публикации сохраняем только нужный
     private async Task<VideoPipelineOutput> ProcessToAsync(VideoFrameReadRequest request) {
         IAsyncEnumerator<TimedVideoInput> inputFrames = frames!;
-        long expectedOrdinal = current is { } last ? last.Foreground.Ordinal + 1 : 0;
-        VideoPresentationTime expectedTime = current?.Foreground.Until ?? new(0, 1);
+        long expectedOrdinal = current?.Foreground is { } last ? last.Ordinal + 1 : 0;
+        VideoPresentationTime expectedTime = current?.Foreground?.Until ?? new(0, 1);
         while (await inputFrames.MoveNextAsync().ConfigureAwait(false)) {
             TimedVideoInput input = inputFrames.Current;
             using VideoEditorFrame pixels = input.Pixels;
@@ -123,8 +124,12 @@ internal sealed class VideoForegroundSession : IAsyncDisposable {
             VideoPipelineOutput? output = await processor!.ProcessAsync(input, pixels, null, null, publish, token)
                 .ConfigureAwait(false);
             if (publish) {
+                if (output?.Foreground is null) {
+                    output?.Dispose();
+                    throw new InvalidDataException("Нет результата выделения переднего плана");
+                }
                 ClearCurrent();
-                current = output ?? throw new InvalidDataException("Нет результата для выбранного кадра");
+                current = output;
                 if (input.IsLast) {
                     await CloseInputAsync().ConfigureAwait(false);
                 }

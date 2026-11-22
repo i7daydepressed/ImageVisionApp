@@ -75,7 +75,7 @@ public partial class MainViewModel {
     private bool HasAnalysisVideoMethods => isEdgesAnalysisEnabled || IsSegmentationAnalysisEnabled || isKeypointAnalysisEnabled || isPlateAnalysisEnabled;
     private bool HasVideoAnalysisInput => TryResolveReadyVideoAnalysisInput(AnalysisImageSource.Original, out _);
     private bool HasVideoAnalysisResult => VideoAnalysisUsesSequence ? combinedVideoAnalysisResult is not null :
-        edgesResult is not null || segmentationResult is not null || keypointsResult is not null || isPlateAnalysisEnabled && plateResult is not null;
+        ShowsFrameAnalysisPlayback ? videoAnalysisPlaybackBitmap is not null : edgesResult is not null || segmentationResult is not null || keypointsResult is not null || isPlateAnalysisEnabled && plateResult is not null;
     internal VideoAnalysisFrameKey? AnalyzedVideoFrame =>
         edgesResult?.VideoFrame ?? segmentationResult?.VideoFrame ?? keypointsResult?.VideoFrame ??
         (isPlateAnalysisEnabled ? plateResult?.VideoFrame : null);
@@ -333,6 +333,10 @@ public partial class MainViewModel {
 
     // снимаем всю композицию предыдущего документа и отменяем его незавершенную работу
     private void ClearVideoAnalysis() {
+        InvalidateFrameAnalysisPlayback();
+        videoAnalysisPlaybackPlan = null;
+        videoAnalysisPlaybackPlanError = null;
+        manualAnalysisPlaybackPaused = false;
         CancelVideoAnalysisApply();
         videoAnalysisFailure = null;
         CancelVideoAnalysisComposition();
@@ -418,6 +422,13 @@ public partial class MainViewModel {
                 (combinedVideoAnalysisResult is null ? "Ожидание результата очереди видеоряда" : "Готов результат очереди видеоряда");
             return;
         }
+        if (ShowsFrameAnalysisPlayback) {
+            AnalysisStatusMessage = strictPipelineError ?? videoAnalysisPlaybackPlanError ?? videoAnalysisPlaybackFailure ??
+                (videoAnalysisPlaybackStamp is { } stamp
+                    ? $"Анализ кадра · {(stamp.Exact ? "" : "позиция плеера ≈ ")}{FormatVideoAnalysisTime((long)stamp.Time.Milliseconds)}"
+                    : "Ожидание обработанного кадра…");
+            return;
+        }
         string? error = videoAnalysisFailure ?? videoEditorSourceError ??
             (WantsVideoAnalysisEditedInput ? videoAnalysisEditedFailure : null) ?? videoAnalysisCompositionFailure ??
             (isPlateAnalysisEnabled && plateFailure.Length > 0 ? plateFailure : null);
@@ -485,7 +496,8 @@ public partial class MainViewModel {
         else if (!visible) {
             CancelVideoAnalysisApply();
             CancelVideoAnalysisComposition();
-            UpdateCombinedVideoAnalysisRoute();
+            bool restartedTemporal = UpdateCombinedVideoAnalysisRoute();
+            UpdateFrameAnalysisPlaybackPlan(restartStrict: !restartedTemporal);
             if (IsVideoOpen && !analysisDisposed) {
                 RefreshVideoAnalysisStatus();
             }

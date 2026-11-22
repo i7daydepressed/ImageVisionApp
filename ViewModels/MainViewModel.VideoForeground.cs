@@ -131,8 +131,8 @@ public partial class MainViewModel {
         videoForegroundFailed = false;
         videoForegroundApplying = true;
         PauseVideoPlayback();
-        if (combinedStrictError is not null && IsCombinedStrictOutputSelected) {
-            RestartCombinedStrictOutput();
+        if (strictPipelineError is not null && IsCombinedStrictOutputSelected) {
+            RestartStrictPipelineOutput();
         }
         RefreshVideoForeground();
     }
@@ -143,7 +143,7 @@ public partial class MainViewModel {
             ResetVisibleVideoOutput();
         }
         InvalidateVideoForeground();
-        RestartCombinedStrictOutput();
+        RestartStrictPipelineOutput();
         RefreshVideoForeground();
     }
 
@@ -155,7 +155,7 @@ public partial class MainViewModel {
         VideoForegroundPath = null;
         videoForegroundStop?.Cancel();
         ClearVideoForeground();
-        ResetCombinedOutputMeasurements();
+        ResetPipelineOutputMeasurements();
         SetVideoForegroundStatus(!IsVideoOpen ? ForegroundNoVideo :
             VideoForegroundEnabled ? ForegroundPreparing : ForegroundDisabled);
     }
@@ -285,7 +285,8 @@ public partial class MainViewModel {
                 }
 
                 VideoPipelineOutput output = await Task.Run(() => session.ReadPipelineAsync(request), stop.Token);
-                VideoForegroundFrame frame = output.Foreground;
+                VideoForegroundFrame frame = output.Foreground ??
+                    throw new InvalidOperationException("Видеоряд не вернул кадр переднего плана");
                 if (!IsCurrentVideoForegroundWork() || !TryGetVideoForegroundRequest(out VideoFrameReadRequest latest)) {
                     continue;
                 }

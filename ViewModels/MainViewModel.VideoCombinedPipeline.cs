@@ -15,20 +15,21 @@ public partial class MainViewModel {
     private string? observedSequenceAnalysisError;
     private WriteableBitmap? combinedVideoAnalysisResult;
     private string? combinedVideoAnalysisNotice;
-    private bool combinedStrictActive;
-    private string? combinedStrictError;
+    private bool strictPipelineActive;
+    private string? strictPipelineError;
 
     private bool IsCombinedAnalysisOutputSelected =>
         videoAnalysisVisible && videoAnalysisResultTabSelected && VideoAnalysisUsesSequence;
     private bool WantsVideoTemporalPipeline => IsVideoOpen && VideoForegroundEnabled &&
         (IsVideoForegroundOutputSelected || IsCombinedAnalysisOutputSelected);
     private bool IsCombinedStrictOutputSelected => IsStrictVideo && WantsVideoTemporalPipeline;
+    private bool IsStrictPipelineOutputSelected => IsCombinedStrictOutputSelected || IsStrictFrameAnalysisSelected;
     private string? CombinedVideoAnalysisNotice => !VideoForegroundEnabled
         ? "Включите вычитание фона на вкладке «Работа с видеорядом»"
         : combinedVideoAnalysisNotice;
 
     // включаем новый проход только при изменении неизменяемого снимка настроек
-    private void UpdateCombinedVideoAnalysisRoute() {
+    private bool UpdateCombinedVideoAnalysisRoute() {
         VideoSequenceAnalysisPlan? next = null;
         string? error = null;
         if (IsCombinedAnalysisOutputSelected && CurrentDocument is { } document && !mediaPreviewsDisposed) {
@@ -40,11 +41,12 @@ public partial class MainViewModel {
             }
         }
         if (Equals(next, observedSequenceAnalysisPlan) && error == observedSequenceAnalysisError) {
-            return;
+            return false;
         }
         observedSequenceAnalysisPlan = next;
         observedSequenceAnalysisError = error;
         RestartVideoForeground();
+        return true;
     }
 
     // ручной расчет ставит общий плеер на паузу и дочитывает подтвержденную позицию
@@ -55,14 +57,17 @@ public partial class MainViewModel {
         videoForegroundFailed = false;
         videoForegroundApplying = true;
         PauseVideoPlayback();
-        if (combinedStrictError is not null && IsCombinedStrictOutputSelected) {
-            RestartCombinedStrictOutput();
+        if (strictPipelineError is not null && IsCombinedStrictOutputSelected) {
+            RestartStrictPipelineOutput();
         }
         RefreshVideoForeground();
     }
 
     // храним отдельно окончательный растр анализа и готовую пару входа и маски видеоряда
     private void PublishCombinedOutput(VideoPipelineOutput output) {
+        if (output.Foreground is not { } foreground) {
+            return;
+        }
         if (output.Analysis is { } pixels && IsCombinedAnalysisOutputSelected) {
             WriteableBitmap? previous = combinedVideoAnalysisResult;
             WriteableBitmap target = GetPreparedBitmap(previous, pixels.Size);
@@ -76,7 +81,7 @@ public partial class MainViewModel {
                 }
                 throw;
             }
-            videoForegroundFrame = output.Foreground;
+            videoForegroundFrame = foreground;
             combinedVideoAnalysisResult = target;
             combinedVideoAnalysisNotice = null;
             NotifyVideoAnalysisPreview();
@@ -89,7 +94,7 @@ public partial class MainViewModel {
             }
         }
         else if (IsVideoForegroundOutputSelected) {
-            PublishVideoForeground(output.Foreground);
+            PublishVideoForeground(foreground);
         }
         if (output.Ready is { } sample) {
             combinedMeasurements.RecordPublished(sample);
@@ -149,9 +154,9 @@ public partial class MainViewModel {
         long ScratchBytes, long SelectedFrameBytes, int Capacity, bool NeedsEditing);
 
     // перезапрашиваем ту же позицию у существующего строгого координатора
-    private void RestartCombinedStrictOutput() {
+    private void RestartStrictPipelineOutput() {
         if (!IsStrictVideo || preparedSource is null || videoFrameStep is not null ||
-            !IsCombinedStrictOutputSelected && !combinedStrictActive) {
+            !IsStrictPipelineOutputSelected && !strictPipelineActive) {
             return;
         }
         RequestPreparedVideo(PlaybackStatus.Position, preparedAtEnd, preservePlay: true,
@@ -159,9 +164,9 @@ public partial class MainViewModel {
     }
 
     // новый seek или маршрут исключает старые публикации и открывает отдельное измерение
-    private void ResetCombinedOutputMeasurements() {
+    private void ResetPipelineOutputMeasurements() {
         recordedCombinedWaitMs = 0;
-        if (WantsVideoTemporalPipeline) {
+        if (WantsVideoTemporalPipeline || IsFrameAnalysisOutputSelected) {
             combinedMeasurementGeneration = combinedMeasurements.StartGeneration();
         }
         else {
@@ -171,10 +176,10 @@ public partial class MainViewModel {
 
     // собираем накопленные интервалы реальной паузы общего строгого плеера
     internal VideoPipelineMeasurements.Snapshot? ReadVideoPipelineMeasurements() {
-        if (!WantsVideoTemporalPipeline) {
+        if (!WantsVideoTemporalPipeline && !ShowsFrameAnalysisPlayback) {
             return null;
         }
-        if (combinedStrictActive && IsStrictVideo) {
+        if (strictPipelineActive && IsStrictVideo) {
             long total = ReadStrictVideoPreviewState().AutomaticWaitMs;
             if (total > recordedCombinedWaitMs) {
                 combinedMeasurements.RecordAutomaticWait(combinedMeasurementGeneration,
@@ -183,7 +188,7 @@ public partial class MainViewModel {
             }
         }
         var measurement = combinedMeasurements.Read();
-        return measurement is { } snapshot && combinedStrictActive && IsStrictVideo &&
+        return measurement is { } snapshot && strictPipelineActive && IsStrictVideo &&
             PreparedVideo is { } window && window.Generation == preparedGeneration
             ? snapshot with { ReservedBytes = window.ReservedBytes, PeakReservedBytes = window.PeakReservedBytes }
             : measurement;

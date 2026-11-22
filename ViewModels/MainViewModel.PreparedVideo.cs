@@ -55,8 +55,9 @@ public partial class MainViewModel {
 
     // очищаем источник предыдущего файла и применяем текущий выбор к новому видео
     private void ResetPreparedVideoDocument() {
-        combinedStrictActive = false;
-        combinedStrictError = null;
+        preparedAnalysisPausedForApply = false;
+        strictPipelineActive = false;
+        strictPipelineError = null;
         CancelPreviewModeHandoff();
         preparedVideo?.Cancel();
         preparedSource = null;
@@ -197,8 +198,9 @@ public partial class MainViewModel {
         CancelVideoFrameStep();
         bool wasPrepared = preparedSource is not null;
         bool wasStrict = IsStrictVideo || PreviewSettings.Mode == VideoPreviewMode.Strict;
-        combinedStrictActive = false;
-        combinedStrictError = null;
+        preparedAnalysisPausedForApply = false;
+        strictPipelineActive = false;
+        strictPipelineError = null;
         long duration = PlaybackStatus.Duration;
         bool atEnd = duration > 0 && position >= duration ||
             wasPrepared && preparedAtEnd && position == preparedPosition;
@@ -244,11 +246,12 @@ public partial class MainViewModel {
     }
 
     private bool HasLivePreviewWork =>
-        videoAnalysisApplyingPlan || IsReadingVideoAnalysisLiveFallback || HasLivePreviewSourceWork;
+        videoAnalysisApplyingPlan || IsReadingVideoAnalysisLiveFallback ||
+        videoAnalysisPlaybackStop is not null || HasLivePreviewSourceWork;
     private bool HasLivePreviewSourceWork => readingVideoSeek || videoPreviewExecutor is { Metrics.ReservedBytes: > 0 };
 
     private bool WaitingForPreparedVideoBuffers => HasLivePreviewWork ||
-        IsCombinedStrictOutputSelected && videoForegroundStop is not null;
+        IsStrictPipelineOutputSelected && (videoForegroundStop is not null || videoAnalysisReservedBytes > 0);
 
     // начинаем новые расчеты только после возврата буферов другого режима
     private bool WaitForVideoModeHandoff(VideoPlaybackSession? playback) {
@@ -328,10 +331,14 @@ public partial class MainViewModel {
         if (!preservePlay) {
             videoHandoffReplay = false;
         }
-        combinedStrictActive = IsCombinedStrictOutputSelected;
-        combinedStrictError = null;
-        if (combinedStrictActive) {
+        preparedAnalysisPausedForApply = false;
+        strictPipelineActive = IsStrictPipelineOutputSelected;
+        strictPipelineError = null;
+        if (strictPipelineActive) {
             videoForegroundStop?.Cancel();
+            videoAnalysisPlaybackStop?.Cancel();
+        }
+        if (IsCombinedStrictOutputSelected) {
             ClearVideoForeground();
         }
         try {
@@ -374,7 +381,7 @@ public partial class MainViewModel {
         }
         EnsureVideoPlaybackTimer();
         UpdatePlaybackStatus(PlaybackStatus with { Position = preparedPosition, IsPlaying = videoWantsToPlay,
-            Notice = combinedStrictError ?? "Подготовка кадра…" });
+            Notice = strictPipelineError ?? "Подготовка кадра…" });
         if (keepWindow && videoPlayback is { } playback) {
             RefreshPreparedVideo(playback);
         }
@@ -394,14 +401,14 @@ public partial class MainViewModel {
             try {
                 preparedVideo ??= new PreviewCoordinator();
                 VideoFrameReadRequest start = new(preparedPosition, preparedAtEnd);
-                combinedStrictActive = IsCombinedStrictOutputSelected;
+                strictPipelineActive = IsStrictPipelineOutputSelected;
                 StrictVideoPipeline? pipeline = null;
                 VideoEditorPlan editor = videoEditorPlan;
-                if (combinedStrictActive && CurrentDocument is { } document) {
+                if (IsCombinedStrictOutputSelected && CurrentDocument is { } document) {
                     if (source is FfprobeVideoMediaSource concrete) {
                         source = concrete.WithDecoderThreads(PreviewSettings.ForegroundDecoderThreads);
                     }
-                    ResetCombinedOutputMeasurements();
+                    ResetPipelineOutputMeasurements();
                     CombinedVideoWork work = CaptureCombinedVideoWork(document, source);
                     if (!work.NeedsEditing && editor.HasSteps) {
                         editor = new(editor.Revision, []);
@@ -409,6 +416,14 @@ public partial class MainViewModel {
                     long generation = combinedMeasurementGeneration;
                     pipeline = new(work.Create, work.PersistentBytes, work.ScratchBytes, work.SelectedFrameBytes, work.Capacity,
                         (stage, bytes) => combinedMeasurements.Reserve(generation, stage, bytes));
+                }
+                else if (IsStrictFrameAnalysisSelected && CurrentDocument is { } analysisDocument) {
+                    ResetPipelineOutputMeasurements();
+                    VideoSequenceAnalysisPlan plan = CaptureFrameAnalysisPlaybackPlan(analysisDocument);
+                    pipeline = CaptureStrictFrameAnalysisPipeline(source, plan);
+                    if (!plan.NeedsEditing && editor.HasSteps) {
+                        editor = new(editor.Revision, []);
+                    }
                 }
                 preparedGeneration = IsStrictVideo
                     ? preparedVideo.RequestStrict(source, start with { Anchor = strictStartAnchor },
@@ -427,7 +442,7 @@ public partial class MainViewModel {
             bool covered = IsStrictVideo ? TryShowFirstStrictFrame() : AdvancePreparedVideo(preparedPosition);
             if (preparedSource is not null) {
                 UpdatePlaybackStatus(PlaybackStatus with {
-                    Notice = combinedStrictError ?? (covered ? "Подготовка воспроизведения…" : "Подготовка кадра…")
+                    Notice = strictPipelineError ?? (covered ? "Подготовка воспроизведения…" : "Подготовка кадра…")
                 });
             }
         }
@@ -489,10 +504,11 @@ public partial class MainViewModel {
             InvalidateVideoForeground();
             RequestPreparedVideo(0, atEnd: false);
         }
-        else if (pin is not null || combinedStrictError is not null) {
-            RequestPreparedVideo(preparedPosition, atEnd: false, strictAnchor: IsStrictVideo ? pin : null);
+        else if (pin is not null || strictPipelineError is not null || preparedAnalysisPausedForApply) {
+            VideoFrameCursor? anchor = pin ?? (preparedAnalysisPausedForApply ? preparedPresentedFrame : null);
+            RequestPreparedVideo(preparedPosition, atEnd: false, strictAnchor: IsStrictVideo ? anchor : null);
         }
-        if (combinedStrictError is not null) {
+        if (strictPipelineError is not null) {
             return;
         }
         videoWantsToPlay = true;
@@ -661,8 +677,13 @@ public partial class MainViewModel {
             videoEditorSourceError = null;
             videoEditorError = null;
             VideoPreviewRevision++;
-            if (combinedStrictActive && frame.PipelineOutput is { } output && IsCombinedStrictOutputSelected) {
-                PublishCombinedOutput(output);
+            if (strictPipelineActive && frame.PipelineOutput is { } output) {
+                if (IsCombinedStrictOutputSelected) {
+                    PublishCombinedOutput(output);
+                }
+                else if (IsStrictFrameAnalysisSelected && output.Analysis is { } analyzed) {
+                    PublishFrameAnalysisPlayback(analyzed, frame.Time, output.Ready, exactTime: true);
+                }
             }
             OnPropertyChanged(nameof(VideoPreviewFrame));
             OnPropertyChanged(nameof(VideoPreviewRevision));
@@ -703,7 +724,7 @@ public partial class MainViewModel {
 
     // при отказе проверенного источника передаем ту же позицию и команду живому предпросмотру
     private void FailPreparedVideo(string reason) {
-        if (IsCombinedStrictOutputSelected && combinedStrictActive) {
+        if (IsStrictPipelineOutputSelected && strictPipelineActive) {
             videoWantsToPlay = false;
             videoHandoffReplay = false;
             preparedNeedsSeek = false;
@@ -711,14 +732,19 @@ public partial class MainViewModel {
             strictClockStartedAt = null;
             videoPlayback?.SetPaused(true);
             preparedVideo?.Cancel();
-            ClearVideoForeground();
-            combinedStrictError = $"Строгий показ недоступен: {reason}";
-            SetVideoForegroundStatus(combinedStrictError);
-            combinedVideoAnalysisNotice = combinedStrictError;
-            if (IsCombinedAnalysisOutputSelected) {
+            strictPipelineError = $"Строгий показ недоступен: {reason}";
+            if (IsCombinedStrictOutputSelected) {
+                ClearVideoForeground();
+                SetVideoForegroundStatus(strictPipelineError);
+                combinedVideoAnalysisNotice = strictPipelineError;
+            }
+            else {
+                InvalidateFrameAnalysisPlayback();
+            }
+            if (videoAnalysisVisible) {
                 RefreshVideoAnalysisStatus();
             }
-            UpdatePlaybackStatus(PlaybackStatus with { IsPlaying = false, Notice = combinedStrictError });
+            UpdatePlaybackStatus(PlaybackStatus with { IsPlaying = false, Notice = strictPipelineError });
             return;
         }
         if (IsStrictVideo || PreviewSettings.Mode == VideoPreviewMode.Strict) {

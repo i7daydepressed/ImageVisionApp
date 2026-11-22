@@ -14,6 +14,9 @@ internal sealed record VideoSequenceAnalysisPlan(MediaDocument Document, VideoEd
     public bool NeedsEditing => Background == VideoPipelineStage.Editing ||
         Settings.EdgeMethod.HasValue && EdgeSource == AnalysisImageSource.Edited ||
         Settings.Clusters.HasValue && SegmentationSource == AnalysisImageSource.Edited;
+    public bool RequiresTemporal => Background == VideoPipelineStage.VideoSequence ||
+        Settings.EdgeMethod.HasValue && EdgeSource == AnalysisImageSource.VideoSequence ||
+        Settings.Clusters.HasValue && SegmentationSource == AnalysisImageSource.VideoSequence;
     private bool HasMethods => Settings.EdgeMethod.HasValue || Settings.Clusters.HasValue || Settings.FastThreshold.HasValue || Settings.Plate;
 
     // временной результат наследует ориентацию собственного входа, размер квадрата сам по себе поворот не определяет
@@ -48,7 +51,8 @@ internal sealed record VideoSequenceAnalysisPlan(MediaDocument Document, VideoEd
             return (editBytes, composition, 0);
         }
         var fit = VideoFrameAnalysisService.FitPipelineWorkers(original, NeedsEditing ? Editor.GetGeometry(original).OutputSize : null,
-            Geometry(original, VideoPipelineStage.VideoSequence).OutputSize, EdgeSource, SegmentationSource, Settings,
+            RequiresTemporal ? Geometry(original, VideoPipelineStage.VideoSequence).OutputSize : null,
+            EdgeSource, SegmentationSource, Settings,
             Resources.AnalysisMaximumWorkers, Resources.AnalysisBudgetBytes - composition);
         if (fit.Workers == 0) {
             throw new InvalidOperationException("Недостаточно бюджета анализа для выбранных методов видеоряда");
@@ -56,13 +60,22 @@ internal sealed record VideoSequenceAnalysisPlan(MediaDocument Document, VideoEd
         return (editBytes, composition + fit.Bytes, fit.Workers);
     }
 
-    // два входа одного физического кадра принадлежат вызывающему коду, результат получает свой буфер
-    public VideoEditorFrame Transform(TimedVideoInput original, VideoEditorFrame temporal, CancellationToken token,
+    // вычитаем заимствованные bgra, которые уже учтены у источника и редактора
+    internal long GetAnalysisWorkBytes(PixelSize original) {
+        long reserved = GetResources(original).AnalysisBytes;
+        return HasMethods ? reserved - VideoEditorFrame.GetBufferBytes(original) * (NeedsEditing ? 2 : 1) : reserved;
+    }
+
+    // заимствуем нужные растры одного физического кадра и возвращаем собственный результат
+    public VideoEditorFrame Transform(TimedVideoInput original, VideoEditorFrame? temporal, CancellationToken token,
         VideoEditorFrame? preparedEdited = null) {
         token.ThrowIfCancellationRequested();
         PixelSize size = original.Pixels.Size;
         VideoEditorGeometry sequenceGeometry = Geometry(size, VideoPipelineStage.VideoSequence);
-        if (temporal.Size != sequenceGeometry.OutputSize) {
+        if (RequiresTemporal && temporal is null) {
+            throw new InvalidOperationException("Для выбранного входа анализа нужен результат видеоряда");
+        }
+        if (temporal is not null && temporal.Size != sequenceGeometry.OutputSize) {
             throw new InvalidOperationException("Размер видеоряда не соответствует геометрии выбранного входа");
         }
         int workers = GetResources(size).Workers;
@@ -94,7 +107,8 @@ internal sealed record VideoSequenceAnalysisPlan(MediaDocument Document, VideoEd
         VideoFrameAnalysisResult? result = null;
         if (HasMethods) {
             result = VideoFrameAnalysisService.AnalyzePipeline(
-                Capture(key, original.Pixels), edited is null ? null : Capture(editedKey, edited), Capture(sequenceKey, temporal),
+                Capture(key, original.Pixels), edited is null ? null : Capture(editedKey, edited),
+                temporal is null ? null : Capture(sequenceKey, temporal),
                 EdgeSource, SegmentationSource, Settings, token, workers);
             token.ThrowIfCancellationRequested();
             if (result.PlateError is { } error) {

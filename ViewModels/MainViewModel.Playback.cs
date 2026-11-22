@@ -134,6 +134,11 @@ public partial class MainViewModel {
             return;
         }
         CancelVideoAnalysisApply();
+        if (!videoWantsToPlay && IsFrameAnalysisOutputSelected) {
+            manualAnalysisPlaybackPaused = false;
+            videoAnalysisPlaybackFailure = null;
+            NotifyVideoAnalysisPreview();
+        }
         preparedPauseOnCurrentPosition = false;
         bool canceledStep = CancelVideoFrameStep();
         if (canceledStep && preparedSource is not null && videoPinnedFrame is null) {
@@ -678,6 +683,7 @@ public partial class MainViewModel {
                 OnPropertyChanged(nameof(CanApplyVideoForeground));
             }
         }
+        RefreshFrameAnalysisPlayback();
         RefreshVideoAnalysisInput();
         RefreshVideoForeground();
         StopVisibleVideoOutputOnPause();

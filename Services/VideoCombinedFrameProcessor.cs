@@ -7,8 +7,9 @@ using ImageVisionApp.Models;
 
 namespace ImageVisionApp.Services;
 
-internal sealed record VideoPipelineOutput(VideoForegroundFrame Foreground, VideoEditorFrame? Analysis,
-    VideoPipelineMeasurements.ReadyStamp? Ready, IDisposable? ForegroundLease, IDisposable? AnalysisLease) : IDisposable {
+internal sealed record VideoPipelineOutput(VideoForegroundFrame? Foreground, VideoEditorFrame? Analysis,
+    VideoPipelineMeasurements.ReadyStamp? Ready, IDisposable? ForegroundLease, IDisposable? AnalysisLease,
+    VideoFrameCursor? AnalysisFrame = null) : IDisposable {
     // готовая картинка и ее резерв имеют один срок жизни у получателя
     public void Dispose() {
         Analysis?.Dispose();
