@@ -53,9 +53,12 @@ internal sealed class VideoForegroundInputPlan {
 
     public bool UsesAnalysis => source == VideoPipelineStage.Analysis;
 
-    // размеры модели определяет растр подложки, включая поворот до сегментации
-    public PixelSize GetOutputSize(PixelSize original) =>
-        UsesEditedBackdrop ? editor.GetGeometry(original).OutputSize : original;
+    // сохраняем ориентацию выбранного растра, в том числе при повороте квадратного кадра
+    public VideoEditorGeometry GetGeometry(PixelSize original) =>
+        UsesEditedBackdrop ? editor.GetGeometry(original) : new(original, 0);
+
+    // размер входа модели зависит от геометрии выбранного растра
+    public PixelSize GetOutputSize(PixelSize original) => GetGeometry(original).OutputSize;
 
     // проверяем лимиты участков до открытия последовательного прохода
     public void ValidateBudget(PixelSize original) => GetResources(original);

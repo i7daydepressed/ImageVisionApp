@@ -6,19 +6,20 @@ internal static class VideoForegroundCompositor {
     // один и тот же выбор пикселя используется для предпросмотра и входа анализа
     public static void CopyRow(VideoForegroundFrame input, int row, Span<byte> destination, bool maskOnly,
         VideoBackgroundRaster? background = null, bool rawInput = false, bool motionBlur = false) {
-        int width = input.Size.Width;
-        if ((uint)row >= (uint)input.Size.Height || destination.Length != checked(width * 4)) {
+        bool readsEffect = !rawInput && !maskOnly;
+        var size = readsEffect ? input.ResultSize : input.Size;
+        int width = size.Width;
+        if ((uint)row >= (uint)size.Height || destination.Length != checked(width * 4)) {
             throw new ArgumentException("Размер строки не соответствует видеокадру", nameof(destination));
         }
-        bool readsEffect = !rawInput && !maskOnly;
         VideoOpticalFlowRaster? opticalFlow = readsEffect ? input.OpticalFlow : null;
         if (opticalFlow is not null) {
-            if (opticalFlow.Size != input.Size) {
-                throw new InvalidOperationException("Размер оптического потока не соответствует выбранному видеокадру");
-            }
             if (!opticalFlow.Bgra.IsEmpty) {
                 opticalFlow.Bgra.Span.Slice(row * destination.Length, destination.Length).CopyTo(destination);
                 return;
+            }
+            if (size != input.Size) {
+                throw new InvalidOperationException("Не подготовлены пиксели подложки оптического потока");
             }
         }
         bool usesBlur = readsEffect && motionBlur && opticalFlow is null;

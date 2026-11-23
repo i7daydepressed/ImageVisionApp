@@ -22,6 +22,9 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
     private readonly VideoForegroundModel? model;
     private readonly VideoOpticalFlowModel? opticalFlow;
     private readonly VideoForegroundInputPlan? upstream;
+    private readonly VideoForegroundInputPlan? flowBackdrop;
+    private readonly VideoEditorGeometry inputGeometry;
+    private readonly VideoEditorGeometry backdropGeometry;
     private readonly VideoSequenceAnalysisPlan? downstream;
     private readonly VideoEditorPlan? editor;
     private readonly bool maskOnly;
@@ -36,22 +39,27 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
     private readonly long editingBytes;
     private readonly long analysisBytes;
 
-    // у режима без комбинированного маршрута те же операции MOG2 и тот же формат результата
+    // отдельно запоминаем геометрию расчета потока и растра показа для одного прохода
     public VideoCombinedFrameProcessor(PixelSize size, VideoForegroundInputPlan? upstream = null,
         VideoSequenceAnalysisPlan? downstream = null, VideoEditorPlan? editor = null, bool maskOnly = false,
         VideoPipelineMeasurements? measurements = null, long generation = 0, long readerBytes = 0,
-        VideoBackgroundRaster? background = null, int? motionBlurRadius = null, bool useOpticalFlow = false) {
+        VideoBackgroundRaster? background = null, int? motionBlurRadius = null, bool useOpticalFlow = false,
+        VideoForegroundInputPlan? flowBackdrop = null) {
         this.upstream = upstream;
+        this.flowBackdrop = useOpticalFlow ? flowBackdrop : null;
         this.downstream = downstream;
         this.editor = editor;
         this.maskOnly = maskOnly;
         this.measurements = measurements;
         this.generation = generation;
         var first = upstream?.GetResources(size) ?? default;
+        var backdropResources = this.flowBackdrop?.GetResources(size) ?? default;
         var last = downstream?.GetResources(size) ?? default;
-        editingBytes = Math.Max(first.EditorBytes, last.EditorBytes);
-        analysisBytes = Math.Max(first.AnalysisBytes, last.AnalysisBytes);
-        PixelSize modelSize = upstream?.GetOutputSize(size) ?? size;
+        editingBytes = Math.Max(Math.Max(first.EditorBytes, backdropResources.EditorBytes), last.EditorBytes);
+        analysisBytes = Math.Max(Math.Max(first.AnalysisBytes, backdropResources.AnalysisBytes), last.AnalysisBytes);
+        inputGeometry = upstream?.GetGeometry(size) ?? new(size, 0);
+        backdropGeometry = this.flowBackdrop?.GetGeometry(size) ?? inputGeometry;
+        PixelSize modelSize = inputGeometry.OutputSize;
         this.motionBlurRadius = maskOnly ? null : motionBlurRadius;
         this.background = maskOnly || this.motionBlurRadius is not null ? null : background;
         if (this.background is { } fitted && fitted.Size != modelSize) {
@@ -75,18 +83,26 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
             checked(persistent + (this.background?.BufferBytes ?? 0)));
     }
 
-    // получаем исходник и подготовленное редактирование одного ordinal, затем выполняем выбранный маршрут
+    // берем растр подложки у того же физического кадра и рассчитываем поток по входной паре
     public ValueTask<VideoPipelineOutput?> ProcessAsync(TimedVideoInput input, VideoEditorFrame edited,
         long? startedAt, TimeSpan? editingElapsed, bool publish, CancellationToken token) {
         long enteredAt = startedAt ?? Stopwatch.GetTimestamp();
-        using VideoEditorFrame? owned = PrepareEditing(input.Pixels, editingElapsed, token);
+        using VideoEditorFrame? owned = PrepareEditing(input.Pixels, editingElapsed, publish, token);
         VideoEditorFrame prepared = owned ?? edited;
-        using VideoEditorFrame? composition = upstream?.UsesAnalysis == true ? AnalyzeInput(input, prepared, token) : null;
-        VideoEditorFrame pixels = composition ?? (upstream is not null ? prepared : input.Pixels);
+        using VideoEditorFrame? composition = upstream?.UsesAnalysis == true ? AnalyzeInput(upstream, input, prepared, token) : null;
+        VideoEditorFrame pixels = composition ?? (upstream?.NeedsEditing == true ? prepared : input.Pixels);
+        VideoForegroundInputPlan? selectedBackdrop = publish ? flowBackdrop : null;
+        using VideoEditorFrame? backdropComposition = selectedBackdrop?.UsesAnalysis == true
+            ? AnalyzeInput(selectedBackdrop, input, prepared, token) : null;
+        VideoEditorFrame? backdropPixels = selectedBackdrop is null ? null :
+            backdropComposition ?? (selectedBackdrop.NeedsEditing ? prepared : input.Pixels);
         VideoForegroundFrame? foreground;
         long workingBytes = checked(foregroundBytes + (publish ? motionBlurBytes : 0));
         using (var stage = measurements?.BeginStage(generation, VideoPipelineStage.VideoSequence, workingBytes)) {
-            foreground = opticalFlow is { } flow ? flow.Process(input, pixels, publish, token) :
+            foreground = opticalFlow is { } flow
+                ? flow.Process(input, pixels, publish, token, backdropPixels,
+                    inputGeometry: backdropPixels is null ? null : inputGeometry,
+                    backdropGeometry: backdropPixels is null ? null : backdropGeometry) :
                 model!.Process(input, pixels, publish, token);
             if (foreground is not null && motionBlurRadius is { } radius) {
                 foreground = foreground with { MotionBlur = VideoMotionBlurRaster.Create(foreground, radius, token) };
@@ -122,12 +138,13 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
     }
 
     // повторно используем редакторский буфер строгой очереди, в живой готовим его один раз
-    private VideoEditorFrame? PrepareEditing(VideoEditorFrame original, TimeSpan? editingElapsed, CancellationToken token) {
+    private VideoEditorFrame? PrepareEditing(VideoEditorFrame original, TimeSpan? editingElapsed, bool publish,
+        CancellationToken token) {
         if (editingElapsed is { } elapsed) {
             measurements?.RecordStage(generation, VideoPipelineStage.Editing, 0, elapsed);
             return null;
         }
-        if (editingBytes == 0 || editor?.HasSteps != true) {
+        if (editingBytes == 0 || editor?.HasSteps != true || !publish && upstream?.NeedsEditing != true) {
             return null;
         }
         using var stage = measurements?.BeginStage(generation, VideoPipelineStage.Editing, editingBytes);
@@ -144,10 +161,11 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
         }
     }
 
-    // вычисляем композицию анализа до модели фона на том же физическом кадре
-    private VideoEditorFrame AnalyzeInput(TimedVideoInput input, VideoEditorFrame edited, CancellationToken token) {
+    // вычисляем композицию анализа для входа или подложки на том же физическом кадре
+    private VideoEditorFrame AnalyzeInput(VideoForegroundInputPlan plan, TimedVideoInput input, VideoEditorFrame edited,
+        CancellationToken token) {
         using var stage = measurements?.BeginStage(generation, VideoPipelineStage.Analysis, analysisBytes);
-        VideoEditorFrame composed = upstream!.Transform(input, token, edited);
+        VideoEditorFrame composed = plan.Transform(input, token, edited);
         stage?.Complete();
         return composed;
     }

@@ -45,6 +45,10 @@ public partial class MainWindow {
     private readonly CheckBox videoOpticalFlowMethod = new() { Content = OpticalFlowTitle };
     private readonly Button videoOpticalFlowSettings = new() { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
     private readonly ComboBox videoOpticalFlowSourcePicker = CreateVideoForegroundSourcePicker("Источник оптического потока");
+    private readonly ComboBox videoOpticalFlowBackdropPicker = new() {
+        ItemsSource = new[] { "Источник расчёта", "Оригинал", "Результат редактирования", "Результат анализа" },
+        HorizontalAlignment = HorizontalAlignment.Stretch
+    };
     private readonly Button videoForegroundApply = new() { Content = "Применить", HorizontalAlignment = HorizontalAlignment.Stretch };
     private Button? videoForegroundDisplayButton;
     private int videoForegroundLastVideoTab = 1;
@@ -123,10 +127,22 @@ public partial class MainWindow {
             parametersTitle.Text = "Параметры размытия";
             parametersContent.Content = blurDetails;
         };
+        AutomationProperties.SetName(videoOpticalFlowBackdropPicker, "Подложка стрелок");
+        videoOpticalFlowBackdropPicker.Bind(SelectingItemsControl.SelectedIndexProperty,
+            new Binding(nameof(MainViewModel.SelectedVideoOpticalFlowBackdropIndex)) { Mode = BindingMode.OneWay });
+        videoOpticalFlowBackdropPicker.SelectionChanged += (_, e) => {
+            if (ReferenceEquals(e.Source, videoOpticalFlowBackdropPicker) &&
+                DataContext is MainViewModel { IsVideoOpen: true } model) {
+                model.SelectedVideoOpticalFlowBackdropIndex = videoOpticalFlowBackdropPicker.SelectedIndex;
+                videoOpticalFlowBackdropPicker.SetCurrentValue(SelectingItemsControl.SelectedIndexProperty,
+                    model.SelectedVideoOpticalFlowBackdropIndex);
+            }
+        };
         StackPanel opticalFlowDetails = new() {
             Spacing = 6,
             Children = { new TextBlock { Text = "Алгоритм · Фарнебэк" },
-                new TextBlock { Text = "Источник" }, videoOpticalFlowSourcePicker }
+                new TextBlock { Text = "Источник расчёта" }, videoOpticalFlowSourcePicker,
+                new TextBlock { Text = "Подложка стрелок" }, videoOpticalFlowBackdropPicker }
         };
         videoOpticalFlowSettings.Click += (_, _) => {
             parametersTitle.Text = "Параметры оптического потока";
@@ -352,6 +368,7 @@ public partial class MainWindow {
             ReferenceEquals(control, videoForegroundTabs) || ReferenceEquals(control, videoForegroundViews) ||
             ReferenceEquals(control, videoForegroundSourcePicker) || ReferenceEquals(control, videoReplacementSourcePicker) ||
             ReferenceEquals(control, videoMovingBlurSourcePicker) || ReferenceEquals(control, videoMovingBlurRadius) ||
+            ReferenceEquals(control, videoOpticalFlowSourcePicker) || ReferenceEquals(control, videoOpticalFlowBackdropPicker) ||
             e.Key == Key.Space && (ReferenceEquals(control, videoForegroundDisplayButton) ||
                 ReferenceEquals(control, videoForegroundMethod) || ReferenceEquals(control, videoForegroundMethodSettings) ||
                 ReferenceEquals(control, videoReplacementMethod) || ReferenceEquals(control, videoReplacementSettings) ||

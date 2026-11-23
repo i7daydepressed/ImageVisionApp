@@ -69,7 +69,7 @@ public partial class MainViewModel {
         }
         // пока была выбрана сегментация, встречная связь могла сделать запомненную подложку недоступной
         if (!fromSelector && previous == VideoAnalysisBackground.Segmentation && background == VideoAnalysisBackground.VideoSequence &&
-            VideoForegroundSource == VideoPipelineStage.Analysis) {
+            !CanUseVideoSequenceAsAnalysisSource) {
             background = VideoAnalysisBackground.Original;
         }
         if (!AcceptVideoAnalysisChoice(videoEdgeSource, videoSegmentationSource, background)) {

@@ -287,13 +287,11 @@ public partial class MainWindow {
 
     // недоступный вход остается видимым, подсказка объясняет встречную зависимость
     private static void BindSequenceAnalysisChoice(Control control, Control owner) {
-        string path = $"DataContext.{nameof(MainViewModel.SelectedVideoForegroundSourceIndex)}";
-        control.Bind(IsEnabledProperty, new Binding(path) { Source = owner,
-            Converter = new FuncValueConverter<int, bool>(value => value != 2)
-        });
+        string path = $"DataContext.{nameof(MainViewModel.CanUseVideoSequenceAsAnalysisSource)}";
+        control.Bind(IsEnabledProperty, new Binding(path) { Source = owner });
         control.Bind(ToolTip.TipProperty, new Binding(path) { Source = owner,
-            Converter = new FuncValueConverter<int, string?>(value => value == 2
-                ? "Связь недоступна: Анализ → Видеоряд → Анализ образует цикл" : null)
+            Converter = new FuncValueConverter<bool, string?>(allowed => allowed
+                ? null : "Связь недоступна: Анализ → Видеоряд → Анализ образует цикл")
         });
         ToolTip.SetShowOnDisabled(control, true);
     }

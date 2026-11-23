@@ -208,14 +208,15 @@ internal sealed class VideoEditorFrame : IDisposable {
     public static VideoEditorFrame FromForeground(VideoForegroundFrame input, bool maskOnly, CancellationToken token,
         VideoBackgroundRaster? background = null, bool motionBlur = false) {
         token.ThrowIfCancellationRequested();
-        VideoEditorFrame frame = new(input.Size);
+        PixelSize size = maskOnly ? input.Size : input.ResultSize;
+        VideoEditorFrame frame = new(size);
         try {
             if (!maskOnly && input.OpticalFlow is { } opticalFlow && !opticalFlow.Bgra.IsEmpty) {
                 opticalFlow.Bgra.Span.CopyTo(frame.pixels);
                 return frame;
             }
-            int rowBytes = checked(input.Size.Width * 4);
-            for (int y = 0; y < input.Size.Height; y++) {
+            int rowBytes = checked(size.Width * 4);
+            for (int y = 0; y < size.Height; y++) {
                 token.ThrowIfCancellationRequested();
                 VideoForegroundCompositor.CopyRow(input, y, frame.pixels.AsSpan(y * rowBytes, rowBytes), maskOnly, background,
                     motionBlur: motionBlur);

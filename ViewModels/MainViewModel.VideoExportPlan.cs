@@ -17,6 +17,8 @@ public partial class MainViewModel {
         identity.EnsureCurrent(path);
 
         VideoPipelineStage sequenceInput = HasActiveVideoSequenceEffect ? VideoForegroundSource : VideoPipelineStage.Original;
+        VideoPipelineStage flowBackdrop = VideoOpticalFlowBackdrop;
+        VideoPipelineStage sequenceInputs = sequenceInput | flowBackdrop;
         var (caption, output) = view switch {
             VideoExportView.Original => ("Оригинал", VideoPipelineStage.Original),
             VideoExportView.EditorOutput => ("Редактирование · Изменённое", VideoPipelineStage.Editing),
@@ -28,7 +30,7 @@ public partial class MainViewModel {
             _ => throw new ArgumentOutOfRangeException(nameof(view))
         };
         bool needsAnalysis = output == VideoPipelineStage.Analysis ||
-            output == VideoPipelineStage.VideoSequence && sequenceInput == VideoPipelineStage.Analysis;
+            output == VideoPipelineStage.VideoSequence && (sequenceInputs & VideoPipelineStage.Analysis) != 0;
         VideoSequenceAnalysisPlan? analysis = needsAnalysis ? CaptureVideoSequenceAnalysisPlan(document, PreviewSettings) : null;
         VideoPipelineStage inputs = VideoPipelineStage.Original;
         if (analysis?.NeedsEditing == true) { inputs |= VideoPipelineStage.Editing; }
@@ -38,7 +40,7 @@ public partial class MainViewModel {
             }
             inputs |= VideoPipelineStage.VideoSequence;
         }
-        if (!VideoPipelinePlan.TryCreate(inputs, sequenceInput, output, out VideoPipelinePlan? route, out string? error)) {
+        if (!VideoPipelinePlan.TryCreate(inputs, sequenceInputs, output, out VideoPipelinePlan? route, out string? error)) {
             throw new InvalidOperationException(error);
         }
 
@@ -66,11 +68,14 @@ public partial class MainViewModel {
                 _ => "Передний план"
             };
             details.Add($"Видеоряд: {kind}. Источник: {VideoPipelinePlan.GetStageName(sequenceInput)}");
+            if (flowBackdrop != VideoPipelineStage.None) {
+                details.Add($"Подложка стрелок: {VideoPipelinePlan.GetStageName(flowBackdrop)}");
+            }
         }
         return new(string.Join(Environment.NewLine, details), document, identity, route, output, videoEditorPlan,
             analysis, sequenceInput, effect, route.Stages.Contains(VideoPipelineStage.VideoSequence) &&
                 effect == VideoExportEffect.Background ? videoBackgroundImage : null,
-            VideoMovingBlurRadius);
+            VideoMovingBlurRadius) { FlowBackdrop = flowBackdrop };
     }
 
     // показываем подложку и фактические источники всех включённых слоёв в подтверждении записи

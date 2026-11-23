@@ -119,9 +119,15 @@ public partial class MainViewModel {
         VideoPreviewSettings resources = PreviewSettings;
         VideoSequenceAnalysisPlan? downstream = IsCombinedAnalysisOutputSelected
             ? CaptureVideoSequenceAnalysisPlan(document, resources) : null;
-        VideoForegroundInputPlan? upstream = CaptureVideoForegroundInput(document, resources);
-        upstream?.ValidateBudget(source.FrameSize);
-        downstream?.ValidateBudget(source.FrameSize);
+        VideoForegroundInputPlan? upstream = VideoForegroundSource == VideoPipelineStage.Original
+            ? null : CaptureVideoForegroundInput(document, resources, VideoForegroundSource);
+        VideoForegroundInputPlan? flowBackdrop = VideoOpticalFlowBackdrop == VideoPipelineStage.None
+            ? null : CaptureVideoForegroundInput(document, resources, VideoOpticalFlowBackdrop);
+        var upstreamResources = upstream?.GetResources(source.FrameSize) ?? default;
+        var backdropResources = flowBackdrop?.GetResources(source.FrameSize) ?? default;
+        var downstreamResources = downstream?.GetResources(source.FrameSize) ?? default;
+        VideoForegroundPath = string.Join(Environment.NewLine,
+            CaptureVideoAnalysisPipeline().Queue.DescribePathsTo(VideoPipelineStage.VideoSequence));
 
         var foregroundSize = upstream?.GetOutputSize(source.FrameSize) ?? source.FrameSize;
         long backgroundBytes = CanUseVideoBackgroundReplacement && videoBackgroundImage is { } image
@@ -144,8 +150,8 @@ public partial class MainViewModel {
         long foregroundFrame = opticalFlow ? VideoOpticalFlowModel.GetFrameBytes(foregroundSize) :
             checked(VideoEditorFrame.GetBufferBytes(foregroundSize) + blurFrame);
         long analysisFrame = downstream is null ? 0 : VideoEditorFrame.GetBufferBytes(downstream.GetOutputSize(source.FrameSize));
-        long analysisScratch = Math.Max(upstream?.GetResources(source.FrameSize).AnalysisBytes ?? 0,
-            downstream?.GetResources(source.FrameSize).AnalysisBytes ?? 0);
+        long analysisScratch = Math.Max(Math.Max(upstreamResources.AnalysisBytes, backdropResources.AnalysisBytes),
+            downstreamResources.AnalysisBytes);
         long foregroundCapacity = 1 + (resources.ForegroundBudgetBytes - required) / foregroundFrame;
         long analysisCapacity = analysisFrame == 0 ? long.MaxValue :
             1 + (resources.AnalysisBudgetBytes - analysisScratch) / analysisFrame;
@@ -157,9 +163,9 @@ public partial class MainViewModel {
         VideoEditorPlan editor = videoEditorPlan;
         bool maskOnly = VideoForegroundViewIndex == 1;
         VideoBackgroundRaster? background = downstream is not null ? GetReplacementBackground(foregroundSize) : null;
-        bool needsEditing = upstream?.NeedsEditing == true || downstream?.NeedsEditing == true;
+        bool needsEditing = upstream?.NeedsEditing == true || downstream?.NeedsEditing == true || flowBackdrop?.NeedsEditing == true;
         return new(() => new VideoCombinedFrameProcessor(source.FrameSize, upstream, downstream, editor, maskOnly,
-            combinedMeasurements, generation, source.ReadScratchBytes, background, movingBlurRadius, opticalFlow),
+            combinedMeasurements, generation, source.ReadScratchBytes, background, movingBlurRadius, opticalFlow, flowBackdrop),
             persistent, scratch, retained, capacity, needsEditing, opticalFlow);
     }
 

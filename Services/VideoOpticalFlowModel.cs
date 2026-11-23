@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using Avalonia;
 using Avalonia.Platform;
+using ImageVisionApp.Models;
 using OpenCvSharp;
 using CvPoint = OpenCvSharp.Point;
 using CvSize = OpenCvSharp.Size;
@@ -61,7 +62,9 @@ internal sealed class VideoOpticalFlowModel : IDisposable {
     }
 
     // используем предыдущий физический кадр, даже когда его pts равен текущему
-    public VideoForegroundFrame? Process(TimedVideoInput input, VideoEditorFrame pixels, bool publish, CancellationToken token) {
+    public VideoForegroundFrame? Process(TimedVideoInput input, VideoEditorFrame pixels, bool publish,
+        CancellationToken token, VideoEditorFrame? backdrop = null, VideoEditorGeometry? inputGeometry = null,
+        VideoEditorGeometry? backdropGeometry = null) {
         token.ThrowIfCancellationRequested();
         if (pixels.Size != size || input.Ordinal < 0 || !input.Time.IsKnown ||
             input.Until is { } until && (!until.IsKnown || until.CompareTo(input.Time) < 0) ||
@@ -69,6 +72,18 @@ internal sealed class VideoOpticalFlowModel : IDisposable {
                 previousUntil is not { } next || next.CompareTo(input.Time) != 0)) {
             throw new InvalidDataException("Нарушены порядок, время или геометрия кадров оптического потока");
         }
+
+        VideoEditorFrame picture = backdrop ?? pixels;
+        VideoEditorGeometry sourceGeometry = inputGeometry ?? new(size, 0);
+        VideoEditorGeometry pictureGeometry = backdropGeometry ?? sourceGeometry;
+        if (sourceGeometry.InputSize != pictureGeometry.InputSize || sourceGeometry.OutputSize != size ||
+            pictureGeometry.OutputSize != picture.Size ||
+            sourceGeometry.ClockwiseQuarterTurns is < 0 or > 3 || pictureGeometry.ClockwiseQuarterTurns is < 0 or > 3) {
+            throw new InvalidDataException("Геометрия подложки не соответствует входу оптического потока");
+        }
+        VideoEditorGeometry toBackdrop = sourceGeometry.RelativeTo(pictureGeometry);
+        VideoEditorFrame? separateBackdrop = ReferenceEquals(picture, pixels) && toBackdrop.ClockwiseQuarterTurns == 0
+            ? null : picture;
 
         using Mat image = pixels.BorrowBgra();
         Mat working = image;
@@ -90,18 +105,21 @@ internal sealed class VideoOpticalFlowModel : IDisposable {
                 throw new InvalidOperationException("OpenCV изменил буфер входа оптического потока");
             }
 
-            byte[] bgra = [];
+            byte[] bgra;
             int arrows = 0;
             if (hasPair) {
                 token.ThrowIfCancellationRequested();
                 Cv2.CalcOpticalFlowFarneback(previousGray, currentGray, flow, 0.5, 3, WindowSize, 3,
                     PolynomialSize, 1.2, OpticalFlowFlags.None);
                 token.ThrowIfCancellationRequested();
-                (bgra, arrows) = DrawArrows(snapshot, token);
+                (bgra, arrows) = DrawArrows(snapshot, separateBackdrop, toBackdrop, token);
+            }
+            else {
+                bgra = separateBackdrop is null ? [] : CopyBackdrop(separateBackdrop, token);
             }
 
             result = new(input.Time, input.Until, input.Ordinal, size, rgb, ReadOnlyMemory<byte>.Empty) {
-                OpticalFlow = new(size, hasPair, arrows, bgra)
+                OpticalFlow = new(picture.Size, hasPair, arrows, bgra)
             };
         }
 
@@ -112,14 +130,16 @@ internal sealed class VideoOpticalFlowModel : IDisposable {
         return result;
     }
 
-    // переносим точки и смещения из рабочей сетки в геометрию кадра и выделяем буфер только для видимых стрелок
-    private (byte[] Bgra, int Arrows) DrawArrows(Mat rgb, CancellationToken token) {
+    // переносим оба конца стрелки из координат входа в координаты подложки до отсечения
+    private (byte[] Bgra, int Arrows) DrawArrows(Mat rgb, VideoEditorFrame? backdrop, VideoEditorGeometry toBackdrop,
+        CancellationToken token) {
         double scaleX = size.Width / (double)workingSize.Width;
         double scaleY = size.Height / (double)workingSize.Height;
         int thickness = Math.Max(1, (int)Math.Round(Math.Min(scaleX, scaleY) / 2));
-        CvSize bounds = new(size.Width, size.Height);
+        PixelSize pictureSize = toBackdrop.OutputSize;
+        CvSize bounds = new(pictureSize.Width, pictureSize.Height);
         Mat? overlay = null;
-        byte[] bgra = [];
+        byte[] bgra = backdrop is null ? [] : CopyBackdrop(backdrop, token);
         int arrows = 0;
         try {
             for (int y = Math.Min(GridStep / 2, workingSize.Height / 2); y < workingSize.Height; y += GridStep) {
@@ -135,20 +155,27 @@ internal sealed class VideoOpticalFlowModel : IDisposable {
                     double gain = Math.Min(ArrowGain, MaximumArrowLength / length);
                     double centerX = (x + 0.5) * scaleX - 0.5;
                     double centerY = (y + 0.5) * scaleY - 0.5;
-                    CvPoint start = new((int)Math.Round(centerX), (int)Math.Round(centerY));
-                    CvPoint end = new((int)Math.Round(centerX + dx * scaleX * gain),
-                        (int)Math.Round(centerY + dy * scaleY * gain));
+                    PixelPoint first = toBackdrop.MapPixel(new((int)Math.Round(centerX), (int)Math.Round(centerY)));
+                    PixelPoint last = toBackdrop.MapPixel(new((int)Math.Round(centerX + dx * scaleX * gain),
+                        (int)Math.Round(centerY + dy * scaleY * gain)));
+                    CvPoint start = new(first.X, first.Y);
+                    CvPoint end = new(last.X, last.Y);
                     if (!Cv2.ClipLine(bounds, ref start, ref end) || start == end) {
                         continue;
                     }
 
                     if (overlay is null) {
-                        bgra = GC.AllocateUninitializedArray<byte>(checked((int)VideoEditorFrame.GetBufferBytes(size)));
-                        overlay = Mat.FromPixelData(size.Height, size.Width, MatType.CV_8UC4, bgra);
-                        IntPtr address = overlay.Data;
-                        Cv2.CvtColor(rgb, overlay, ColorConversionCodes.RGB2BGRA);
-                        if (overlay.Data != address) {
-                            throw new InvalidOperationException("OpenCV изменил буфер показа оптического потока");
+                        bool copyInput = bgra.Length == 0;
+                        if (copyInput) {
+                            bgra = GC.AllocateUninitializedArray<byte>(checked((int)VideoEditorFrame.GetBufferBytes(pictureSize)));
+                        }
+                        overlay = Mat.FromPixelData(pictureSize.Height, pictureSize.Width, MatType.CV_8UC4, bgra);
+                        if (copyInput) {
+                            IntPtr address = overlay.Data;
+                            Cv2.CvtColor(rgb, overlay, ColorConversionCodes.RGB2BGRA);
+                            if (overlay.Data != address) {
+                                throw new InvalidOperationException("OpenCV изменил буфер показа оптического потока");
+                            }
                         }
                     }
 
@@ -162,6 +189,19 @@ internal sealed class VideoOpticalFlowModel : IDisposable {
         finally {
             overlay?.Dispose();
         }
+    }
+
+    // подложка остается видна даже без стрелок, а служебный четвертый байт входа не влияет на прозрачность
+    private static byte[] CopyBackdrop(VideoEditorFrame backdrop, CancellationToken token) {
+        byte[] result = backdrop.Bgra.ToArray();
+        int stride = checked(backdrop.Size.Width * 4);
+        for (int row = 0; row < result.Length; row += stride) {
+            token.ThrowIfCancellationRequested();
+            for (int alpha = row + 3; alpha < row + stride; alpha += 4) {
+                result[alpha] = 255;
+            }
+        }
+        return result;
     }
 
     // уменьшаем длинную сторону рабочего кадра с сохранением пропорций

@@ -14,12 +14,12 @@ public partial class MainViewModel {
         IsSegmentationAnalysisEnabled && videoSegmentationSource == AnalysisImageSource.VideoSequence);
 
     // проверяем и сохраненные входы выключенных методов, чтобы их включение не замыкало очередь
-    private bool TryValidateVideoSequenceSource(VideoPipelineStage candidate, out string? error) =>
+    private bool TryValidateVideoSequenceSources(VideoPipelineStage candidate, out string? error) =>
         TryValidateAnalysisSources(videoEdgeSource, videoSegmentationSource, videoAnalysisBackground, candidate, out error);
 
     // при неудаче оставляем прежние источники и показываем тот же путь цикла, что проверил граф
     private bool AcceptVideoAnalysisChoice(AnalysisImageSource edge, AnalysisImageSource segmentation, VideoAnalysisBackground background) {
-        if (TryValidateAnalysisSources(edge, segmentation, background, VideoForegroundSource, out string? error)) {
+        if (TryValidateAnalysisSources(edge, segmentation, background, ConfiguredVideoSequenceInputs, out string? error)) {
             return true;
         }
         AnalysisStatusMessage = error!;
@@ -28,10 +28,10 @@ public partial class MainViewModel {
 
     // проверяем предполагаемую связь до смены состояния и отмены нужного пользователю расчета
     private static bool TryValidateAnalysisSources(AnalysisImageSource edge, AnalysisImageSource segmentation,
-        VideoAnalysisBackground background, VideoPipelineStage sequenceInput, out string? error) {
+        VideoAnalysisBackground background, VideoPipelineStage sequenceInputs, out string? error) {
         VideoPipelineStage inputs = VideoPipelinePlan.FromAnalysisSource(edge) | VideoPipelinePlan.FromAnalysisSource(segmentation) |
             GetAnalysisBackdropStage(background, segmentation);
-        return VideoPipelinePlan.TryCreate(inputs, sequenceInput, VideoPipelineStage.Analysis, out _, out error);
+        return VideoPipelinePlan.TryCreate(inputs, sequenceInputs, VideoPipelineStage.Analysis, out _, out error);
     }
 
     // источник сегментированной подложки задает ее систему координат
@@ -50,7 +50,7 @@ public partial class MainViewModel {
             throw new InvalidOperationException("Проверьте параметры выбранных методов анализа");
         }
         VideoAnalysisPipeline pipeline = CaptureVideoAnalysisPipeline();
-        return new(document, videoEditorPlan, resources, VideoForegroundSource, CaptureVideoFrameAnalysisSettings(pipeline),
+        return new(document, videoEditorPlan, resources, VideoSequenceOutputGeometrySource, CaptureVideoFrameAnalysisSettings(pipeline),
             pipeline.EdgeSource ?? AnalysisImageSource.Original, pipeline.SegmentationSource ?? AnalysisImageSource.Original,
             GetAnalysisBackdropStage(videoAnalysisBackground, videoSegmentationSource),
             videoAnalysisBackground == VideoAnalysisBackground.Segmentation, VisiblePlateRegionLimit);
@@ -141,7 +141,7 @@ public partial class MainViewModel {
             inputs |= VideoPipelinePlan.FromAnalysisSource(segmentationSource);
         }
         inputs |= GetAnalysisBackdropStage(videoAnalysisBackground, videoSegmentationSource);
-        if (!VideoPipelinePlan.TryCreate(inputs, VideoForegroundSource, VideoPipelineStage.Analysis,
+        if (!VideoPipelinePlan.TryCreate(inputs, VideoSequenceInputs, VideoPipelineStage.Analysis,
             out VideoPipelinePlan? plan, out string? error)) {
             throw new InvalidOperationException(error);
         }

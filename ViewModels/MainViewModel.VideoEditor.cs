@@ -312,8 +312,9 @@ public partial class MainViewModel {
         bool foregroundSettingsChanged = previous.ForegroundBudgetMiB != settings.ForegroundBudgetMiB ||
             previous.ForegroundDecoderThreads != settings.ForegroundDecoderThreads;
         bool foregroundWorkChanged = foregroundSettingsChanged ||
-            VideoForegroundSource != VideoPipelineStage.Original && previous.BudgetMiB != settings.BudgetMiB ||
-            VideoForegroundSource == VideoPipelineStage.Analysis && analysisChanged ||
+            (VideoSequenceInputs & (VideoPipelineStage.Editing | VideoPipelineStage.Analysis)) != 0 &&
+                previous.BudgetMiB != settings.BudgetMiB ||
+            (VideoSequenceInputs & VideoPipelineStage.Analysis) != 0 && analysisChanged ||
             IsCombinedAnalysisOutputSelected && (analysisChanged || previous.BudgetMiB != settings.BudgetMiB);
         bool retrySource = !analysisChanged && !foregroundSettingsChanged && settings.Mode != VideoPreviewMode.Live && preparedSource is null &&
             preparedOpening is null && IsVideoOpen;

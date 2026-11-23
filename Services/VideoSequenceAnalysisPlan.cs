@@ -19,13 +19,16 @@ internal sealed record VideoSequenceAnalysisPlan(MediaDocument Document, VideoEd
         Settings.Clusters.HasValue && SegmentationSource == AnalysisImageSource.VideoSequence;
     private bool HasMethods => Settings.EdgeMethod.HasValue || Settings.Clusters.HasValue || Settings.FastThreshold.HasValue || Settings.Plate;
 
-    // временной результат наследует ориентацию собственного входа, размер квадрата сам по себе поворот не определяет
+    // временной результат наследует ориентацию показанного растра, которая важна и для квадрата
     private VideoEditorGeometry Geometry(PixelSize original, VideoPipelineStage stage) =>
         stage == VideoPipelineStage.Editing || stage == VideoPipelineStage.VideoSequence && SequenceInput == VideoPipelineStage.Editing
             ? Editor.GetGeometry(original) : new(original, 0);
 
-    // композитор возвращает конечный растр в координатах выбранной подложки
-    public PixelSize GetOutputSize(PixelSize original) => Geometry(original, Background).OutputSize;
+    // передаем следующему участку систему координат выбранной подложки
+    public VideoEditorGeometry GetOutputGeometry(PixelSize original) => Geometry(original, Background);
+
+    // композитор возвращает конечный растр в размере выбранной подложки
+    public PixelSize GetOutputSize(PixelSize original) => GetOutputGeometry(original).OutputSize;
 
     // проверяем одновременные буферы активных участков до запуска декодера
     public void ValidateBudget(PixelSize original) => GetResources(original);

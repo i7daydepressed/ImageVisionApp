@@ -97,12 +97,13 @@ public partial class MainViewModel {
                 2 => VideoPipelineStage.Analysis,
                 _ => VideoPipelineStage.Original
             };
-            if (!TryValidateVideoSequenceSource(candidate, out string? error)) {
+            if (!TryValidateVideoSequenceSources(candidate | ConfiguredVideoOpticalFlowBackdrop, out string? error)) {
                 SetVideoForegroundStatus(error ?? "Невозможно выбрать источник");
                 OnPropertyChanged(nameof(SelectedVideoForegroundSourceIndex));
                 return;
             }
             if (SetProperty(ref videoForegroundSourceIndex, value)) {
+                OnPropertyChanged(nameof(CanUseVideoSequenceAsAnalysisSource));
                 RestartVideoForeground();
             }
         }
@@ -377,58 +378,24 @@ public partial class MainViewModel {
             !stop.IsCancellationRequested && ReferenceEquals(CurrentDocument, document);
     }
 
-    // сохраняем настройки выбранного входа вместе с путём, который получит каждый физический кадр
-    private VideoForegroundInputPlan? CaptureVideoForegroundInput(MediaDocument document, VideoPreviewSettings settings) {
-        VideoPipelineStage source = VideoForegroundSource;
-        VideoPipelineStage analysisInputs = VideoPipelineStage.None;
-        VideoPipelineStage backdrop = VideoPipelineStage.Original;
-        VideoFrameAnalysisSettings analysis = default;
-        AnalysisImageSource edge = videoEdgeSource;
-        AnalysisImageSource segmentation = videoSegmentationSource;
-        bool segmentedBackdrop = false;
-
-        if (source == VideoPipelineStage.Analysis) {
-            if (!AreAllAnalysisParametersValid) {
-                throw new InvalidOperationException("Проверьте параметры выбранных методов на вкладке «Анализ»");
-            }
-            VideoAnalysisPipeline pipeline = CaptureVideoAnalysisPipeline();
-            analysis = CaptureVideoFrameAnalysisSettings(pipeline);
-            segmentedBackdrop = videoAnalysisBackground == VideoAnalysisBackground.Segmentation;
-            backdrop = videoAnalysisBackground switch {
-                VideoAnalysisBackground.Edited => VideoPipelineStage.Editing,
-                VideoAnalysisBackground.Segmentation => VideoPipelinePlan.FromAnalysisSource(segmentation),
-                VideoAnalysisBackground.Black => VideoPipelineStage.None,
-                _ => VideoPipelineStage.Original
-            };
-            analysisInputs = backdrop;
-            if (pipeline.EdgeSource is { } edgeSource) {
-                analysisInputs |= VideoPipelinePlan.FromAnalysisSource(edgeSource);
-            }
-            if (pipeline.SegmentationSource is { } segmentationSource) {
-                analysisInputs |= VideoPipelinePlan.FromAnalysisSource(segmentationSource);
-            }
-            if (pipeline.Fast || pipeline.Plate || analysisInputs == VideoPipelineStage.None) {
-                analysisInputs |= VideoPipelineStage.Original;
-            }
-        }
-
-        if (!VideoPipelinePlan.TryCreate(analysisInputs, source, VideoPipelineStage.VideoSequence,
-            out VideoPipelinePlan? queue, out string? error)) {
-            throw new InvalidOperationException(error);
-        }
-        VideoForegroundPath = string.Join(Environment.NewLine, queue.DescribePathsTo(VideoPipelineStage.VideoSequence));
-        return source == VideoPipelineStage.Original ? null : new(document, source, videoEditorPlan, settings,
-            analysis, edge, segmentation, backdrop, segmentedBackdrop, VisiblePlateRegionLimit);
+    // фиксируем выбранный источник как вход пары или подложку одного физического кадра
+    private VideoForegroundInputPlan CaptureVideoForegroundInput(MediaDocument document, VideoPreviewSettings settings,
+        VideoPipelineStage source) {
+        VideoSequenceAnalysisPlan? analysis = source == VideoPipelineStage.Analysis
+            ? CaptureVideoSequenceAnalysisPlan(document, settings) : null;
+        return new(document, source, videoEditorPlan, settings, analysis?.Settings ?? default,
+            analysis?.EdgeSource ?? AnalysisImageSource.Original, analysis?.SegmentationSource ?? AnalysisImageSource.Original,
+            analysis?.Backdrop ?? VideoPipelineStage.Original, analysis?.SegmentedBackdrop == true, VisiblePlateRegionLimit);
     }
 
-    // показываем пиксели выбранного входа и маску одного кадра в одинаковой геометрии
+    // показываем вход и готовый эффект одного кадра в геометрии их источников
     private void PublishVideoForeground(VideoForegroundFrame frame, bool usePreparedInput) {
         WriteableBitmap? oldOriginal = videoForegroundOriginal;
         WriteableBitmap? oldOutput = videoForegroundOutput;
         bool isUnchangedRaster = ShowsVideoMovingBlur && frame.MotionBlur is { BufferBytes: 0 } ||
             ShowsVideoOpticalFlow && frame.OpticalFlow is { BufferBytes: 0 };
         WriteableBitmap? original = usePreparedInput ? null : GetPreparedBitmap(oldOriginal, frame.Size);
-        WriteableBitmap? output = usePreparedInput && isUnchangedRaster ? null : GetPreparedBitmap(oldOutput, frame.Size);
+        WriteableBitmap? output = usePreparedInput && isUnchangedRaster ? null : GetPreparedBitmap(oldOutput, frame.ResultSize);
         try {
             if (original is not null) {
                 PaintVideoForeground(original, frame, result: false, maskOnly: false);

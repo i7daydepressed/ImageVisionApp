@@ -202,9 +202,14 @@ internal sealed partial class PreviewCoordinator {
                 (blur.Size != foreground.Size || !blur.Bgra.IsEmpty && blur.Bgra.Length != checked(pixels * 4))) {
                 throw new InvalidDataException("Получен неполный результат размытия видеоряда");
             }
-            if (foreground.OpticalFlow is { } flow &&
-                (flow.Size != foreground.Size || flow.BufferBytes != 0 && flow.BufferBytes != checked(pixels * 4))) {
-                throw new InvalidDataException("Получен неполный результат оптического потока");
+            if (foreground.OpticalFlow is { } flow) {
+                bool hasValidGeometry = flow.Size == foreground.Size ||
+                    flow.Size.Width == foreground.Size.Height && flow.Size.Height == foreground.Size.Width;
+                if (!hasValidGeometry || (flow.Bgra.IsEmpty
+                    ? flow.Size != foreground.Size || flow.ArrowCount != 0
+                    : flow.BufferBytes != checked(pixels * 4))) {
+                    throw new InvalidDataException("Получен неполный результат оптического потока");
+                }
             }
             bytes = checked(bytes + foreground.BufferBytes);
         }

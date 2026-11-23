@@ -65,7 +65,7 @@ public partial class MainViewModel {
             PixelSize source = VideoFirstFrame?.PixelSize ??
                 throw new InvalidOperationException("Видеокадр ещё не подготовлен");
             PixelSize output = videoForegroundFrame?.Size ??
-                CaptureVideoForegroundInput(document, PreviewSettings)?.GetOutputSize(source) ?? source;
+                CaptureVideoForegroundInput(document, PreviewSettings, VideoForegroundSource).GetOutputSize(source);
             long budget = PreviewSettings.ForegroundBudgetBytes;
             long decoderBytes = EstimateVideoBackgroundReaderBytes(source);
             await using Stream stream = await file.OpenReadAsync();

@@ -12,14 +12,23 @@ internal enum VideoExportEffect { Foreground, Mask, Background, MotionBlur, Opti
 internal sealed record VideoExportPlan(string Caption, MediaDocument Document, VideoFileIdentity Identity,
     VideoPipelinePlan Route, VideoPipelineStage Output, VideoEditorPlan Editor, VideoSequenceAnalysisPlan? Analysis,
     VideoPipelineStage SequenceInput, VideoExportEffect Effect, VideoBackgroundImage? Background, int BlurRadius) {
+    public VideoPipelineStage FlowBackdrop { get; init; }
+    internal VideoPipelineStage SequenceResultStage => Effect == VideoExportEffect.OpticalFlow &&
+        FlowBackdrop != VideoPipelineStage.None ? FlowBackdrop : SequenceInput;
+
     // подложка определяет конечные размеры, даже если отдельные слои считались по повёрнутому кадру
     public PixelSize GetOutputSize(PixelSize sourceSize) => GetStageSize(Output, sourceSize);
 
-    internal PixelSize GetStageSize(VideoPipelineStage stage, PixelSize sourceSize) => stage switch {
-        VideoPipelineStage.Original => sourceSize,
-        VideoPipelineStage.Editing => Editor.GetGeometry(sourceSize).OutputSize,
-        VideoPipelineStage.Analysis => Analysis!.GetOutputSize(sourceSize),
-        VideoPipelineStage.VideoSequence => GetStageSize(SequenceInput, sourceSize),
+    // используем размеры расчета для модели и размеры подложки для готового видеоряда
+    internal PixelSize GetStageSize(VideoPipelineStage stage, PixelSize sourceSize) =>
+        GetStageGeometry(stage, sourceSize).OutputSize;
+
+    // при экспорте поворот подложки нужен и для квадратного кадра
+    internal VideoEditorGeometry GetStageGeometry(VideoPipelineStage stage, PixelSize sourceSize) => stage switch {
+        VideoPipelineStage.Original => new(sourceSize, 0),
+        VideoPipelineStage.Editing => Editor.GetGeometry(sourceSize),
+        VideoPipelineStage.Analysis => Analysis!.GetOutputGeometry(sourceSize),
+        VideoPipelineStage.VideoSequence => GetStageGeometry(SequenceResultStage, sourceSize),
         _ => throw new InvalidOperationException("Неизвестный участок экспорта")
     };
 
@@ -32,6 +41,8 @@ internal sealed class VideoExportProcessor : IDisposable {
     private readonly PixelSize sourceSize;
     private readonly VideoForegroundModel? foreground;
     private readonly VideoOpticalFlowModel? flow;
+    private readonly VideoEditorGeometry flowInputGeometry;
+    private readonly VideoEditorGeometry flowBackdropGeometry;
     private readonly VideoBackgroundRaster? background;
     private long nextOrdinal;
     private VideoPresentationTime? nextTime;
@@ -44,6 +55,8 @@ internal sealed class VideoExportProcessor : IDisposable {
         if (plan.Route.Stages.Contains(VideoPipelineStage.VideoSequence)) {
             PixelSize size = plan.GetStageSize(plan.SequenceInput, sourceSize);
             if (plan.Effect == VideoExportEffect.OpticalFlow) {
+                flowInputGeometry = plan.GetStageGeometry(plan.SequenceInput, sourceSize);
+                flowBackdropGeometry = plan.GetStageGeometry(plan.SequenceResultStage, sourceSize);
                 flow = new(size);
             }
             else {
@@ -80,7 +93,8 @@ internal sealed class VideoExportProcessor : IDisposable {
                         analysis = plan.Analysis!.Transform(input, sequence, token, edited, analysisWorkers: 1);
                         break;
                     case VideoPipelineStage.VideoSequence:
-                        sequence = RenderSequence(input, Pixels(plan.SequenceInput), token);
+                        sequence = RenderSequence(input, Pixels(plan.SequenceInput),
+                            plan.SequenceResultStage == plan.SequenceInput ? null : Pixels(plan.SequenceResultStage), token);
                         break;
                 }
             }
@@ -109,10 +123,13 @@ internal sealed class VideoExportProcessor : IDisposable {
         };
     }
 
-    // рассчитываем модель по каждому физическому кадру и собираем тот же вид, что в предпросмотре
-    private VideoEditorFrame RenderSequence(TimedVideoInput input, VideoEditorFrame pixels, CancellationToken token) {
+    // рассчитываем модель по входу и накладываем стрелки на выбранный растр того же кадра
+    private VideoEditorFrame RenderSequence(TimedVideoInput input, VideoEditorFrame pixels, VideoEditorFrame? backdrop,
+        CancellationToken token) {
         VideoForegroundFrame frame = (flow is null ? foreground!.Process(input, pixels, true, token) :
-            flow.Process(input, pixels, true, token)) ?? throw new InvalidDataException("Не готов результат видеоряда");
+            flow.Process(input, pixels, true, token, backdrop, inputGeometry: backdrop is null ? null : flowInputGeometry,
+                backdropGeometry: backdrop is null ? null : flowBackdropGeometry))
+            ?? throw new InvalidDataException("Не готов результат видеоряда");
         bool blur = plan.Effect == VideoExportEffect.MotionBlur;
         if (blur) {
             frame = frame with { MotionBlur = VideoMotionBlurRaster.Create(frame, plan.BlurRadius, token) };
