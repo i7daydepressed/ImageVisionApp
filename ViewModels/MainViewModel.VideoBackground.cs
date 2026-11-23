@@ -10,49 +10,40 @@ using ImageVisionApp.Services;
 namespace ImageVisionApp.ViewModels;
 
 public partial class MainViewModel {
-    private const int ReplacedBackgroundView = 2;
     private bool videoBackgroundReplacementEnabled;
-    private VideoBackgroundImage? videoBackgroundImage;
-    private VideoBackgroundRaster? videoBackgroundRaster;
     private string? videoBackgroundImageName;
     private string? videoBackgroundSelectionNotice;
     private long videoBackgroundSelectionRevision;
-    private int previousSubtractionView;
 
     public string? VideoBackgroundImageName => videoBackgroundImageName;
-    public bool HasVideoBackgroundImage => videoBackgroundImage is not null;
+    public bool HasVideoBackgroundImage => videoSequenceComposition.ReplacementImage is not null;
     public string? VideoBackgroundSelectionNotice {
         get => videoBackgroundSelectionNotice;
         private set => SetProperty(ref videoBackgroundSelectionNotice, value);
     }
 
     public bool CanUseVideoBackgroundReplacement => IsVideoOpen && VideoBackgroundReplacementEnabled && HasVideoBackgroundImage;
-    private bool HasActiveVideoSequenceEffect => VideoForegroundEnabled || CanUseVideoBackgroundReplacement || CanUseVideoMovingBlur || CanUseVideoOpticalFlow;
-    private bool ShowsReplacedVideoBackground => CanUseVideoBackgroundReplacement && VideoForegroundViewIndex == ReplacedBackgroundView;
-
-    // отключение замены сохраняет выбранную картинку и возвращает предыдущий вид вычитания
+    // выбор картинки делает замену доступной как общую подложку
     public bool VideoBackgroundReplacementEnabled {
         get => videoBackgroundReplacementEnabled;
         set {
             if (!IsVideoOpen || value && !HasVideoBackgroundImage || value == videoBackgroundReplacementEnabled) {
                 return;
             }
-
-            bool wasActive = HasActiveVideoSequenceEffect;
-            int? previousRasterView = VideoForegroundRasterView;
-            videoBackgroundReplacementEnabled = value;
-            if (value) {
-                SelectVideoForegroundView(ReplacedBackgroundView);
+            VideoSequenceBackdrop backdrop = value ? VideoSequenceBackdrop.Replacement :
+                videoSequenceComposition.Backdrop == VideoSequenceBackdrop.Replacement
+                    ? VideoSequenceBackdrop.Original : videoSequenceComposition.Backdrop;
+            if (TrySetVideoSequenceComposition(videoSequenceComposition with { Backdrop = backdrop })) {
+                videoBackgroundReplacementEnabled = value;
+                NotifyVideoBackgroundState();
             }
-            else if (VideoForegroundViewIndex == ReplacedBackgroundView) {
-                SelectVideoForegroundView(VideoForegroundEnabled ? previousSubtractionView : FallbackVideoForegroundView());
+            else {
+                OnPropertyChanged(nameof(VideoBackgroundReplacementEnabled));
             }
-            NotifyVideoBackgroundState();
-            RefreshSelectedVideoForegroundView(wasActive, previousRasterView != VideoForegroundRasterView);
         }
     }
 
-    // готовим снимок файла и вписанную копию до замены активного фона
+    // готовим снимок файла и проверяем бюджет до замены активного фона
     internal async Task ChooseVideoBackgroundAsync(IStorageFile file) {
         if (mediaPreviewsDisposed || CurrentDocument is not { Kind: MediaKind.Video } document) {
             return;
@@ -64,8 +55,8 @@ public partial class MainViewModel {
             VideoBackgroundSelectionNotice = "Загружается изображение фона…";
             PixelSize source = VideoFirstFrame?.PixelSize ??
                 throw new InvalidOperationException("Видеокадр ещё не подготовлен");
-            PixelSize output = videoForegroundFrame?.Size ??
-                CaptureVideoForegroundInput(document, PreviewSettings, VideoForegroundSource).GetOutputSize(source);
+            PixelSize output = CaptureVideoForegroundInput(document, PreviewSettings,
+                videoSequenceComposition.ReplacementSource).GetOutputSize(source);
             long budget = PreviewSettings.ForegroundBudgetBytes;
             long decoderBytes = EstimateVideoBackgroundReaderBytes(source);
             await using Stream stream = await file.OpenReadAsync();
@@ -80,24 +71,24 @@ public partial class MainViewModel {
                     image = VideoBackgroundImage.Capture(bitmap);
                 }
                 ValidateVideoBackgroundBudget(image, output, decoderBytes, budget);
-                return (Image: image, Raster: image.PrepareCover(output));
+                return image;
             });
             if (!IsCurrentSelection()) {
                 return;
             }
-            ValidateVideoBackgroundBudget(loaded.Image, videoForegroundFrame?.Size ?? output,
-                decoderBytes, PreviewSettings.ForegroundBudgetBytes);
-
-            bool wasActive = HasActiveVideoSequenceEffect;
-            int? previousRasterView = VideoForegroundRasterView;
-            videoBackgroundImage = loaded.Image;
-            videoBackgroundRaster = loaded.Raster;
+            PixelSize currentOutput = CaptureVideoForegroundInput(document, PreviewSettings,
+                videoSequenceComposition.ReplacementSource).GetOutputSize(source);
+            ValidateVideoBackgroundBudget(loaded, currentOutput, decoderBytes, PreviewSettings.ForegroundBudgetBytes);
+            if (!TrySetVideoSequenceComposition(videoSequenceComposition with {
+                Backdrop = VideoSequenceBackdrop.Replacement, ReplacementImage = loaded
+            })) {
+                VideoBackgroundSelectionNotice = VideoForegroundStatus;
+                return;
+            }
             videoBackgroundImageName = name;
             videoBackgroundReplacementEnabled = true;
-            SelectVideoForegroundView(ReplacedBackgroundView);
             VideoBackgroundSelectionNotice = null;
             NotifyVideoBackgroundState();
-            RefreshSelectedVideoForegroundView(wasActive, previousRasterView != VideoForegroundRasterView);
         }
         catch (Exception failure) {
             if (IsCurrentSelection()) {
@@ -129,17 +120,6 @@ public partial class MainViewModel {
         }
     }
 
-    // поворот или другая подложка анализа могут изменить геометрию после выбора файла
-    private VideoBackgroundRaster? GetReplacementBackground(PixelSize size) {
-        if (!ShowsReplacedVideoBackground || videoBackgroundImage is not { } image) {
-            return null;
-        }
-        if (videoBackgroundRaster is not { } raster || raster.Size != size) {
-            videoBackgroundRaster = raster = image.PrepareCover(size);
-        }
-        return raster;
-    }
-
     private void NotifyVideoBackgroundState() {
         OnPropertyChanged(nameof(VideoBackgroundReplacementEnabled));
         OnPropertyChanged(nameof(HasVideoBackgroundImage));
@@ -152,21 +132,8 @@ public partial class MainViewModel {
         OnPropertyChanged(nameof(CanUseVideoBackgroundReplacement));
         OnPropertyChanged(nameof(CanUseVideoMovingBlur));
         OnPropertyChanged(nameof(CanUseVideoOpticalFlow));
-        OnPropertyChanged(nameof(CanDisplayVideoForegroundEffect));
+        OnPropertyChanged(nameof(CanUseVideoSubtractionBackdrop));
         OnPropertyChanged(nameof(CanApplyVideoForeground));
     }
 
-    // при выборе вида на вкладке видеоряда повторно используем готовую маску
-    private void RefreshSelectedVideoForegroundView(bool wasActive, bool rasterViewChanged = false) {
-        if (wasActive != HasActiveVideoSequenceEffect || IsCombinedAnalysisOutputSelected || videoForegroundFailed ||
-            rasterViewChanged) {
-            RestartVideoForeground();
-        }
-        else if (videoForegroundFrame is { } frame && videoForegroundOutput is { } output) {
-            PaintVideoForeground(output, frame, result: true, maskOnly: VideoForegroundViewIndex == 1,
-                GetReplacementBackground(frame.Size), motionBlur: ShowsVideoMovingBlur);
-            NotifyVideoForegroundPixelsChanged();
-            DescribeVideoForegroundFrame(frame);
-        }
-    }
 }

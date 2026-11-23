@@ -24,10 +24,14 @@ public partial class MainWindow {
     private const string OpticalFlowTitle = "Оптический поток";
     private readonly TabStrip videoForegroundTabs = new() { HorizontalAlignment = HorizontalAlignment.Left };
     private readonly TabStripItem videoForegroundResultTab = new() { Content = "Результат", IsEnabled = false };
-    private readonly ListBox videoForegroundViews = new();
+    private readonly StackPanel videoForegroundDisplayOptions = new() { Spacing = 6, Width = 264 };
     private readonly ComboBox videoForegroundSourcePicker = CreateVideoForegroundSourcePicker("Источник вычитания фона");
     private readonly ComboBox videoReplacementSourcePicker = CreateVideoForegroundSourcePicker("Источник замены фона");
     private readonly ComboBox videoMovingBlurSourcePicker = CreateVideoForegroundSourcePicker("Источник размытия");
+    private readonly ComboBox videoSubtractionRasterPicker = new() {
+        ItemsSource = new[] { "Передний план", "Маска", "Задний план" },
+        HorizontalAlignment = HorizontalAlignment.Stretch
+    };
     private readonly CheckBox videoForegroundMethod = new() { Content = "Вычитание фона" };
     private readonly Button videoForegroundMethodSettings = new() { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
     private readonly CheckBox videoReplacementMethod = new() { Content = "Замена фона" };
@@ -45,10 +49,6 @@ public partial class MainWindow {
     private readonly CheckBox videoOpticalFlowMethod = new() { Content = OpticalFlowTitle };
     private readonly Button videoOpticalFlowSettings = new() { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
     private readonly ComboBox videoOpticalFlowSourcePicker = CreateVideoForegroundSourcePicker("Источник оптического потока");
-    private readonly ComboBox videoOpticalFlowBackdropPicker = new() {
-        ItemsSource = new[] { "Источник расчёта", "Оригинал", "Результат редактирования", "Результат анализа" },
-        HorizontalAlignment = HorizontalAlignment.Stretch
-    };
     private readonly Button videoForegroundApply = new() { Content = "Применить", HorizontalAlignment = HorizontalAlignment.Stretch };
     private Button? videoForegroundDisplayButton;
     private int videoForegroundLastVideoTab = 1;
@@ -100,10 +100,24 @@ public partial class MainWindow {
             Content = new StackPanel { Spacing = 8, Children = { methodRow, replacementRow, blurRow, opticalFlowRow, hint } }
         };
 
+        BindVideoForegroundPicker(videoForegroundSourcePicker, nameof(MainViewModel.SelectedVideoSubtractionSourceIndex),
+            vm => vm.SelectedVideoSubtractionSourceIndex, (vm, index) => vm.SelectedVideoSubtractionSourceIndex = index);
+        BindVideoForegroundPicker(videoReplacementSourcePicker, nameof(MainViewModel.SelectedVideoReplacementSourceIndex),
+            vm => vm.SelectedVideoReplacementSourceIndex, (vm, index) => vm.SelectedVideoReplacementSourceIndex = index);
+        BindVideoForegroundPicker(videoMovingBlurSourcePicker, nameof(MainViewModel.SelectedVideoBlurSourceIndex),
+            vm => vm.SelectedVideoBlurSourceIndex, (vm, index) => vm.SelectedVideoBlurSourceIndex = index);
+        BindVideoForegroundPicker(videoOpticalFlowSourcePicker, nameof(MainViewModel.SelectedVideoFlowSourceIndex),
+            vm => vm.SelectedVideoFlowSourceIndex, (vm, index) => vm.SelectedVideoFlowSourceIndex = index);
+        AutomationProperties.SetName(videoSubtractionRasterPicker, "Вид вычитания фона");
+        BindVideoForegroundPicker(videoSubtractionRasterPicker, nameof(MainViewModel.SelectedVideoSubtractionRasterIndex),
+            vm => vm.SelectedVideoSubtractionRasterIndex, (vm, index) => vm.SelectedVideoSubtractionRasterIndex = index);
+
         StackPanel details = new() {
             Spacing = 6,
             Children = {
-                new TextBlock { Text = "Алгоритм · MOG2" }, new TextBlock { Text = "Источник" }, videoForegroundSourcePicker
+                new TextBlock { Text = "Алгоритм · MOG2" },
+                new TextBlock { Text = "Источник расчёта" }, videoForegroundSourcePicker,
+                new TextBlock { Text = "Вид вычитания фона" }, videoSubtractionRasterPicker
             }
         };
         TextBlock parametersTitle = new() { Text = "Параметры метода" };
@@ -127,22 +141,10 @@ public partial class MainWindow {
             parametersTitle.Text = "Параметры размытия";
             parametersContent.Content = blurDetails;
         };
-        AutomationProperties.SetName(videoOpticalFlowBackdropPicker, "Подложка стрелок");
-        videoOpticalFlowBackdropPicker.Bind(SelectingItemsControl.SelectedIndexProperty,
-            new Binding(nameof(MainViewModel.SelectedVideoOpticalFlowBackdropIndex)) { Mode = BindingMode.OneWay });
-        videoOpticalFlowBackdropPicker.SelectionChanged += (_, e) => {
-            if (ReferenceEquals(e.Source, videoOpticalFlowBackdropPicker) &&
-                DataContext is MainViewModel { IsVideoOpen: true } model) {
-                model.SelectedVideoOpticalFlowBackdropIndex = videoOpticalFlowBackdropPicker.SelectedIndex;
-                videoOpticalFlowBackdropPicker.SetCurrentValue(SelectingItemsControl.SelectedIndexProperty,
-                    model.SelectedVideoOpticalFlowBackdropIndex);
-            }
-        };
         StackPanel opticalFlowDetails = new() {
             Spacing = 6,
             Children = { new TextBlock { Text = "Алгоритм · Фарнебэк" },
-                new TextBlock { Text = "Источник расчёта" }, videoOpticalFlowSourcePicker,
-                new TextBlock { Text = "Подложка стрелок" }, videoOpticalFlowBackdropPicker }
+                new TextBlock { Text = "Источник расчёта" }, videoOpticalFlowSourcePicker }
         };
         videoOpticalFlowSettings.Click += (_, _) => {
             parametersTitle.Text = "Параметры оптического потока";
@@ -196,16 +198,36 @@ public partial class MainWindow {
         return row;
     }
 
-    // методы используют один источник кадров видеоряда
+    // каждый метод выбирает свой вход из тех же источников кадров
     private static ComboBox CreateVideoForegroundSourcePicker(string label) {
         ComboBox picker = new() {
             ItemsSource = new[] { "Оригинал", "Результат редактирования", "Результат анализа" },
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
         AutomationProperties.SetName(picker, label);
-        picker.Bind(SelectingItemsControl.SelectedIndexProperty,
-            new Binding(nameof(MainViewModel.SelectedVideoForegroundSourceIndex)) { Mode = BindingMode.TwoWay });
         return picker;
+    }
+
+    // передаем выбор модели и восстанавливаем принятую позицию после отказа
+    private void BindVideoForegroundPicker(ComboBox picker, string property,
+        Func<MainViewModel, int> read, Action<MainViewModel, int> write) {
+        picker.Bind(SelectingItemsControl.SelectedIndexProperty,
+            new Binding(property) { Mode = BindingMode.OneWay });
+        bool restoringSelection = false;
+        picker.SelectionChanged += (_, e) => {
+            if (restoringSelection || !ReferenceEquals(e.Source, picker) || picker.SelectedIndex < 0 ||
+                DataContext is not MainViewModel { IsVideoOpen: true } model) {
+                return;
+            }
+            restoringSelection = true;
+            try {
+                write(model, picker.SelectedIndex);
+                picker.SetCurrentValue(SelectingItemsControl.SelectedIndexProperty, read(model));
+            }
+            finally {
+                restoringSelection = false;
+            }
+        };
     }
 
     // радиус передается в модель целыми пикселями, в том числе при вводе стрелками
@@ -219,7 +241,7 @@ public partial class MainWindow {
             StringFormat = "Радиус {0} пикс."
         });
         return new StackPanel { Spacing = 4, Children = { radius, videoMovingBlurRadius,
-            new TextBlock { Text = "Источник" }, videoMovingBlurSourcePicker } };
+            new TextBlock { Text = "Источник расчёта" }, videoMovingBlurSourcePicker } };
     }
 
     // выбранное имя остается доступным целиком даже в узкой панели
@@ -238,7 +260,7 @@ public partial class MainWindow {
         });
         return new StackPanel { Spacing = 4, Children = { videoBackgroundPicker, fileName,
             new TextBlock { Text = "По центру с обрезкой", TextWrapping = TextWrapping.Wrap },
-            new TextBlock { Text = "Источник" }, videoReplacementSourcePicker, notice } };
+            new TextBlock { Text = "Источник расчёта" }, videoReplacementSourcePicker, notice } };
     }
 
     // ответ системного диалога относится только к видео, для которого открыли выбор
@@ -274,30 +296,47 @@ public partial class MainWindow {
         }
     }
 
+    // выбираем общую подложку, поверх которой выводятся включенные слои
+    private Button CreateVideoForegroundDisplayButton() {
+        videoForegroundDisplayOptions.Children.Add(new TextBlock {
+            Text = "Подложка результата", FontWeight = FontWeight.SemiBold
+        });
+        string[] titles = ["Оригинал", "Результат редактирования", "Результат анализа", "Вычитание фона", "Заменённый фон"];
+        RadioButton[] choices = new RadioButton[titles.Length];
+        for (int index = 0; index < titles.Length; index++) {
+            RadioButton choice = CreateVideoAnalysisDisplayChoice(titles[index], "VideoSequenceBackdrop", index,
+                nameof(MainViewModel.SelectedVideoSequenceBackdropIndex), SelectBackdrop);
+            choices[index] = choice;
+            videoForegroundDisplayOptions.Children.Add(choice);
+        }
+        BindAnalysisPopup(choices[3], IsEnabledProperty, nameof(MainViewModel.CanUseVideoSubtractionBackdrop));
+        BindAnalysisPopup(choices[4], IsEnabledProperty, nameof(MainViewModel.CanUseVideoBackgroundReplacement));
+        ToolTip.SetTip(choices[3], "Доступно при включённом вычитании фона.");
+        ToolTip.SetShowOnDisabled(choices[3], true);
+        ToolTip.SetTip(choices[4], "Доступно при включённой замене и выбранном изображении фона.");
+        ToolTip.SetShowOnDisabled(choices[4], true);
+        Button button = CreateAnalysisDisplayFlyout(videoForegroundDisplayOptions);
+        button.Bind(IsEnabledProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
+        return button;
+
+        void SelectBackdrop(MainViewModel model, int index) {
+            model.SelectedVideoSequenceBackdropIndex = index;
+            // при отказе возвращаем видимую отметку, которую снял RadioButton
+            int acceptedIndex = model.SelectedVideoSequenceBackdropIndex;
+            if (acceptedIndex != index) {
+                choices[index].SetCurrentValue(ToggleButton.IsCheckedProperty, false);
+                choices[acceptedIndex].SetCurrentValue(ToggleButton.IsCheckedProperty, true);
+            }
+        }
+    }
+
     // вход и результат занимают одну область, итоговый вид выбирается в общей панели отображения
     private Border CreateVideoForegroundImageCard() {
         videoForegroundTabs.Items.Add(new TabStripItem { Content = "Вход" });
         videoForegroundTabs.Items.Add(videoForegroundResultTab);
         videoForegroundTabs.SelectedIndex = 0;
-        AutomationProperties.SetName(videoForegroundTabs, "Просмотр вычитания фона");
-        AutomationProperties.SetName(videoForegroundViews, "Вид результата вычитания фона");
-        void AddView(string title, string enabledProperty) {
-            ListBoxItem item = new() { Content = title };
-            BindAnalysisPopup(item, IsEnabledProperty, enabledProperty);
-            videoForegroundViews.Items.Add(item);
-        }
-        AddView("Передний план", nameof(MainViewModel.VideoForegroundEnabled));
-        AddView("Маска", nameof(MainViewModel.VideoForegroundEnabled));
-        AddView("Заменённый фон", nameof(MainViewModel.CanUseVideoBackgroundReplacement));
-        AddView(MovingBlurTitle, nameof(MainViewModel.CanUseVideoMovingBlur));
-        AddView(OpticalFlowTitle, nameof(MainViewModel.CanUseVideoOpticalFlow));
-        BindAnalysisPopup(videoForegroundViews, SelectingItemsControl.SelectedIndexProperty,
-            nameof(MainViewModel.VideoForegroundViewIndex), BindingMode.TwoWay);
-        BindAnalysisPopup(videoForegroundViews, IsEnabledProperty, nameof(MainViewModel.CanDisplayVideoForegroundEffect));
-        videoForegroundDisplayButton = CreateAnalysisDisplayFlyout(new StackPanel {
-            MinWidth = 180, Children = { videoForegroundViews }
-        });
-        videoForegroundDisplayButton.Bind(IsEnabledProperty, new Binding(nameof(MainViewModel.CanDisplayVideoForegroundEffect)));
+        AutomationProperties.SetName(videoForegroundTabs, "Просмотр видеоряда");
+        videoForegroundDisplayButton = CreateVideoForegroundDisplayButton();
 
         Grid header = new() { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = 8 };
         Grid.SetColumn(videoForegroundDisplayButton, 2);
@@ -365,14 +404,15 @@ public partial class MainWindow {
     private bool UsesVideoForegroundControlKey(KeyEventArgs e) =>
         (e.Key is Key.Space or Key.Left or Key.Right) && e.Source is Visual source &&
         source.GetSelfAndVisualAncestors().Any(control =>
-            ReferenceEquals(control, videoForegroundTabs) || ReferenceEquals(control, videoForegroundViews) ||
+            ReferenceEquals(control, videoForegroundTabs) || ReferenceEquals(control, videoForegroundDisplayOptions) ||
             ReferenceEquals(control, videoForegroundSourcePicker) || ReferenceEquals(control, videoReplacementSourcePicker) ||
             ReferenceEquals(control, videoMovingBlurSourcePicker) || ReferenceEquals(control, videoMovingBlurRadius) ||
-            ReferenceEquals(control, videoOpticalFlowSourcePicker) || ReferenceEquals(control, videoOpticalFlowBackdropPicker) ||
+            ReferenceEquals(control, videoOpticalFlowSourcePicker) || ReferenceEquals(control, videoSubtractionRasterPicker) ||
             e.Key == Key.Space && (ReferenceEquals(control, videoForegroundDisplayButton) ||
                 ReferenceEquals(control, videoForegroundMethod) || ReferenceEquals(control, videoForegroundMethodSettings) ||
                 ReferenceEquals(control, videoReplacementMethod) || ReferenceEquals(control, videoReplacementSettings) ||
                 ReferenceEquals(control, videoMovingBlurMethod) || ReferenceEquals(control, videoMovingBlurSettings) ||
+                ReferenceEquals(control, videoOpticalFlowMethod) || ReferenceEquals(control, videoOpticalFlowSettings) ||
                 ReferenceEquals(control, videoBackgroundPicker) ||
                 ReferenceEquals(control, videoForegroundApply) || ReferenceEquals(control, videoForegroundPageButton)));
 }

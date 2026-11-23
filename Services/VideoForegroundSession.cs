@@ -12,9 +12,10 @@ internal sealed record VideoForegroundFrame(
     ReadOnlyMemory<byte> Rgb, ReadOnlyMemory<byte> Mask) {
     public VideoMotionBlurRaster? MotionBlur { get; init; }
     public VideoOpticalFlowRaster? OpticalFlow { get; init; }
+    public ReadOnlyMemory<byte> Composition { get; init; }
     public PixelSize ResultSize => OpticalFlow?.Size ?? Size;
     public long BufferBytes => Rgb.Length + (long)Mask.Length + (MotionBlur?.BufferBytes ?? 0) +
-        (OpticalFlow?.BufferBytes ?? 0);
+        (OpticalFlow?.BufferBytes ?? 0) + Composition.Length;
 
     // проверяем точный кадр или временной интервал даже при одинаковых метках
     public bool Covers(VideoFrameReadRequest request) => Covers(Time, Until, Ordinal, request);

@@ -5,12 +5,17 @@ namespace ImageVisionApp.Services;
 internal static class VideoForegroundCompositor {
     // один и тот же выбор пикселя используется для предпросмотра и входа анализа
     public static void CopyRow(VideoForegroundFrame input, int row, Span<byte> destination, bool maskOnly,
-        VideoBackgroundRaster? background = null, bool rawInput = false, bool motionBlur = false) {
+        VideoBackgroundRaster? background = null, bool rawInput = false, bool motionBlur = false,
+        bool invertMask = false) {
         bool readsEffect = !rawInput && !maskOnly;
         var size = readsEffect ? input.ResultSize : input.Size;
         int width = size.Width;
         if ((uint)row >= (uint)size.Height || destination.Length != checked(width * 4)) {
             throw new ArgumentException("Размер строки не соответствует видеокадру", nameof(destination));
+        }
+        if (readsEffect && !input.Composition.IsEmpty) {
+            input.Composition.Span.Slice(row * destination.Length, destination.Length).CopyTo(destination);
+            return;
         }
         VideoOpticalFlowRaster? opticalFlow = readsEffect ? input.OpticalFlow : null;
         if (opticalFlow is not null) {
@@ -52,7 +57,7 @@ internal static class VideoForegroundCompositor {
                 destination[pixel] = destination[pixel + 1] = destination[pixel + 2] = mask[x];
             }
             else {
-                ReadOnlySpan<byte> colors = copyInput || mask[x] != 0 ? rgb : backdrop;
+                ReadOnlySpan<byte> colors = copyInput || (mask[x] != 0) != invertMask ? rgb : backdrop;
                 if (colors.IsEmpty) {
                     destination[pixel] = destination[pixel + 1] = destination[pixel + 2] = 0;
                 }

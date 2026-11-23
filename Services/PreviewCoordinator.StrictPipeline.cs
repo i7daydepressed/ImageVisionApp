@@ -194,8 +194,11 @@ internal sealed partial class PreviewCoordinator {
         if (pipeline.Start != VideoPipelineStart.Target && output.Foreground is { } foreground &&
             foreground.Ordinal == frame.Ordinal && foreground.Time == frame.Time && foreground.Until == frame.Until) {
             long pixels = (long)foreground.Size.Width * foreground.Size.Height;
+            bool packed = !foreground.Composition.IsEmpty;
             if (pixels <= 0 || foreground.Rgb.Length != checked(pixels * 3) ||
-                foreground.Mask.Length != (foreground.OpticalFlow is null ? pixels : 0)) {
+                foreground.Mask.Length != (foreground.OpticalFlow is null && !packed ? pixels : 0) ||
+                packed && (foreground.OpticalFlow is not null || foreground.MotionBlur is not null ||
+                    foreground.Composition.Length != checked(pixels * 4))) {
                 throw new InvalidDataException("Получен неполный результат видеоряда");
             }
             if (foreground.MotionBlur is { } blur &&

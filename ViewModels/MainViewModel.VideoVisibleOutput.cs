@@ -78,12 +78,7 @@ public partial class MainViewModel {
         VideoPreviewMeasurements.Window? window = visibleVideoOutput.Last;
         string picture = IsCombinedAnalysisOutputSelected ? "Результат видеоряда" :
             IsFrameAnalysisOutputSelected ? "Покадровый результат" :
-            IsVideoForegroundOutputSelected ? VideoForegroundViewIndex switch {
-                MovingBlurView => "Размытие движущихся областей",
-                OpticalFlowView => "Оптический поток",
-                ReplacedBackgroundView => "Замена фона",
-                _ => "Вычитание фона"
-            } :
+            IsVideoForegroundOutputSelected ? "Композиция видеоряда" :
             IsOriginalVideoOutputSelected ? "Оригинал" : "Изменённое";
         string stage = IsCombinedAnalysisOutputSelected || IsFrameAnalysisOutputSelected ? "Анализ" :
             videoForegroundVisible ? "Работа с видеорядом" :

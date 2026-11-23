@@ -19,7 +19,7 @@ public partial class MainViewModel {
 
     // при неудаче оставляем прежние источники и показываем тот же путь цикла, что проверил граф
     private bool AcceptVideoAnalysisChoice(AnalysisImageSource edge, AnalysisImageSource segmentation, VideoAnalysisBackground background) {
-        if (TryValidateAnalysisSources(edge, segmentation, background, ConfiguredVideoSequenceInputs, out string? error)) {
+        if (TryValidateAnalysisSources(edge, segmentation, background, VideoSequenceInputs, out string? error)) {
             return true;
         }
         AnalysisStatusMessage = error!;

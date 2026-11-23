@@ -64,7 +64,7 @@ public partial class MainViewModel {
     }
 
     // храним отдельно окончательный растр анализа и готовую пару входа и маски видеоряда
-    private void PublishCombinedOutput(VideoPipelineOutput output, bool hasPreparedInput = false) {
+    private void PublishCombinedOutput(VideoPipelineOutput output) {
         if (output.Foreground is not { } foreground) {
             return;
         }
@@ -94,8 +94,7 @@ public partial class MainViewModel {
             }
         }
         else if (IsVideoForegroundOutputSelected) {
-            PublishVideoForeground(foreground,
-                hasPreparedInput && VideoForegroundSource is VideoPipelineStage.Original or VideoPipelineStage.Editing);
+            PublishVideoForeground(foreground);
         }
         if (output.Ready is { } sample) {
             combinedMeasurements.RecordPublished(sample);
@@ -119,54 +118,51 @@ public partial class MainViewModel {
         VideoPreviewSettings resources = PreviewSettings;
         VideoSequenceAnalysisPlan? downstream = IsCombinedAnalysisOutputSelected
             ? CaptureVideoSequenceAnalysisPlan(document, resources) : null;
-        VideoForegroundInputPlan? upstream = VideoForegroundSource == VideoPipelineStage.Original
-            ? null : CaptureVideoForegroundInput(document, resources, VideoForegroundSource);
-        VideoForegroundInputPlan? flowBackdrop = VideoOpticalFlowBackdrop == VideoPipelineStage.None
-            ? null : CaptureVideoForegroundInput(document, resources, VideoOpticalFlowBackdrop);
-        var upstreamResources = upstream?.GetResources(source.FrameSize) ?? default;
-        var backdropResources = flowBackdrop?.GetResources(source.FrameSize) ?? default;
+        VideoSequenceCompositionPlan composition = videoSequenceComposition;
+        VideoForegroundInputPlan? upstream = (composition.RequiredSources & VideoPipelineStage.Analysis) != 0
+            ? CaptureVideoForegroundInput(document, resources, VideoPipelineStage.Analysis) : null;
         var downstreamResources = downstream?.GetResources(source.FrameSize) ?? default;
-        VideoForegroundPath = string.Join(Environment.NewLine,
-            CaptureVideoAnalysisPipeline().Queue.DescribePathsTo(VideoPipelineStage.VideoSequence));
-
-        var foregroundSize = upstream?.GetOutputSize(source.FrameSize) ?? source.FrameSize;
-        long backgroundBytes = CanUseVideoBackgroundReplacement && videoBackgroundImage is { } image
-            ? GetVideoBackgroundBytes(image, foregroundSize) : 0;
-        bool opticalFlow = ShowsVideoOpticalFlow;
-        int? movingBlurRadius = ShowsVideoMovingBlur ? VideoMovingBlurRadius : null;
-        long blurFrame = movingBlurRadius is not null ? VideoMotionBlurRaster.GetBufferBytes(foregroundSize) : 0;
-        long blurScratch = movingBlurRadius is { } radius ? VideoMotionBlurRaster.GetScratchBytes(foregroundSize, radius) : 0;
-        long required = opticalFlow ? VideoOpticalFlowModel.GetRequiredBufferBytes(foregroundSize, source.ReadScratchBytes) :
-            checked(VideoForegroundModel.GetRequiredBufferBytes(foregroundSize, source.ReadScratchBytes) +
-                backgroundBytes + blurFrame + blurScratch);
+        long downstreamBytes = downstreamResources.AnalysisBytes;
+        if (downstream is not null && downstreamResources.Workers == 0) {
+            downstreamBytes = checked(downstreamBytes + VideoEditorFrame.GetBufferBytes(source.FrameSize));
+        }
+        long analysisScratch = Math.Max(upstream?.GetResources(source.FrameSize).AnalysisBytes ?? 0, downstreamBytes);
+        if (analysisScratch > resources.AnalysisBudgetBytes) {
+            throw new InvalidOperationException("Недостаточно бюджета анализа для композиции видеоряда");
+        }
+        bool needsEditing = (composition.RequiredSources & VideoPipelineStage.Editing) != 0 ||
+            upstream?.NeedsEditing == true || downstream?.NeedsEditing == true;
+        VideoEditorPlan editor = videoEditorPlan;
+        if (needsEditing && editor.HasSteps && checked(VideoEditorFrame.GetBufferBytes(source.FrameSize) +
+                editor.GetScratchBytes(source.FrameSize)) > resources.BudgetBytes) {
+            throw new InvalidOperationException("Недостаточно бюджета редактора для источника видеоряда");
+        }
+        var (persistent, sequenceScratch, foregroundFrame) = VideoSequenceComposite.GetResources(composition, Geometry);
+        long required = checked(source.ReadScratchBytes + persistent + sequenceScratch + foregroundFrame);
         if (required > resources.ForegroundBudgetBytes) {
             long needed = (long)Math.Ceiling(required / (1024d * 1024));
             throw new InvalidOperationException($"Недостаточно бюджета видеоряда. Нужно от {needed} МиБ, выбрано " +
                 $"{resources.ForegroundBudgetMiB} МиБ. Измените бюджет в настройках медиаконтейнера.");
         }
+        VideoForegroundPath = string.Join(Environment.NewLine, DescribeVideoSequenceComposition(composition));
 
-        long persistent = opticalFlow ? VideoOpticalFlowModel.GetPersistentBytes(foregroundSize) :
-            checked(VideoForegroundModel.GetPersistentBytes(foregroundSize) + backgroundBytes);
-        long foregroundFrame = opticalFlow ? VideoOpticalFlowModel.GetFrameBytes(foregroundSize) :
-            checked(VideoEditorFrame.GetBufferBytes(foregroundSize) + blurFrame);
         long analysisFrame = downstream is null ? 0 : VideoEditorFrame.GetBufferBytes(downstream.GetOutputSize(source.FrameSize));
-        long analysisScratch = Math.Max(Math.Max(upstreamResources.AnalysisBytes, backdropResources.AnalysisBytes),
-            downstreamResources.AnalysisBytes);
         long foregroundCapacity = 1 + (resources.ForegroundBudgetBytes - required) / foregroundFrame;
         long analysisCapacity = analysisFrame == 0 ? long.MaxValue :
             1 + (resources.AnalysisBudgetBytes - analysisScratch) / analysisFrame;
         int capacity = (int)Math.Min(512, Math.Min(foregroundCapacity, analysisCapacity));
         long retained = checked(foregroundFrame + analysisFrame);
-        long scratch = checked(required - source.ReadScratchBytes - persistent - foregroundFrame +
-            Math.Max(0, analysisScratch - analysisFrame));
+        long scratch = checked(sequenceScratch + Math.Max(0, analysisScratch - analysisFrame));
         long generation = combinedMeasurementGeneration;
-        VideoEditorPlan editor = videoEditorPlan;
-        bool maskOnly = VideoForegroundViewIndex == 1;
-        VideoBackgroundRaster? background = downstream is not null ? GetReplacementBackground(foregroundSize) : null;
-        bool needsEditing = upstream?.NeedsEditing == true || downstream?.NeedsEditing == true || flowBackdrop?.NeedsEditing == true;
-        return new(() => new VideoCombinedFrameProcessor(source.FrameSize, upstream, downstream, editor, maskOnly,
-            combinedMeasurements, generation, source.ReadScratchBytes, background, movingBlurRadius, opticalFlow, flowBackdrop),
-            persistent, scratch, retained, capacity, needsEditing, opticalFlow);
+        return new(() => new VideoCompositePreviewProcessor(source.FrameSize, composition, upstream, downstream,
+            editor, combinedMeasurements, generation, source.ReadScratchBytes),
+            persistent, scratch, retained, capacity, needsEditing, composition.CanSeekFromPreviousFrame);
+
+        VideoEditorGeometry Geometry(VideoPipelineStage stage) => stage switch {
+            VideoPipelineStage.Editing => editor.GetGeometry(source.FrameSize),
+            VideoPipelineStage.Analysis => upstream!.GetGeometry(source.FrameSize),
+            _ => new(source.FrameSize, 0)
+        };
     }
 
     private readonly record struct CombinedVideoWork(Func<IVideoStrictPipelineProcessor> Create, long PersistentBytes,

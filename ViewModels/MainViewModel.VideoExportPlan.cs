@@ -16,15 +16,14 @@ public partial class MainViewModel {
         }
         identity.EnsureCurrent(path);
 
-        VideoPipelineStage sequenceInput = HasActiveVideoSequenceEffect ? VideoForegroundSource : VideoPipelineStage.Original;
-        VideoPipelineStage flowBackdrop = VideoOpticalFlowBackdrop;
-        VideoPipelineStage sequenceInputs = sequenceInput | flowBackdrop;
+        VideoSequenceCompositionPlan composition = videoSequenceComposition;
+        VideoPipelineStage sequenceInputs = composition.RequiredSources;
         var (caption, output) = view switch {
             VideoExportView.Original => ("Оригинал", VideoPipelineStage.Original),
             VideoExportView.EditorOutput => ("Редактирование · Изменённое", VideoPipelineStage.Editing),
             VideoExportView.AnalysisInput => ("Анализ · Вход", VideoPipelinePlan.FromAnalysisSource(videoAnalysisDisplayedSource)),
             VideoExportView.AnalysisOutput => ("Анализ · Результат", VideoPipelineStage.Analysis),
-            VideoExportView.SequenceInput => ("Работа с видеорядом · Вход", sequenceInput),
+            VideoExportView.SequenceInput => ("Работа с видеорядом · Вход", composition.BaseInput),
             VideoExportView.SequenceOutput => ("Работа с видеорядом · Результат",
                 HasActiveVideoSequenceEffect ? VideoPipelineStage.VideoSequence : VideoPipelineStage.Original),
             _ => throw new ArgumentOutOfRangeException(nameof(view))
@@ -44,13 +43,6 @@ public partial class MainViewModel {
             throw new InvalidOperationException(error);
         }
 
-        VideoExportEffect effect = VideoForegroundViewIndex switch {
-            1 => VideoExportEffect.Mask,
-            ReplacedBackgroundView => VideoExportEffect.Background,
-            MovingBlurView => VideoExportEffect.MotionBlur,
-            OpticalFlowView => VideoExportEffect.OpticalFlow,
-            _ => VideoExportEffect.Foreground
-        };
         List<string> details = [caption];
         if (view is VideoExportView.AnalysisInput or VideoExportView.SequenceInput ||
             view == VideoExportView.SequenceOutput && output == VideoPipelineStage.Original) {
@@ -60,22 +52,10 @@ public partial class MainViewModel {
             details.Add(DescribeExportAnalysis(analysis));
         }
         if (route.Stages.Contains(VideoPipelineStage.VideoSequence)) {
-            string kind = effect switch {
-                VideoExportEffect.Mask => "Маска",
-                VideoExportEffect.Background => $"Заменённый фон ({VideoBackgroundImageName})",
-                VideoExportEffect.MotionBlur => $"Размытие движущихся областей (радиус {VideoMovingBlurRadius})",
-                VideoExportEffect.OpticalFlow => "Оптический поток",
-                _ => "Передний план"
-            };
-            details.Add($"Видеоряд: {kind}. Источник: {VideoPipelinePlan.GetStageName(sequenceInput)}");
-            if (flowBackdrop != VideoPipelineStage.None) {
-                details.Add($"Подложка стрелок: {VideoPipelinePlan.GetStageName(flowBackdrop)}");
-            }
+            details.AddRange(DescribeVideoSequenceComposition(composition));
         }
         return new(string.Join(Environment.NewLine, details), document, identity, route, output, videoEditorPlan,
-            analysis, sequenceInput, effect, route.Stages.Contains(VideoPipelineStage.VideoSequence) &&
-                effect == VideoExportEffect.Background ? videoBackgroundImage : null,
-            VideoMovingBlurRadius) { FlowBackdrop = flowBackdrop };
+            analysis, composition);
     }
 
     // показываем подложку и фактические источники всех включённых слоёв в подтверждении записи

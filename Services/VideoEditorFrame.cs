@@ -105,15 +105,23 @@ internal sealed class VideoEditorFrame : IDisposable {
     internal ReadOnlyMemory<byte> Bgra => pixels.AsMemory(0, length);
 
     // берем буфер только на время обработки и вывода кадра
-    private VideoEditorFrame(PixelSize size) {
+    private VideoEditorFrame(PixelSize size, byte[]? ownedBgra = null) {
         Size = size;
         stride = checked(size.Width * 4);
         length = checked(stride * size.Height);
-        pixels = GC.AllocateUninitializedArray<byte>(length);
+        pixels = ownedBgra ?? GC.AllocateUninitializedArray<byte>(length);
     }
 
     // размер плотного BGRA-кадра известен до выделения массива
     public static long GetBufferBytes(PixelSize size) => (long)size.Width * size.Height * 4;
+
+    // используем готовый плотный буфер композиции без дополнительной копии
+    internal static VideoEditorFrame TakeBgra(PixelSize size, byte[] pixels) {
+        if (size.Width <= 0 || size.Height <= 0 || pixels.LongLength != GetBufferBytes(size)) {
+            throw new ArgumentException("Размер BGRA не соответствует композиции видеокадра", nameof(pixels));
+        }
+        return new(size, pixels);
+    }
 
     // закрепляем bgra без копии на время чтения пикселей в OpenCV
     public Mat BorrowBgra() => Mat.FromPixelData(Size.Height, Size.Width, MatType.CV_8UC4, pixels, stride);
@@ -211,6 +219,10 @@ internal sealed class VideoEditorFrame : IDisposable {
         PixelSize size = maskOnly ? input.Size : input.ResultSize;
         VideoEditorFrame frame = new(size);
         try {
+            if (!maskOnly && !input.Composition.IsEmpty) {
+                input.Composition.Span.CopyTo(frame.pixels);
+                return frame;
+            }
             if (!maskOnly && input.OpticalFlow is { } opticalFlow && !opticalFlow.Bgra.IsEmpty) {
                 opticalFlow.Bgra.Span.CopyTo(frame.pixels);
                 return frame;

@@ -7,15 +7,10 @@ using ImageVisionApp.Models;
 namespace ImageVisionApp.Services;
 
 internal enum VideoExportView { Original, EditorOutput, AnalysisInput, AnalysisOutput, SequenceInput, SequenceOutput }
-internal enum VideoExportEffect { Foreground, Mask, Background, MotionBlur, OpticalFlow }
 
 internal sealed record VideoExportPlan(string Caption, MediaDocument Document, VideoFileIdentity Identity,
     VideoPipelinePlan Route, VideoPipelineStage Output, VideoEditorPlan Editor, VideoSequenceAnalysisPlan? Analysis,
-    VideoPipelineStage SequenceInput, VideoExportEffect Effect, VideoBackgroundImage? Background, int BlurRadius) {
-    public VideoPipelineStage FlowBackdrop { get; init; }
-    internal VideoPipelineStage SequenceResultStage => Effect == VideoExportEffect.OpticalFlow &&
-        FlowBackdrop != VideoPipelineStage.None ? FlowBackdrop : SequenceInput;
-
+    VideoSequenceCompositionPlan Composition) {
     // подложка определяет конечные размеры, даже если отдельные слои считались по повёрнутому кадру
     public PixelSize GetOutputSize(PixelSize sourceSize) => GetStageSize(Output, sourceSize);
 
@@ -28,7 +23,7 @@ internal sealed record VideoExportPlan(string Caption, MediaDocument Document, V
         VideoPipelineStage.Original => new(sourceSize, 0),
         VideoPipelineStage.Editing => Editor.GetGeometry(sourceSize),
         VideoPipelineStage.Analysis => Analysis!.GetOutputGeometry(sourceSize),
-        VideoPipelineStage.VideoSequence => GetStageGeometry(SequenceResultStage, sourceSize),
+        VideoPipelineStage.VideoSequence => GetStageGeometry(Composition.BaseInput, sourceSize),
         _ => throw new InvalidOperationException("Неизвестный участок экспорта")
     };
 
@@ -39,11 +34,7 @@ internal sealed record VideoExportPlan(string Caption, MediaDocument Document, V
 internal sealed class VideoExportProcessor : IDisposable {
     private readonly VideoExportPlan plan;
     private readonly PixelSize sourceSize;
-    private readonly VideoForegroundModel? foreground;
-    private readonly VideoOpticalFlowModel? flow;
-    private readonly VideoEditorGeometry flowInputGeometry;
-    private readonly VideoEditorGeometry flowBackdropGeometry;
-    private readonly VideoBackgroundRaster? background;
+    private readonly VideoSequenceComposite? composite;
     private long nextOrdinal;
     private VideoPresentationTime? nextTime;
     private bool disposed;
@@ -53,18 +44,7 @@ internal sealed class VideoExportProcessor : IDisposable {
         this.plan = plan;
         this.sourceSize = sourceSize;
         if (plan.Route.Stages.Contains(VideoPipelineStage.VideoSequence)) {
-            PixelSize size = plan.GetStageSize(plan.SequenceInput, sourceSize);
-            if (plan.Effect == VideoExportEffect.OpticalFlow) {
-                flowInputGeometry = plan.GetStageGeometry(plan.SequenceInput, sourceSize);
-                flowBackdropGeometry = plan.GetStageGeometry(plan.SequenceResultStage, sourceSize);
-                flow = new(size);
-            }
-            else {
-                if (plan.Effect == VideoExportEffect.Background) {
-                    background = (plan.Background ?? throw new InvalidOperationException("Не выбран файл фона")).PrepareCover(size, token);
-                }
-                foreground = new(size);
-            }
+            composite = new(plan.Composition, stage => plan.GetStageGeometry(stage, sourceSize));
         }
     }
 
@@ -93,8 +73,9 @@ internal sealed class VideoExportProcessor : IDisposable {
                         analysis = plan.Analysis!.Transform(input, sequence, token, edited, analysisWorkers: 1);
                         break;
                     case VideoPipelineStage.VideoSequence:
-                        sequence = RenderSequence(input, Pixels(plan.SequenceInput),
-                            plan.SequenceResultStage == plan.SequenceInput ? null : Pixels(plan.SequenceResultStage), token);
+                        VideoForegroundFrame frame = composite!.Process(input, Pixels, publish: true, token) ??
+                            throw new InvalidDataException("Не готов результат видеоряда");
+                        sequence = VideoEditorFrame.FromForeground(frame, maskOnly: false, token);
                         break;
                 }
             }
@@ -123,25 +104,10 @@ internal sealed class VideoExportProcessor : IDisposable {
         };
     }
 
-    // рассчитываем модель по входу и накладываем стрелки на выбранный растр того же кадра
-    private VideoEditorFrame RenderSequence(TimedVideoInput input, VideoEditorFrame pixels, VideoEditorFrame? backdrop,
-        CancellationToken token) {
-        VideoForegroundFrame frame = (flow is null ? foreground!.Process(input, pixels, true, token) :
-            flow.Process(input, pixels, true, token, backdrop, inputGeometry: backdrop is null ? null : flowInputGeometry,
-                backdropGeometry: backdrop is null ? null : flowBackdropGeometry))
-            ?? throw new InvalidDataException("Не готов результат видеоряда");
-        bool blur = plan.Effect == VideoExportEffect.MotionBlur;
-        if (blur) {
-            frame = frame with { MotionBlur = VideoMotionBlurRaster.Create(frame, plan.BlurRadius, token) };
-        }
-        return VideoEditorFrame.FromForeground(frame, plan.Effect == VideoExportEffect.Mask, token, background, blur);
-    }
-
     // освобождаем накопленное состояние независимо от исхода записи
     public void Dispose() {
         if (disposed) { return; }
         disposed = true;
-        flow?.Dispose();
-        foreground?.Dispose();
+        composite?.Dispose();
     }
 }
