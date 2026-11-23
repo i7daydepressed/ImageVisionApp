@@ -687,6 +687,7 @@ public partial class MainViewModel {
         RefreshVideoAnalysisInput();
         RefreshVideoForeground();
         StopVisibleVideoOutputOnPause();
+        RefreshVideoFrameSaveAvailability();
     }
 
     // прекращает публикацию и освобождает один источник перед заменой файла или закрытием окна

@@ -285,6 +285,7 @@ public partial class MainViewModel {
         }
         finally {
             videoAnalysisViewRunning = false;
+            OnPropertyChanged(nameof(AnalysisResultImage));
         }
     }
 

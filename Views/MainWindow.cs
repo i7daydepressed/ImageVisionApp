@@ -115,6 +115,7 @@ public partial class MainWindow : Window {
         advancedHistogramPanel.ShowComparison(histogramViewModel?.HistogramComparison);
         UpdateHistogramAvailability();
         UpdateVideoForegroundDocument();
+        videoFrameSaveNotice.IsVisible = false;
         UpdateVideoPlaybackControls();
     }
 
@@ -126,7 +127,21 @@ public partial class MainWindow : Window {
             UpdateVideoPlaybackControls();
         }
 
+        if (e.PropertyName == nameof(MainViewModel.CanSaveCurrentVideoFrame)) {
+            UpdateVideoFrameSaveButton();
+        }
+
+        if (videoExportButton.Flyout?.IsOpen == true &&
+            e.PropertyName is nameof(MainViewModel.VideoPreviewRevision) or nameof(MainViewModel.VideoEditorPreviewRevision) or
+                nameof(MainViewModel.VideoEditorPreviewTabIndex) or nameof(MainViewModel.AnalysisInputImage) or
+                nameof(MainViewModel.AnalysisResultImage) or nameof(MainViewModel.AnalysisStatusMessage) or
+                nameof(MainViewModel.VideoForegroundInputPreview) or nameof(MainViewModel.VideoForegroundPreview)) {
+            UpdateVideoFrameSaveMenuItem();
+        }
+
         if (e.PropertyName == nameof(MainViewModel.CurrentDocument)) {
+            videoFrameSaveNotice.IsVisible = false;
+            UpdateVideoFrameSaveButton();
             UpdateHistogramAvailability();
             UpdateVideoForegroundDocument();
         }

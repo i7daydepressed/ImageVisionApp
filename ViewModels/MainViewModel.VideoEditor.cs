@@ -47,6 +47,7 @@ public partial class MainViewModel {
             if ((value is 0 or 1) && SetProperty(ref videoEditorPreviewTabIndex, value)) {
                 ResetVisibleVideoOutput();
                 OnPropertyChanged(nameof(VideoEditorVisibleProcessingTime));
+                RefreshVideoFrameSaveAvailability();
             }
         }
     }
@@ -524,6 +525,7 @@ public partial class MainViewModel {
         videoEditorSourceError = message;
         OnPropertyChanged(nameof(VideoEditorSourceNotice));
         OnPropertyChanged(nameof(VideoEditorNotice));
+        RefreshVideoFrameSaveAvailability();
     }
 
     // оригинал становится видимым после подтверждения кадра общим плеером
@@ -550,6 +552,7 @@ public partial class MainViewModel {
         OnPropertyChanged(nameof(CurrentVideoEditorGeometry));
         OnPropertyChanged(nameof(VideoEditorNotice));
         OnPropertyChanged(nameof(VideoEditorPreviewRevision));
+        RefreshVideoFrameSaveAvailability();
         RefreshVideoAnalysisInput();
     }
 

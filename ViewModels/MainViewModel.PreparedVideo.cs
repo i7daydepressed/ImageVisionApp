@@ -683,7 +683,7 @@ public partial class MainViewModel {
                     PublishCombinedOutput(output, hasPreparedInput: true);
                 }
                 else if (IsStrictFrameAnalysisSelected && output.Analysis is { } analyzed) {
-                    PublishFrameAnalysisPlayback(analyzed, frame.Time, output.Ready, exactTime: true);
+                    PublishFrameAnalysisPlayback(analyzed, preparedPresentedFrame.Value, output.Ready, exactTime: true);
                 }
             }
             OnPropertyChanged(nameof(VideoPreviewFrame));

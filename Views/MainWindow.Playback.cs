@@ -44,6 +44,7 @@ public partial class MainWindow {
     private Grid CreateVideoPlaybackControls() {
         Grid controls = new() {
             ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto"),
+            RowDefinitions = new RowDefinitions("Auto,Auto"),
             ColumnSpacing = 10,
             Margin = new Thickness(12, 0, 12, 0)
         };
@@ -70,15 +71,19 @@ public partial class MainWindow {
         controls.Children.Add(videoTime);
         controls.Children.Add(videoNotice);
         Grid.SetColumn(videoExportButton, 4);
-        videoExportButton.Click += ExportVideoButton_OnClick;
+        ConfigureVideoExportButton();
         controls.Children.Add(videoExportButton);
+        Grid.SetRow(videoFrameSaveNotice, 1);
+        Grid.SetColumnSpan(videoFrameSaveNotice, 5);
+        controls.Children.Add(videoFrameSaveNotice);
         UpdateVideoPlaybackControls();
         return controls;
     }
 
     // управляет плеером с клавиатуры, сохраняя обычный ввод в текстовых полях
     private void VideoPlayback_OnKeyDown(object? sender, KeyEventArgs e) {
-        if (IsComparisonPageVisible || (e.Key == Key.Space && IsComparisonButtonInput(e.Source)) ||
+        if (IsComparisonPageVisible || videoExportButton.Flyout?.IsOpen == true ||
+            e.Key == Key.Space && (IsComparisonButtonInput(e.Source) || IsVideoExportButtonInput(e.Source)) ||
             UsesVideoForegroundControlKey(e) ||
             e.KeyModifiers != KeyModifiers.None || e.Source is TextBox ||
             DataContext is not MainViewModel viewModel) {
@@ -112,6 +117,11 @@ public partial class MainWindow {
         }
     }
 
+    // пробел на кнопках сохранения выполняет выбранную команду
+    private bool IsVideoExportButtonInput(object? source) =>
+        source is Visual visual && visual.GetSelfAndVisualAncestors().Any(control =>
+            ReferenceEquals(control, videoExportButton) || ReferenceEquals(control, videoFrameSaveButton));
+
     // завершает удержание клавиш, чтобы каждое нажатие переключало состояние только один раз
     private void VideoPlayback_OnKeyUp(object? sender, KeyEventArgs e) {
         if (e.Key == Key.Space && videoSpaceHeld) {
@@ -139,6 +149,7 @@ public partial class MainWindow {
         if (e.GetCurrentPoint(videoTimeline).Properties.IsLeftButtonPressed &&
             DataContext is MainViewModel viewModel && viewModel.PlaybackStatus.CanSeek) {
             videoDragDocument = viewModel.CurrentDocument;
+            UpdateVideoFrameSaveButton();
             viewModel.PauseVideoPlayback();
         }
     }
@@ -176,6 +187,7 @@ public partial class MainWindow {
         if (!ReferenceEquals(videoDragDocument, viewModel?.CurrentDocument)) {
             videoDragDocument = null;
         }
+        UpdateVideoFrameSaveButton();
 
         videoPlayButton.Content = status.IsPlaying ? "Пауза" : "Воспроизвести";
         videoPlayButton.IsEnabled = status.CanPlay;

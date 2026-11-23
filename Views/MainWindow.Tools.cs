@@ -191,10 +191,13 @@ public partial class MainWindow {
                 viewModel.ResetAdvancedQueue();
             }
         };
+        videoFrameSaveButton.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
+        videoFrameSaveButton.Click += SaveVideoFrameButton_OnClick;
+        ToolTip.SetTip(videoFrameSaveButton, "Сохраняет выбранный кадр на паузе в PNG");
         StackPanel resultActions = new StackPanel {
             Spacing = 8,
             Margin = new Thickness(0, 16, 0, 0),
-            Children = { resetAdvancedButton, saveAdvancedButton }
+            Children = { resetAdvancedButton, videoFrameSaveButton, saveAdvancedButton }
         };
         Grid cardContent = new Grid {
             RowDefinitions = new RowDefinitions("Auto,*,Auto")

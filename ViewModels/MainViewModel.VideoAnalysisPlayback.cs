@@ -17,7 +17,7 @@ public partial class MainViewModel {
     private CancellationTokenSource? videoAnalysisPlaybackStop;
     private int? submittedAnalysisPreviewRevision;
     private WriteableBitmap? videoAnalysisPlaybackBitmap;
-    private (VideoPresentationTime Time, bool Exact)? videoAnalysisPlaybackStamp;
+    private (VideoFrameCursor Cursor, bool Exact, long LiveFrame)? videoAnalysisPlaybackStamp;
     private bool manualAnalysisPlaybackPaused;
     private bool preparedAnalysisPausedForApply;
 
@@ -99,12 +99,12 @@ public partial class MainViewModel {
         VideoFrameCursor? prepared = preparedSource is not null ? preparedPresentedFrame : null;
         long position = videoPlayback.Position >= 0 ? videoPlayback.Position : PlaybackStatus.Position;
         VideoFrameCursor cursor = prepared ?? new(new(position, 1000), VideoPreviewRevision, false);
-        _ = ProcessFrameAnalysisPlaybackAsync(source, plan, cursor, exactTime: prepared is not null);
+        _ = ProcessFrameAnalysisPlaybackAsync(source, plan, cursor, exactTime: prepared is not null, videoEditorFrame);
     }
 
     // один рабочий кадр обрабатывается вне UI, следующий захватывается с последней доступной ревизии
     private async Task ProcessFrameAnalysisPlaybackAsync(Bitmap source, VideoSequenceAnalysisPlan plan,
-        VideoFrameCursor cursor, bool exactTime) {
+        VideoFrameCursor cursor, bool exactTime, long liveFrame) {
         using CancellationTokenSource stop = new();
         videoAnalysisPlaybackStop = stop;
         long generation = combinedMeasurementGeneration;
@@ -123,7 +123,7 @@ public partial class MainViewModel {
                     stop.Token).ConfigureAwait(false);
             });
             if (IsCurrentFrameAnalysisPlayback(plan, stop.Token) && output?.Analysis is { } pixels) {
-                PublishFrameAnalysisPlayback(pixels, cursor.Time, output.Ready, exactTime);
+                PublishFrameAnalysisPlayback(pixels, cursor, output.Ready, exactTime, liveFrame);
             }
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested) {
@@ -146,8 +146,8 @@ public partial class MainViewModel {
         ReferenceEquals(plan.Document, CurrentDocument);
 
     // результат хранит время именно обработанного кадра и обновляется после завершения всей композиции
-    private void PublishFrameAnalysisPlayback(VideoEditorFrame pixels, VideoPresentationTime time,
-        VideoPipelineMeasurements.ReadyStamp? ready, bool exactTime) {
+    private void PublishFrameAnalysisPlayback(VideoEditorFrame pixels, VideoFrameCursor cursor,
+        VideoPipelineMeasurements.ReadyStamp? ready, bool exactTime, long liveFrame = 0) {
         if (manualAnalysisPlaybackPaused) {
             return;
         }
@@ -165,7 +165,7 @@ public partial class MainViewModel {
         }
 
         videoAnalysisPlaybackBitmap = target;
-        videoAnalysisPlaybackStamp = (time, exactTime);
+        videoAnalysisPlaybackStamp = (cursor, exactTime, liveFrame);
         NotifyVideoAnalysisPreview();
         RefreshVideoAnalysisStatus();
         if (!ReferenceEquals(previous, target)) {

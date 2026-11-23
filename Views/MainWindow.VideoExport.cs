@@ -15,12 +15,22 @@ using ImageVisionApp.ViewModels;
 namespace ImageVisionApp.Views;
 
 public partial class MainWindow {
-    private readonly Button videoExportButton = new() { Content = "Экспорт видео…" };
+    private readonly Button videoExportButton = new() { Content = "Экспорт" };
+    private readonly MenuItem videoExportMenuItem = new() { Header = "Экспорт видео…" };
     private CancellationTokenSource? videoExportStop;
+
+    // держим обе команды в общей полосе плеера, независимо от выбранной страницы
+    private void ConfigureVideoExportButton() {
+        MenuFlyout menu = new() { Items = { videoFrameSaveMenuItem, videoExportMenuItem } };
+        menu.Opened += (_, _) => UpdateVideoFrameSaveMenuItem();
+        videoFrameSaveMenuItem.Click += SaveVideoFrameButton_OnClick;
+        videoExportMenuItem.Click += ExportVideoButton_OnClick;
+        videoExportButton.Flyout = menu;
+    }
 
     // фиксируем выбранный вид до диалогов и передаём фоновой задаче независимый снимок
     private async void ExportVideoButton_OnClick(object? sender, RoutedEventArgs e) {
-        if (videoExportStop is not null ||
+        if (videoExportStop is not null || videoFrameSaveBusy || IsComparisonPageVisible ||
             DataContext is not MainViewModel { CurrentDocument: { Kind: MediaKind.Video, SourcePath: not null } document } viewModel) {
             return;
         }
@@ -28,6 +38,7 @@ public partial class MainWindow {
         using CancellationTokenSource stop = new();
         videoExportStop = stop;
         videoExportButton.IsEnabled = false;
+        UpdateVideoFrameSaveButton();
         try {
             VideoExportPlan plan = viewModel.CaptureVideoExportPlan(SelectedVideoExportView(viewModel));
             if (!await ConfirmVideoExportAsync(plan.Caption) || mediaWindowClosed || stop.IsCancellationRequested) {
@@ -71,6 +82,7 @@ public partial class MainWindow {
         finally {
             videoExportStop = null;
             videoExportButton.IsEnabled = true;
+            UpdateVideoFrameSaveButton();
         }
     }
 

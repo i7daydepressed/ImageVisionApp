@@ -425,7 +425,7 @@ public partial class MainViewModel {
         if (ShowsFrameAnalysisPlayback) {
             AnalysisStatusMessage = strictPipelineError ?? videoAnalysisPlaybackPlanError ?? videoAnalysisPlaybackFailure ??
                 (videoAnalysisPlaybackStamp is { } stamp
-                    ? $"Анализ кадра · {(stamp.Exact ? "" : "позиция плеера ≈ ")}{FormatVideoAnalysisTime((long)stamp.Time.Milliseconds)}"
+                    ? $"Анализ кадра · {(stamp.Exact ? "" : "позиция плеера ≈ ")}{FormatVideoAnalysisTime((long)stamp.Cursor.Time.Milliseconds)}"
                     : "Ожидание обработанного кадра…");
             return;
         }
