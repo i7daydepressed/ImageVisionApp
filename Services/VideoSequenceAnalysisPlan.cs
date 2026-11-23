@@ -68,7 +68,7 @@ internal sealed record VideoSequenceAnalysisPlan(MediaDocument Document, VideoEd
 
     // заимствуем нужные растры одного физического кадра и возвращаем собственный результат
     public VideoEditorFrame Transform(TimedVideoInput original, VideoEditorFrame? temporal, CancellationToken token,
-        VideoEditorFrame? preparedEdited = null) {
+        VideoEditorFrame? preparedEdited = null, int? analysisWorkers = null) {
         token.ThrowIfCancellationRequested();
         PixelSize size = original.Pixels.Size;
         VideoEditorGeometry sequenceGeometry = Geometry(size, VideoPipelineStage.VideoSequence);
@@ -78,7 +78,8 @@ internal sealed record VideoSequenceAnalysisPlan(MediaDocument Document, VideoEd
         if (temporal is not null && temporal.Size != sequenceGeometry.OutputSize) {
             throw new InvalidOperationException("Размер видеоряда не соответствует геометрии выбранного входа");
         }
-        int workers = GetResources(size).Workers;
+        // экспорт обрабатывает один полноразмерный кадр за раз, предпросмотр подбирает параллельность по своему бюджету
+        int workers = analysisWorkers ?? GetResources(size).Workers;
         using VideoEditorFrame? ownEdited = NeedsEditing && preparedEdited is null ? original.Pixels.Copy() : null;
         if (ownEdited is not null) {
             Editor.Apply(ownEdited);

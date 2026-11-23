@@ -17,6 +17,7 @@ public partial class MainViewModel {
     private VideoAnalysisBackground videoAnalysisBackground;
     private VideoAnalysisBackground videoAnalysisBackgroundBeforeSegmentation;
     private bool videoAnalysisResultTabSelected;
+    internal bool VideoAnalysisResultTabSelected => videoAnalysisResultTabSelected;
     private WriteableBitmap? videoAnalysisComposition;
     private WriteableBitmap? videoAnalysisSegmentationPreview;
     private long videoAnalysisViewRevision;

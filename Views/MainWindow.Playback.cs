@@ -43,7 +43,7 @@ public partial class MainWindow {
     // создаёт один таймлайн над страницами, который не пересоздаётся при навигации
     private Grid CreateVideoPlaybackControls() {
         Grid controls = new() {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto"),
+            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto"),
             ColumnSpacing = 10,
             Margin = new Thickness(12, 0, 12, 0)
         };
@@ -69,6 +69,9 @@ public partial class MainWindow {
         controls.Children.Add(videoTimeline);
         controls.Children.Add(videoTime);
         controls.Children.Add(videoNotice);
+        Grid.SetColumn(videoExportButton, 4);
+        videoExportButton.Click += ExportVideoButton_OnClick;
+        controls.Children.Add(videoExportButton);
         UpdateVideoPlaybackControls();
         return controls;
     }

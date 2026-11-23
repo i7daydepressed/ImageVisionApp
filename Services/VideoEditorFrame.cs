@@ -102,6 +102,7 @@ internal sealed class VideoEditorFrame : IDisposable {
 
     public PixelSize Size { get; private set; }
     public TimeSpan? ProcessingTime { get; set; }
+    internal ReadOnlyMemory<byte> Bgra => pixels.AsMemory(0, length);
 
     // берем буфер только на время обработки и вывода кадра
     private VideoEditorFrame(PixelSize size) {

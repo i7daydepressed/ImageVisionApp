@@ -14,18 +14,22 @@ namespace ImageVisionApp.Services;
 
 internal sealed class FfprobeVideoMediaSource(
     string path, string ffprobe, PixelSize sourceSize, int timescale, int timeUnit, VideoFileIdentity identity,
-    int decodeThreads) : IVideoMediaSource {
+    int decodeThreads, bool originalSize = false) : IVideoMediaSource {
     // свойство CAP_PROP_N_THREADS открытого в проекте OpenCV 4.13
     private const int DecodeThreadCountProperty = 70;
     private const double TimestampToleranceMs = 0.000001;
 
-    public PixelSize FrameSize { get; } = VideoPreviewDimensions.Fit(sourceSize);
+    public PixelSize FrameSize { get; } = originalSize ? sourceSize : VideoPreviewDimensions.Fit(sourceSize);
     public long ReadScratchBytes => checked((long)sourceSize.Width * sourceSize.Height * 3 +
         (sourceSize == FrameSize ? 0 : (long)FrameSize.Width * FrameSize.Height * 3) +
         VideoEditorFrame.GetBufferBytes(FrameSize) + (long)FrameSize.Width * 3);
 
     internal FfprobeVideoMediaSource WithDecoderThreads(int threads) =>
-        threads == decodeThreads ? this : new(path, ffprobe, sourceSize, timescale, timeUnit, identity, threads);
+        threads == decodeThreads ? this : new(path, ffprobe, sourceSize, timescale, timeUnit, identity, threads, originalSize);
+
+    // экспорт читает кадры без ограничения размера предпросмотра
+    internal FfprobeVideoMediaSource WithOriginalSize() =>
+        originalSize ? this : new(path, ffprobe, sourceSize, timescale, timeUnit, identity, decodeThreads, originalSize: true);
 
     // подтверждаем общую нулевую шкалу и размер единственной дорожки той же версии файла
     public static Task<FfprobeVideoMediaSource> OpenAsync(string path, VideoFileIdentity? expected,
@@ -366,7 +370,7 @@ internal sealed class FfprobeVideoMediaSource(
     }
 
     // используем установленную утилиту в согласованном порядке, без поиска по личным путям
-    private static string FindFfprobe() {
+    internal static string FindFfprobe() {
         string? configured = Environment.GetEnvironmentVariable("IMAGEVISIONAPP_FFPROBE");
         if (!string.IsNullOrWhiteSpace(configured)) {
             return IsExecutable(configured) ? Path.GetFullPath(configured) :
@@ -391,7 +395,7 @@ internal sealed class FfprobeVideoMediaSource(
     }
 
     // пропускаем существующие файлы, которые ОС не может запустить как утилиту
-    private static bool IsExecutable(string file) {
+    internal static bool IsExecutable(string file) {
         if (!File.Exists(file)) {
             return false;
         }
@@ -411,7 +415,7 @@ internal sealed class FfprobeVideoMediaSource(
     }
 
     // извлекаем значение поля из компактной строки ffprobe
-    private static string? GetValue(string[] fields, string name) {
+    internal static string? GetValue(string[] fields, string name) {
         string prefix = name + "=";
         foreach (string field in fields) {
             if (field.StartsWith(prefix, StringComparison.Ordinal)) {
@@ -425,13 +429,14 @@ internal sealed class FfprobeVideoMediaSource(
     private static bool TryPositiveInt(string? value, out int result) =>
         int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out result) && result > 0;
 
-    private sealed class FfprobeRun : IAsyncDisposable {
+    internal sealed class FfprobeRun : IAsyncDisposable {
         private readonly Process process;
         private readonly Task drainErrors;
         private readonly CancellationTokenRegistration stop;
 
         // передаем аргументы без оболочки и отводим stderr отдельно, чтобы не заполнить канал
-        public FfprobeRun(string executable, string path, string stream, string entries, CancellationToken token) {
+        public FfprobeRun(string executable, string path, string stream, string entries, CancellationToken token,
+            bool includeDataHash = false) {
             token.ThrowIfCancellationRequested();
             ProcessStartInfo arguments = new(executable) {
                 UseShellExecute = false,
@@ -439,9 +444,15 @@ internal sealed class FfprobeVideoMediaSource(
                 RedirectStandardError = true
             };
             foreach (string argument in new[] { "-v", "error", "-threads", "1", "-protocol_whitelist", "file",
-                "-select_streams", stream, "-show_entries", entries, "-of", "compact=p=1:nk=0", "-i", path }) {
+                "-select_streams", stream, "-show_entries", entries, "-of", "compact=p=1:nk=0" }) {
                 arguments.ArgumentList.Add(argument);
             }
+            if (includeDataHash) {
+                arguments.ArgumentList.Add("-show_data_hash");
+                arguments.ArgumentList.Add("sha256");
+            }
+            arguments.ArgumentList.Add("-i");
+            arguments.ArgumentList.Add(path);
             try {
                 process = Process.Start(arguments) ?? throw new IOException("Не удалось запустить ffprobe");
             }

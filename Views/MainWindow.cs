@@ -35,6 +35,7 @@ public partial class MainWindow : Window {
         DataContextChanged += MainWindow_OnDataContextChanged;
         Closed += (_, _) => {
             mediaWindowClosed = true;
+            videoExportStop?.Cancel();
             DisposeComparisonView();
             if (DataContext is MainViewModel viewModel) {
                 viewModel.DisposeAnalysis();
