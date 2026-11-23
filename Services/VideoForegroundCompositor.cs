@@ -10,7 +10,18 @@ internal static class VideoForegroundCompositor {
         if ((uint)row >= (uint)input.Size.Height || destination.Length != checked(width * 4)) {
             throw new ArgumentException("Размер строки не соответствует видеокадру", nameof(destination));
         }
-        bool usesBlur = !rawInput && !maskOnly && motionBlur;
+        bool readsEffect = !rawInput && !maskOnly;
+        VideoOpticalFlowRaster? opticalFlow = readsEffect ? input.OpticalFlow : null;
+        if (opticalFlow is not null) {
+            if (opticalFlow.Size != input.Size) {
+                throw new InvalidOperationException("Размер оптического потока не соответствует выбранному видеокадру");
+            }
+            if (!opticalFlow.Bgra.IsEmpty) {
+                opticalFlow.Bgra.Span.Slice(row * destination.Length, destination.Length).CopyTo(destination);
+                return;
+            }
+        }
+        bool usesBlur = readsEffect && motionBlur && opticalFlow is null;
         if (usesBlur) {
             VideoMotionBlurRaster blur = input.MotionBlur ??
                 throw new InvalidOperationException("Размытие для выбранного видеокадра еще не подготовлено");
@@ -22,7 +33,7 @@ internal static class VideoForegroundCompositor {
                 return;
             }
         }
-        bool copyInput = rawInput || usesBlur;
+        bool copyInput = rawInput || usesBlur || opticalFlow is not null;
         bool usesBackground = !copyInput && !maskOnly && background is not null;
         if (usesBackground && background!.Size != input.Size) {
             throw new ArgumentException("Размер фона не соответствует видеокадру", nameof(background));

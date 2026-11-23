@@ -415,7 +415,8 @@ public partial class MainViewModel {
                     }
                     long generation = combinedMeasurementGeneration;
                     pipeline = new(work.Create, work.PersistentBytes, work.ScratchBytes, work.SelectedFrameBytes, work.Capacity,
-                        (stage, bytes) => combinedMeasurements.Reserve(generation, stage, bytes));
+                        (stage, bytes) => combinedMeasurements.Reserve(generation, stage, bytes),
+                        work.NeedsPreviousFrame ? VideoPipelineStart.PreviousFrame : VideoPipelineStart.Beginning);
                 }
                 else if (IsStrictFrameAnalysisSelected && CurrentDocument is { } analysisDocument) {
                     ResetPipelineOutputMeasurements();

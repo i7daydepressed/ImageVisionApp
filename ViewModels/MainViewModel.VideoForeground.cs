@@ -43,7 +43,8 @@ public partial class MainViewModel {
             _ => null
         };
     public Bitmap? VideoForegroundPreview => !HasActiveVideoSequenceEffect && IsVideoOpen
-        ? VideoForegroundInputPreview : videoForegroundOutput ?? (ShowsVideoMovingBlur ? PreparedVideoForegroundInput : null);
+        ? VideoForegroundInputPreview : videoForegroundOutput ??
+            (VideoForegroundRasterView is not null ? PreparedVideoForegroundInput : null);
 
     // вход строгого кадра принадлежит общему плееру и уже совпадает с физическим номером эффекта
     private WriteableBitmap? PreparedVideoForegroundInput => videoForegroundUsesPreparedInput && IsCombinedStrictOutputSelected &&
@@ -66,20 +67,15 @@ public partial class MainViewModel {
         get => videoForegroundEnabled;
         set {
             bool wasActive = HasActiveVideoSequenceEffect;
-            bool wasMovingBlur = ShowsVideoMovingBlur;
+            int? previousRasterView = VideoForegroundRasterView;
             if (!SetProperty(ref videoForegroundEnabled, value)) {
                 return;
             }
             if (!value && VideoForegroundViewIndex < ReplacedBackgroundView) {
-                if (CanUseVideoBackgroundReplacement) {
-                    SelectVideoForegroundView(ReplacedBackgroundView);
-                }
-                else if (CanUseVideoMovingBlur) {
-                    SelectVideoForegroundView(MovingBlurView);
-                }
+                SelectVideoForegroundView(FallbackVideoForegroundView());
             }
             NotifyVideoSequenceEffectAvailability();
-            RefreshSelectedVideoForegroundView(wasActive, wasMovingBlur != ShowsVideoMovingBlur);
+            RefreshSelectedVideoForegroundView(wasActive, previousRasterView != VideoForegroundRasterView);
         }
     }
 
@@ -120,9 +116,9 @@ public partial class MainViewModel {
                 return;
             }
 
-            bool wasMovingBlur = ShowsVideoMovingBlur;
+            int? previousRasterView = VideoForegroundRasterView;
             SelectVideoForegroundView(value);
-            RefreshSelectedVideoForegroundView(HasActiveVideoSequenceEffect, wasMovingBlur != ShowsVideoMovingBlur);
+            RefreshSelectedVideoForegroundView(HasActiveVideoSequenceEffect, previousRasterView != VideoForegroundRasterView);
         }
     }
 
@@ -130,8 +126,15 @@ public partial class MainViewModel {
         0 or 1 => VideoForegroundEnabled,
         ReplacedBackgroundView => CanUseVideoBackgroundReplacement,
         MovingBlurView => CanUseVideoMovingBlur,
+        OpticalFlowView => CanUseVideoOpticalFlow,
         _ => false
     };
+
+    // после отключения метода оставляем один из доступных результатов
+    private int FallbackVideoForegroundView() => CanUseVideoBackgroundReplacement ? ReplacedBackgroundView :
+        VideoForegroundEnabled ? previousSubtractionView :
+        CanUseVideoMovingBlur ? MovingBlurView :
+        CanUseVideoOpticalFlow ? OpticalFlowView : previousSubtractionView;
 
     // запоминаем последний вид вычитания для возврата после отключения замены
     private void SelectVideoForegroundView(int value) {
@@ -310,7 +313,7 @@ public partial class MainViewModel {
                 return;
             }
             CombinedVideoWork plan = CaptureCombinedVideoWork(document, source);
-            session = new VideoForegroundSession(source, stop.Token, plan.Create);
+            session = new VideoForegroundSession(source, stop.Token, plan.Create, plan.NeedsPreviousFrame);
             while (IsCurrentVideoForegroundWork()) {
                 if (!TryGetVideoForegroundRequest(out VideoFrameReadRequest request) ||
                     videoForegroundFrame?.Covers(request) == true) {
@@ -320,7 +323,7 @@ public partial class MainViewModel {
 
                 VideoPipelineOutput output = await Task.Run(() => session.ReadPipelineAsync(request), stop.Token);
                 VideoForegroundFrame frame = output.Foreground ??
-                    throw new InvalidOperationException("Видеоряд не вернул кадр переднего плана");
+                    throw new InvalidOperationException("Видеоряд не вернул кадр результата");
                 if (!IsCurrentVideoForegroundWork() || !TryGetVideoForegroundRequest(out VideoFrameReadRequest latest)) {
                     continue;
                 }
@@ -339,7 +342,7 @@ public partial class MainViewModel {
         catch (Exception error) when (IsCurrentVideoForegroundWork()) {
             videoForegroundFailed = true;
             ClearVideoForeground();
-            SetVideoForegroundStatus($"Не удалось выделить передний план. {error.Message}");
+            SetVideoForegroundStatus($"Не удалось обработать видеоряд. {error.Message}");
             combinedVideoAnalysisNotice = error.Message;
             if (IsCombinedAnalysisOutputSelected) {
                 RefreshVideoAnalysisStatus();
@@ -422,9 +425,10 @@ public partial class MainViewModel {
     private void PublishVideoForeground(VideoForegroundFrame frame, bool usePreparedInput) {
         WriteableBitmap? oldOriginal = videoForegroundOriginal;
         WriteableBitmap? oldOutput = videoForegroundOutput;
-        bool isUnchangedBlur = ShowsVideoMovingBlur && frame.MotionBlur is { BufferBytes: 0 };
+        bool isUnchangedRaster = ShowsVideoMovingBlur && frame.MotionBlur is { BufferBytes: 0 } ||
+            ShowsVideoOpticalFlow && frame.OpticalFlow is { BufferBytes: 0 };
         WriteableBitmap? original = usePreparedInput ? null : GetPreparedBitmap(oldOriginal, frame.Size);
-        WriteableBitmap? output = usePreparedInput && isUnchangedBlur ? null : GetPreparedBitmap(oldOutput, frame.Size);
+        WriteableBitmap? output = usePreparedInput && isUnchangedRaster ? null : GetPreparedBitmap(oldOutput, frame.Size);
         try {
             if (original is not null) {
                 PaintVideoForeground(original, frame, result: false, maskOnly: false);
@@ -466,6 +470,13 @@ public partial class MainViewModel {
     private void DescribeVideoForegroundFrame(VideoForegroundFrame frame) {
         TimeSpan time = TimeSpan.FromMilliseconds(Math.Max(0, frame.Time.Milliseconds));
         string stamp = time.ToString(time.TotalHours >= 1 ? @"hh\:mm\:ss\.fff" : @"mm\:ss\.fff");
+        if (ShowsVideoOpticalFlow && frame.OpticalFlow is { } flow) {
+            string notice = !flow.HasPair ? "Нет предыдущего кадра" :
+                flow.ArrowCount == 0 ? "Оптический поток · заметных смещений нет" : "Оптический поток";
+            SetVideoForegroundStatus($"{stamp} · {notice}");
+            return;
+        }
+
         SetVideoForegroundStatus(ShowsVideoMovingBlur
             ? $"{stamp} · Размытие движущихся областей, радиус {frame.MotionBlur?.Radius ?? VideoMovingBlurRadius} пикс."
             : ShowsReplacedVideoBackground ? $"{stamp} · Заменённый фон"
@@ -481,7 +492,8 @@ public partial class MainViewModel {
     private static void PaintVideoForeground(WriteableBitmap bitmap, VideoForegroundFrame frame, bool result, bool maskOnly,
         VideoBackgroundRaster? background = null, bool motionBlur = false) {
         using ILockedFramebuffer target = bitmap.Lock();
-        if (motionBlur && frame.MotionBlur?.TryCopyTo(target) == true) {
+        if (result && frame.OpticalFlow?.TryCopyTo(target) == true ||
+            motionBlur && frame.MotionBlur?.TryCopyTo(target) == true) {
             return;
         }
 

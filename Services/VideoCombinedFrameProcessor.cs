@@ -19,7 +19,8 @@ internal sealed record VideoPipelineOutput(VideoForegroundFrame? Foreground, Vid
 }
 
 internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcessor {
-    private readonly VideoForegroundModel model;
+    private readonly VideoForegroundModel? model;
+    private readonly VideoOpticalFlowModel? opticalFlow;
     private readonly VideoForegroundInputPlan? upstream;
     private readonly VideoSequenceAnalysisPlan? downstream;
     private readonly VideoEditorPlan? editor;
@@ -39,7 +40,7 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
     public VideoCombinedFrameProcessor(PixelSize size, VideoForegroundInputPlan? upstream = null,
         VideoSequenceAnalysisPlan? downstream = null, VideoEditorPlan? editor = null, bool maskOnly = false,
         VideoPipelineMeasurements? measurements = null, long generation = 0, long readerBytes = 0,
-        VideoBackgroundRaster? background = null, int? motionBlurRadius = null) {
+        VideoBackgroundRaster? background = null, int? motionBlurRadius = null, bool useOpticalFlow = false) {
         this.upstream = upstream;
         this.downstream = downstream;
         this.editor = editor;
@@ -56,12 +57,19 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
         if (this.background is { } fitted && fitted.Size != modelSize) {
             throw new ArgumentException("Подготовленный фон не совпадает с размером видеоряда", nameof(background));
         }
-        long persistent = VideoForegroundModel.GetPersistentBytes(modelSize);
-        foregroundBytes = VideoForegroundModel.GetRequiredBufferBytes(modelSize, 0) - persistent;
+        long persistent = useOpticalFlow ? VideoOpticalFlowModel.GetPersistentBytes(modelSize) :
+            VideoForegroundModel.GetPersistentBytes(modelSize);
+        foregroundBytes = (useOpticalFlow ? VideoOpticalFlowModel.GetRequiredBufferBytes(modelSize, 0) :
+            VideoForegroundModel.GetRequiredBufferBytes(modelSize, 0)) - persistent;
         motionBlurBytes = this.motionBlurRadius is { } radius
             ? checked(VideoMotionBlurRaster.GetScratchBytes(modelSize, radius) + VideoMotionBlurRaster.GetBufferBytes(modelSize))
             : 0;
-        model = new(modelSize);
+        if (useOpticalFlow) {
+            opticalFlow = new(modelSize);
+        }
+        else {
+            model = new(modelSize);
+        }
         originalReserve = measurements?.Reserve(generation, VideoPipelineStage.Original, readerBytes);
         modelReserve = measurements?.Reserve(generation, VideoPipelineStage.VideoSequence,
             checked(persistent + (this.background?.BufferBytes ?? 0)));
@@ -78,7 +86,8 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
         VideoForegroundFrame? foreground;
         long workingBytes = checked(foregroundBytes + (publish ? motionBlurBytes : 0));
         using (var stage = measurements?.BeginStage(generation, VideoPipelineStage.VideoSequence, workingBytes)) {
-            foreground = model.Process(input, pixels, publish, token);
+            foreground = opticalFlow is { } flow ? flow.Process(input, pixels, publish, token) :
+                model!.Process(input, pixels, publish, token);
             if (foreground is not null && motionBlurRadius is { } radius) {
                 foreground = foreground with { MotionBlur = VideoMotionBlurRaster.Create(foreground, radius, token) };
             }
@@ -145,7 +154,8 @@ internal sealed class VideoCombinedFrameProcessor : IVideoStrictPipelineProcesso
 
     // освобождаем модель и принадлежащие одному поколению рабочие резервы
     public ValueTask DisposeAsync() {
-        model.Dispose();
+        opticalFlow?.Dispose();
+        model?.Dispose();
         modelReserve?.Dispose();
         originalReserve?.Dispose();
         return ValueTask.CompletedTask;

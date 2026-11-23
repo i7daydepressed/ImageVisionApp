@@ -23,7 +23,7 @@ public partial class MainViewModel {
             }
 
             bool wasActive = HasActiveVideoSequenceEffect;
-            bool wasMovingBlur = ShowsVideoMovingBlur;
+            int? previousRasterView = VideoForegroundRasterView;
             videoMovingBlurEnabled = value;
             if (value) {
                 previousMovingBlurView = VideoForegroundViewIndex;
@@ -32,11 +32,11 @@ public partial class MainViewModel {
             else if (VideoForegroundViewIndex == MovingBlurView) {
                 SelectVideoForegroundView(
                     CanSelectVideoForegroundView(previousMovingBlurView) ? previousMovingBlurView :
-                    CanUseVideoBackgroundReplacement ? ReplacedBackgroundView : previousSubtractionView);
+                    FallbackVideoForegroundView());
             }
             OnPropertyChanged(nameof(VideoMovingBlurEnabled));
             NotifyVideoSequenceEffectAvailability();
-            RefreshSelectedVideoForegroundView(wasActive, wasMovingBlur != ShowsVideoMovingBlur);
+            RefreshSelectedVideoForegroundView(wasActive, previousRasterView != VideoForegroundRasterView);
         }
     }
 

@@ -21,6 +21,7 @@ namespace ImageVisionApp.Views;
 
 public partial class MainWindow {
     private const string MovingBlurTitle = "Размытие движущихся областей";
+    private const string OpticalFlowTitle = "Оптический поток";
     private readonly TabStrip videoForegroundTabs = new() { HorizontalAlignment = HorizontalAlignment.Left };
     private readonly TabStripItem videoForegroundResultTab = new() { Content = "Результат", IsEnabled = false };
     private readonly ListBox videoForegroundViews = new();
@@ -41,6 +42,9 @@ public partial class MainWindow {
         Minimum = 1, Maximum = 12, TickFrequency = 1, IsSnapToTickEnabled = true,
         SmallChange = 1, LargeChange = 1, HorizontalAlignment = HorizontalAlignment.Stretch
     };
+    private readonly CheckBox videoOpticalFlowMethod = new() { Content = OpticalFlowTitle };
+    private readonly Button videoOpticalFlowSettings = new() { Content = "Параметры", VerticalAlignment = VerticalAlignment.Center };
+    private readonly ComboBox videoOpticalFlowSourcePicker = CreateVideoForegroundSourcePicker("Источник оптического потока");
     private readonly Button videoForegroundApply = new() { Content = "Применить", HorizontalAlignment = HorizontalAlignment.Stretch };
     private Button? videoForegroundDisplayButton;
     private int videoForegroundLastVideoTab = 1;
@@ -65,6 +69,13 @@ public partial class MainWindow {
             nameof(MainViewModel.VideoBackgroundReplacementEnabled));
         Grid blurRow = CreateVideoForegroundMethodRow(videoMovingBlurMethod, videoMovingBlurSettings,
             nameof(MainViewModel.VideoMovingBlurEnabled));
+        Grid opticalFlowRow = CreateVideoForegroundMethodRow(videoOpticalFlowMethod, videoOpticalFlowSettings,
+            nameof(MainViewModel.VideoOpticalFlowEnabled));
+        videoOpticalFlowMethod.Click += (_, _) => {
+            if (DataContext is MainViewModel { IsVideoOpen: true } vm) {
+                vm.VideoOpticalFlowEnabled = videoOpticalFlowMethod.IsChecked == true;
+            }
+        };
         AutomationProperties.SetName(videoMovingBlurMethod, MovingBlurTitle);
         videoMovingBlurMethod.Click += (_, _) => {
             if (DataContext is MainViewModel { IsVideoOpen: true } vm) {
@@ -82,7 +93,7 @@ public partial class MainWindow {
         ScrollViewer methods = new() {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Content = new StackPanel { Spacing = 8, Children = { methodRow, replacementRow, blurRow, hint } }
+            Content = new StackPanel { Spacing = 8, Children = { methodRow, replacementRow, blurRow, opticalFlowRow, hint } }
         };
 
         StackPanel details = new() {
@@ -111,6 +122,15 @@ public partial class MainWindow {
         videoMovingBlurSettings.Click += (_, _) => {
             parametersTitle.Text = "Параметры размытия";
             parametersContent.Content = blurDetails;
+        };
+        StackPanel opticalFlowDetails = new() {
+            Spacing = 6,
+            Children = { new TextBlock { Text = "Алгоритм · Фарнебэк" },
+                new TextBlock { Text = "Источник" }, videoOpticalFlowSourcePicker }
+        };
+        videoOpticalFlowSettings.Click += (_, _) => {
+            parametersTitle.Text = "Параметры оптического потока";
+            parametersContent.Content = opticalFlowDetails;
         };
         videoReplacementMethod.Click += async (_, _) => {
             if (DataContext is not MainViewModel { IsVideoOpen: true } vm) {
@@ -160,7 +180,7 @@ public partial class MainWindow {
         return row;
     }
 
-    // все методы меняют один источник, по которому MOG2 строит маску
+    // методы используют один источник кадров видеоряда
     private static ComboBox CreateVideoForegroundSourcePicker(string label) {
         ComboBox picker = new() {
             ItemsSource = new[] { "Оригинал", "Результат редактирования", "Результат анализа" },
@@ -254,6 +274,7 @@ public partial class MainWindow {
         AddView("Маска", nameof(MainViewModel.VideoForegroundEnabled));
         AddView("Заменённый фон", nameof(MainViewModel.CanUseVideoBackgroundReplacement));
         AddView(MovingBlurTitle, nameof(MainViewModel.CanUseVideoMovingBlur));
+        AddView(OpticalFlowTitle, nameof(MainViewModel.CanUseVideoOpticalFlow));
         BindAnalysisPopup(videoForegroundViews, SelectingItemsControl.SelectedIndexProperty,
             nameof(MainViewModel.VideoForegroundViewIndex), BindingMode.TwoWay);
         BindAnalysisPopup(videoForegroundViews, IsEnabledProperty, nameof(MainViewModel.CanDisplayVideoForegroundEffect));

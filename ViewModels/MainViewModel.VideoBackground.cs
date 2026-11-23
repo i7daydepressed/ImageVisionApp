@@ -27,7 +27,7 @@ public partial class MainViewModel {
     }
 
     public bool CanUseVideoBackgroundReplacement => IsVideoOpen && VideoBackgroundReplacementEnabled && HasVideoBackgroundImage;
-    private bool HasActiveVideoSequenceEffect => VideoForegroundEnabled || CanUseVideoBackgroundReplacement || CanUseVideoMovingBlur;
+    private bool HasActiveVideoSequenceEffect => VideoForegroundEnabled || CanUseVideoBackgroundReplacement || CanUseVideoMovingBlur || CanUseVideoOpticalFlow;
     private bool ShowsReplacedVideoBackground => CanUseVideoBackgroundReplacement && VideoForegroundViewIndex == ReplacedBackgroundView;
 
     // отключение замены сохраняет выбранную картинку и возвращает предыдущий вид вычитания
@@ -39,16 +39,16 @@ public partial class MainViewModel {
             }
 
             bool wasActive = HasActiveVideoSequenceEffect;
-            bool wasMovingBlur = ShowsVideoMovingBlur;
+            int? previousRasterView = VideoForegroundRasterView;
             videoBackgroundReplacementEnabled = value;
             if (value) {
                 SelectVideoForegroundView(ReplacedBackgroundView);
             }
             else if (VideoForegroundViewIndex == ReplacedBackgroundView) {
-                SelectVideoForegroundView(!VideoForegroundEnabled && CanUseVideoMovingBlur ? MovingBlurView : previousSubtractionView);
+                SelectVideoForegroundView(VideoForegroundEnabled ? previousSubtractionView : FallbackVideoForegroundView());
             }
             NotifyVideoBackgroundState();
-            RefreshSelectedVideoForegroundView(wasActive, wasMovingBlur != ShowsVideoMovingBlur);
+            RefreshSelectedVideoForegroundView(wasActive, previousRasterView != VideoForegroundRasterView);
         }
     }
 
@@ -89,7 +89,7 @@ public partial class MainViewModel {
                 decoderBytes, PreviewSettings.ForegroundBudgetBytes);
 
             bool wasActive = HasActiveVideoSequenceEffect;
-            bool wasMovingBlur = ShowsVideoMovingBlur;
+            int? previousRasterView = VideoForegroundRasterView;
             videoBackgroundImage = loaded.Image;
             videoBackgroundRaster = loaded.Raster;
             videoBackgroundImageName = name;
@@ -97,7 +97,7 @@ public partial class MainViewModel {
             SelectVideoForegroundView(ReplacedBackgroundView);
             VideoBackgroundSelectionNotice = null;
             NotifyVideoBackgroundState();
-            RefreshSelectedVideoForegroundView(wasActive, wasMovingBlur != ShowsVideoMovingBlur);
+            RefreshSelectedVideoForegroundView(wasActive, previousRasterView != VideoForegroundRasterView);
         }
         catch (Exception failure) {
             if (IsCurrentSelection()) {
@@ -151,14 +151,15 @@ public partial class MainViewModel {
     private void NotifyVideoSequenceEffectAvailability() {
         OnPropertyChanged(nameof(CanUseVideoBackgroundReplacement));
         OnPropertyChanged(nameof(CanUseVideoMovingBlur));
+        OnPropertyChanged(nameof(CanUseVideoOpticalFlow));
         OnPropertyChanged(nameof(CanDisplayVideoForegroundEffect));
         OnPropertyChanged(nameof(CanApplyVideoForeground));
     }
 
     // при выборе вида на вкладке видеоряда повторно используем готовую маску
-    private void RefreshSelectedVideoForegroundView(bool wasActive, bool movingBlurChanged = false) {
+    private void RefreshSelectedVideoForegroundView(bool wasActive, bool rasterViewChanged = false) {
         if (wasActive != HasActiveVideoSequenceEffect || IsCombinedAnalysisOutputSelected || videoForegroundFailed ||
-            movingBlurChanged) {
+            rasterViewChanged) {
             RestartVideoForeground();
         }
         else if (videoForegroundFrame is { } frame && videoForegroundOutput is { } output) {

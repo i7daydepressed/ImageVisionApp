@@ -7,6 +7,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using ImageMagick;
 using ImageVisionApp.Models;
+using OpenCvSharp;
 
 namespace ImageVisionApp.Services;
 
@@ -113,6 +114,9 @@ internal sealed class VideoEditorFrame : IDisposable {
     // размер плотного BGRA-кадра известен до выделения массива
     public static long GetBufferBytes(PixelSize size) => (long)size.Width * size.Height * 4;
 
+    // закрепляем bgra без копии на время чтения пикселей в OpenCV
+    public Mat BorrowBgra() => Mat.FromPixelData(Size.Height, Size.Width, MatType.CV_8UC4, pixels, stride);
+
     // копируем исходные пиксели до того, как плеер перепишет свой bitmap
     public static VideoEditorFrame Capture(Bitmap source) {
         VideoEditorFrame frame = new(source.PixelSize);
@@ -202,8 +206,13 @@ internal sealed class VideoEditorFrame : IDisposable {
     // передаем анализу готовые пиксели того же вида видеоряда, который виден в интерфейсе
     public static VideoEditorFrame FromForeground(VideoForegroundFrame input, bool maskOnly, CancellationToken token,
         VideoBackgroundRaster? background = null, bool motionBlur = false) {
+        token.ThrowIfCancellationRequested();
         VideoEditorFrame frame = new(input.Size);
         try {
+            if (!maskOnly && input.OpticalFlow is { } opticalFlow && !opticalFlow.Bgra.IsEmpty) {
+                opticalFlow.Bgra.Span.CopyTo(frame.pixels);
+                return frame;
+            }
             int rowBytes = checked(input.Size.Width * 4);
             for (int y = 0; y < input.Size.Height; y++) {
                 token.ThrowIfCancellationRequested();

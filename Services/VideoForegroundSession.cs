@@ -11,7 +11,9 @@ internal sealed record VideoForegroundFrame(
     VideoPresentationTime Time, VideoPresentationTime? Until, long Ordinal, PixelSize Size,
     ReadOnlyMemory<byte> Rgb, ReadOnlyMemory<byte> Mask) {
     public VideoMotionBlurRaster? MotionBlur { get; init; }
-    public long BufferBytes => Rgb.Length + (long)Mask.Length + (MotionBlur?.BufferBytes ?? 0);
+    public VideoOpticalFlowRaster? OpticalFlow { get; init; }
+    public long BufferBytes => Rgb.Length + (long)Mask.Length + (MotionBlur?.BufferBytes ?? 0) +
+        (OpticalFlow?.BufferBytes ?? 0);
 
     // проверяем точный кадр или временной интервал даже при одинаковых метках
     public bool Covers(VideoFrameReadRequest request) => Covers(Time, Until, Ordinal, request);
@@ -36,6 +38,7 @@ internal sealed class VideoForegroundSession : IAsyncDisposable {
     private readonly IVideoMediaSource source;
     private readonly CancellationToken token;
     private readonly Func<IVideoStrictPipelineProcessor> factory;
+    private readonly bool needsPreviousFrame;
     private IAsyncEnumerator<TimedVideoInput>? frames;
     private IVideoStrictPipelineProcessor? processor;
     private VideoPipelineOutput? current;
@@ -46,10 +49,11 @@ internal sealed class VideoForegroundSession : IAsyncDisposable {
         : this(source, token, () => new VideoCombinedFrameProcessor(source.FrameSize)) { }
 
     public VideoForegroundSession(IVideoMediaSource source, CancellationToken token,
-        Func<IVideoStrictPipelineProcessor> factory) {
+        Func<IVideoStrictPipelineProcessor> factory, bool needsPreviousFrame = false) {
         this.source = source;
         this.token = token;
         this.factory = factory;
+        this.needsPreviousFrame = needsPreviousFrame;
     }
 
     // сохраняем прежнюю оценку для прохода по оригиналу
@@ -83,7 +87,7 @@ internal sealed class VideoForegroundSession : IAsyncDisposable {
                 }
             }
             if (frames is null) {
-                OpenFromStart();
+                OpenInput(request);
             }
             return await ProcessToAsync(request).ConfigureAwait(false);
         }
@@ -99,10 +103,12 @@ internal sealed class VideoForegroundSession : IAsyncDisposable {
         request.Anchor is { } anchor ? anchor.Ordinal < last.Ordinal :
         !request.AtEnd && last.Time.CompareTo(new VideoPresentationTime(request.PositionMilliseconds, 1000)) > 0;
 
-    // привязка к нулевому номеру включает самый ранний кадр даже при нескольких нулевых pts
-    private void OpenFromStart() {
+    // модель фона зависит от начала потока, оптический поток — только от предыдущего кадра
+    private void OpenInput(VideoFrameReadRequest request) {
         token.ThrowIfCancellationRequested();
-        VideoFrameReadRequest start = new(0) { Anchor = new VideoFrameCursor(new(0, 1), 0, false) };
+        VideoFrameReadRequest start = needsPreviousFrame
+            ? request with { FrameOffset = -1, SingleFrame = false }
+            : new(0) { Anchor = new VideoFrameCursor(new(0, 1), 0, false) };
         frames = source.ReadFramesAsync(start, token).GetAsyncEnumerator(token);
         processor = factory();
     }
@@ -110,19 +116,24 @@ internal sealed class VideoForegroundSession : IAsyncDisposable {
     // передаем процессору каждый физический кадр, а для публикации сохраняем только нужный
     private async Task<VideoPipelineOutput> ProcessToAsync(VideoFrameReadRequest request) {
         IAsyncEnumerator<TimedVideoInput> inputFrames = frames!;
-        long expectedOrdinal = current?.Foreground is { } last ? last.Ordinal + 1 : 0;
+        long? expectedOrdinal = current?.Foreground is { } last ? last.Ordinal + 1 : needsPreviousFrame ? null : 0;
         VideoPresentationTime expectedTime = current?.Foreground?.Until ?? new(0, 1);
         while (await inputFrames.MoveNextAsync().ConfigureAwait(false)) {
             TimedVideoInput input = inputFrames.Current;
             using VideoEditorFrame pixels = input.Pixels;
             token.ThrowIfCancellationRequested();
-            if (input.Ordinal != expectedOrdinal || !input.Time.IsKnown || input.Time.CompareTo(expectedTime) != 0 ||
+            if (expectedOrdinal is { } next && (input.Ordinal != next || input.Time.CompareTo(expectedTime) != 0) ||
+                !input.Time.IsKnown ||
                 pixels.Size != source.FrameSize ||
                 input.Until is { } boundary && (!boundary.IsKnown || boundary.CompareTo(input.Time) < 0)) {
                 throw new InvalidDataException("Нарушен порядок, время или размер кадров видеопотока");
             }
 
             bool publish = VideoForegroundFrame.Covers(input.Time, input.Until, input.Ordinal, request);
+            if (needsPreviousFrame && current is null &&
+                (expectedOrdinal is null ? publish && input.Ordinal != 0 : !publish)) {
+                throw new InvalidDataException("Не удалось подтвердить соседние кадры оптического потока");
+            }
             VideoPipelineOutput? output = await processor!.ProcessAsync(input, pixels, null, null, publish, token)
                 .ConfigureAwait(false);
             if (publish) {
@@ -142,7 +153,7 @@ internal sealed class VideoForegroundSession : IAsyncDisposable {
             if (input.IsLast || request.Anchor?.Ordinal == input.Ordinal) {
                 break;
             }
-            expectedOrdinal++;
+            expectedOrdinal = input.Ordinal + 1;
             expectedTime = input.Until!.Value;
         }
         throw new InvalidDataException("В видеопотоке нет кадра с запрошенной позицией");

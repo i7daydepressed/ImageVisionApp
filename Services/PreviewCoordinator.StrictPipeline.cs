@@ -8,10 +8,16 @@ using ImageVisionApp.Models;
 
 namespace ImageVisionApp.Services;
 
+internal enum VideoPipelineStart {
+    Beginning,
+    PreviousFrame,
+    Target
+}
+
 // расчет ограничивает запас по бюджетам всех дополнительных участков до запуска декодера
 internal sealed record StrictVideoPipeline(Func<IVideoStrictPipelineProcessor> Create, long PersistentBytes,
     long ScratchBytes, long SelectedFrameBytes, int Capacity,
-    Func<VideoPipelineStage, long, IDisposable>? ReserveFrame = null, bool RequiresHistory = true);
+    Func<VideoPipelineStage, long, IDisposable>? ReserveFrame = null, VideoPipelineStart Start = VideoPipelineStart.Beginning);
 
 internal interface IVideoStrictPipelineProcessor : IAsyncDisposable {
     // берем оба кадра взаймы, для предыстории обновляем состояние без выдачи готового результата
@@ -33,16 +39,18 @@ internal sealed partial class PreviewCoordinator {
         await ReserveAsync(request, request.ReaderBytes, limitWindow: false, token, waitForPrevious: true).ConfigureAwait(false);
         try {
             await using IVideoStrictPipelineProcessor processor = pipeline.Create();
-            // временной метод получает всю предысторию, обычный анализ сразу берет заданный кадр
-            VideoFrameReadRequest start = pipeline.RequiresHistory
-                ? new VideoFrameReadRequest(0) { Anchor = new(new(0, 1), 0, false) }
-                : request.Start;
+            // модель фона получает историю, а потоку достаточно непосредственного предшественника
+            VideoFrameReadRequest start = pipeline.Start switch {
+                VideoPipelineStart.Beginning => new VideoFrameReadRequest(0) { Anchor = new(new(0, 1), 0, false) },
+                VideoPipelineStart.PreviousFrame => request.Start with { FrameOffset = -1, SingleFrame = false },
+                _ => request.Start
+            };
             await using IAsyncEnumerator<TimedVideoInput> input =
                 request.Source.ReadFramesAsync(start, token).GetAsyncEnumerator(token);
             long inputBytes = VideoEditorFrame.GetBufferBytes(request.Size);
             long editorScratch = request.Plan.GetScratchBytes(request.Size);
             TimedVideoInput? previous = null;
-            bool reachedTarget = !pipeline.RequiresHistory;
+            bool reachedTarget = pipeline.Start == VideoPipelineStart.Target;
             while (true) {
                 await ReserveStrictSlotAsync(work, stage, frameBytes, token).ConfigureAwait(false);
                 long remaining = frameBytes;
@@ -57,13 +65,19 @@ internal sealed partial class PreviewCoordinator {
                     }
                     frame = input.Current;
                     token.ThrowIfCancellationRequested();
-                    if (!IsValidStrictInput(frame, request.Size, previous) ||
-                        previous is null && !MatchesPipelineStart(frame, start, pipeline.RequiresHistory)) {
+                    bool matchesTarget = VideoForegroundFrame.Covers(frame.Time, frame.Until, frame.Ordinal, request.Start);
+                    bool invalidStart = pipeline.Start switch {
+                        VideoPipelineStart.Beginning => previous is null && frame is not { Ordinal: 0, Time.Value: 0 },
+                        VideoPipelineStart.PreviousFrame when !reachedTarget =>
+                            previous is null ? matchesTarget && frame.Ordinal != 0 : !matchesTarget,
+                        VideoPipelineStart.Target => previous is null && !matchesTarget,
+                        _ => false
+                    };
+                    if (!IsValidStrictInput(frame, request.Size, previous) || invalidStart) {
                         throw new InvalidDataException("Не удалось подтвердить порядок или первый кадр строгой цепочки");
                     }
                     previous = frame;
-                    reachedTarget = reachedTarget ||
-                        VideoForegroundFrame.Covers(frame.Time, frame.Until, frame.Ordinal, request.Start);
+                    reachedTarget |= matchesTarget;
                     if (!reachedTarget && (frame.IsLast || request.Start.Anchor?.Ordinal == frame.Ordinal)) {
                         throw new InvalidDataException("В предыстории не найден точный кадр для строгого показа");
                     }
@@ -171,30 +185,30 @@ internal sealed partial class PreviewCoordinator {
         }
     }
 
-    // проверяем физическое начало предыстории или точную первую позицию обычного анализа
-    private static bool MatchesPipelineStart(TimedVideoInput frame, VideoFrameReadRequest start, bool requiresHistory) =>
-        requiresHistory ? frame is { Ordinal: 0, Time.Value: 0 } :
-            VideoForegroundFrame.Covers(frame.Time, frame.Until, frame.Ordinal, start);
-
     // проверяем идентичность результата и считаем только пиксели, которые останутся в очереди
     private static long CheckPipelineOutput(VideoPipelineOutput? output, TimedVideoInput frame, StrictVideoPipeline pipeline) {
         if (output is null) {
             throw new InvalidDataException("Нет готового результата для показанного кадра");
         }
         long bytes = output.Analysis is { } analysis ? VideoEditorFrame.GetBufferBytes(analysis.Size) : 0;
-        if (pipeline.RequiresHistory && output.Foreground is { } foreground &&
+        if (pipeline.Start != VideoPipelineStart.Target && output.Foreground is { } foreground &&
             foreground.Ordinal == frame.Ordinal && foreground.Time == frame.Time && foreground.Until == frame.Until) {
             long pixels = (long)foreground.Size.Width * foreground.Size.Height;
-            if (pixels <= 0 || foreground.Rgb.Length != checked(pixels * 3) || foreground.Mask.Length != pixels) {
+            if (pixels <= 0 || foreground.Rgb.Length != checked(pixels * 3) ||
+                foreground.Mask.Length != (foreground.OpticalFlow is null ? pixels : 0)) {
                 throw new InvalidDataException("Получен неполный результат видеоряда");
             }
             if (foreground.MotionBlur is { } blur &&
                 (blur.Size != foreground.Size || !blur.Bgra.IsEmpty && blur.Bgra.Length != checked(pixels * 4))) {
                 throw new InvalidDataException("Получен неполный результат размытия видеоряда");
             }
+            if (foreground.OpticalFlow is { } flow &&
+                (flow.Size != foreground.Size || flow.BufferBytes != 0 && flow.BufferBytes != checked(pixels * 4))) {
+                throw new InvalidDataException("Получен неполный результат оптического потока");
+            }
             bytes = checked(bytes + foreground.BufferBytes);
         }
-        else if (pipeline.RequiresHistory || output.Foreground is not null || output.Analysis is null ||
+        else if (pipeline.Start != VideoPipelineStart.Target || output.Foreground is not null || output.Analysis is null ||
             output.AnalysisFrame is not { } cursor || cursor.Ordinal != frame.Ordinal || cursor.Time != frame.Time ||
             cursor.AtEnd != frame.IsLast) {
             throw new InvalidDataException("Комбинированный результат относится к другому видеокадру");

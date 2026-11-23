@@ -80,6 +80,7 @@ public partial class MainViewModel {
             IsFrameAnalysisOutputSelected ? "Покадровый результат" :
             IsVideoForegroundOutputSelected ? VideoForegroundViewIndex switch {
                 MovingBlurView => "Размытие движущихся областей",
+                OpticalFlowView => "Оптический поток",
                 ReplacedBackgroundView => "Замена фона",
                 _ => "Вычитание фона"
             } :

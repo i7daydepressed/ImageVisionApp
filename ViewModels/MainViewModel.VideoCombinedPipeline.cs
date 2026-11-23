@@ -126,19 +126,23 @@ public partial class MainViewModel {
         var foregroundSize = upstream?.GetOutputSize(source.FrameSize) ?? source.FrameSize;
         long backgroundBytes = CanUseVideoBackgroundReplacement && videoBackgroundImage is { } image
             ? GetVideoBackgroundBytes(image, foregroundSize) : 0;
+        bool opticalFlow = ShowsVideoOpticalFlow;
         int? movingBlurRadius = ShowsVideoMovingBlur ? VideoMovingBlurRadius : null;
         long blurFrame = movingBlurRadius is not null ? VideoMotionBlurRaster.GetBufferBytes(foregroundSize) : 0;
         long blurScratch = movingBlurRadius is { } radius ? VideoMotionBlurRaster.GetScratchBytes(foregroundSize, radius) : 0;
-        long required = checked(VideoForegroundModel.GetRequiredBufferBytes(foregroundSize, source.ReadScratchBytes) +
-            backgroundBytes + blurFrame + blurScratch);
+        long required = opticalFlow ? VideoOpticalFlowModel.GetRequiredBufferBytes(foregroundSize, source.ReadScratchBytes) :
+            checked(VideoForegroundModel.GetRequiredBufferBytes(foregroundSize, source.ReadScratchBytes) +
+                backgroundBytes + blurFrame + blurScratch);
         if (required > resources.ForegroundBudgetBytes) {
             long needed = (long)Math.Ceiling(required / (1024d * 1024));
             throw new InvalidOperationException($"Недостаточно бюджета видеоряда. Нужно от {needed} МиБ, выбрано " +
                 $"{resources.ForegroundBudgetMiB} МиБ. Измените бюджет в настройках медиаконтейнера.");
         }
 
-        long persistent = checked(VideoForegroundModel.GetPersistentBytes(foregroundSize) + backgroundBytes);
-        long foregroundFrame = checked(VideoEditorFrame.GetBufferBytes(foregroundSize) + blurFrame);
+        long persistent = opticalFlow ? VideoOpticalFlowModel.GetPersistentBytes(foregroundSize) :
+            checked(VideoForegroundModel.GetPersistentBytes(foregroundSize) + backgroundBytes);
+        long foregroundFrame = opticalFlow ? VideoOpticalFlowModel.GetFrameBytes(foregroundSize) :
+            checked(VideoEditorFrame.GetBufferBytes(foregroundSize) + blurFrame);
         long analysisFrame = downstream is null ? 0 : VideoEditorFrame.GetBufferBytes(downstream.GetOutputSize(source.FrameSize));
         long analysisScratch = Math.Max(upstream?.GetResources(source.FrameSize).AnalysisBytes ?? 0,
             downstream?.GetResources(source.FrameSize).AnalysisBytes ?? 0);
@@ -155,12 +159,12 @@ public partial class MainViewModel {
         VideoBackgroundRaster? background = downstream is not null ? GetReplacementBackground(foregroundSize) : null;
         bool needsEditing = upstream?.NeedsEditing == true || downstream?.NeedsEditing == true;
         return new(() => new VideoCombinedFrameProcessor(source.FrameSize, upstream, downstream, editor, maskOnly,
-            combinedMeasurements, generation, source.ReadScratchBytes, background, movingBlurRadius),
-            persistent, scratch, retained, capacity, needsEditing);
+            combinedMeasurements, generation, source.ReadScratchBytes, background, movingBlurRadius, opticalFlow),
+            persistent, scratch, retained, capacity, needsEditing, opticalFlow);
     }
 
     private readonly record struct CombinedVideoWork(Func<IVideoStrictPipelineProcessor> Create, long PersistentBytes,
-        long ScratchBytes, long SelectedFrameBytes, int Capacity, bool NeedsEditing);
+        long ScratchBytes, long SelectedFrameBytes, int Capacity, bool NeedsEditing, bool NeedsPreviousFrame);
 
     // перезапрашиваем ту же позицию у существующего строгого координатора
     private void RestartStrictPipelineOutput() {

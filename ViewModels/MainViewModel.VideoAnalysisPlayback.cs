@@ -75,7 +75,7 @@ public partial class MainViewModel {
         long generation = combinedMeasurementGeneration;
         return new(() => new VideoAnalysisFrameProcessor(plan, size, combinedMeasurements, generation, source.ReadScratchBytes),
             PersistentBytes: 0, ScratchBytes: Math.Max(0, workBytes - outputBytes), SelectedFrameBytes: outputBytes, Capacity: capacity,
-            ReserveFrame: (stage, bytes) => combinedMeasurements.Reserve(generation, stage, bytes), RequiresHistory: false);
+            ReserveFrame: (stage, bytes) => combinedMeasurements.Reserve(generation, stage, bytes), Start: VideoPipelineStart.Target);
     }
 
     // во время обычного воспроизведения захватываем свежий кадр после освобождения рабочего буфера
