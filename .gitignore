@@ -61,4 +61,5 @@ artifacts/
 *.msi
 *.exe
 
-docs/
+/docs/*
+!/docs/v0.4.0/
