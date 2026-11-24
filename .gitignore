@@ -61,5 +61,8 @@ artifacts/
 *.msi
 *.exe
 
+# Локальная база лиц
+/face-data/
+
 /docs/*
 !/docs/v0.4.0/
