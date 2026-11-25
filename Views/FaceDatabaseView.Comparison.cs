@@ -1,104 +1,210 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
 using Avalonia;
 using Avalonia.Automation;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
-using Avalonia.Controls.Templates;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 
 namespace ImageVisionApp.Views;
 
 internal sealed partial class FaceDatabaseView {
+    private const int ComparisonCellWidth = 68;
+    private const int ComparisonCellHeight = 30;
     private static readonly CultureInfo ComparisonCulture = CultureInfo.GetCultureInfo("ru-RU");
-    private readonly ComboBox comparisonAnchor = new() { MinWidth = 130 };
-    private readonly ListBox comparisonRows = new() { Background = Brushes.Transparent };
+    private static readonly IBrush ComparisonLine = new SolidColorBrush(Colors.Gray, 0.55);
+    private static readonly IBrush ComparisonHeader = new SolidColorBrush(Colors.Gray, 0.18);
+    private readonly Grid comparisonCells = new() {
+        HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top
+    };
+    private readonly Border comparisonViewport = new() {
+        Background = Brushes.Transparent, ClipToBounds = true, Focusable = true, IsTabStop = true
+    };
+    private readonly ScrollBar comparisonHorizontal = new() {
+        Orientation = Orientation.Horizontal, SmallChange = 1, AllowAutoHide = false, IsTabStop = false
+    };
+    private readonly ScrollBar comparisonVertical = new() {
+        Orientation = Orientation.Vertical, SmallChange = 1, AllowAutoHide = false, IsTabStop = false
+    };
+    private readonly Grid comparisonTable = new() {
+        RowDefinitions = new RowDefinitions("*,16"), ColumnDefinitions = new ColumnDefinitions("*,16"),
+        IsVisible = false
+    };
     private readonly TextBlock comparisonHint = new() {
-        Text = "Чем выше косинусное сходство, тем ближе признаки, извлеченные из фото",
+        Text = "Чем выше косинусное сходство, тем ближе признаки, извлеченные из фото. " +
+            "Знак «—» на диагонали обозначает один и тот же образец.",
         TextWrapping = TextWrapping.Wrap,
-        VerticalAlignment = VerticalAlignment.Center
+        IsVisible = false
     };
     private readonly TextBlock comparisonEmpty = new() {
         Text = "Добавь еще один снимок, чтобы сравнить образцы",
-        TextWrapping = TextWrapping.Wrap
+        TextWrapping = TextWrapping.Wrap,
+        IsVisible = false
     };
+    private bool updatingComparisonAxes;
 
-    // оставляем выбор образца сверху, прокручиваем только результаты внутри карточки
+    // размещаем матрицу в ограниченной области и отдаем полосам прокрутки отдельные края
     private Grid CreateComparisonArea() {
-        AutomationProperties.SetName(comparisonAnchor, "Сравнить с");
-        AutomationProperties.SetName(comparisonRows, "Результаты сравнения образцов");
-        ScrollViewer.SetHorizontalScrollBarVisibility(comparisonRows, ScrollBarVisibility.Disabled);
-        // при смене результатов контейнер временно получает пустые данные
-        comparisonRows.ItemTemplate = new FuncDataTemplate<ComparisonRow>(
-            (row, _) => row is null ? null : CreateComparisonRow(row), supportsRecycling: false);
-        comparisonRows.ContainerPrepared += (_, args) => {
-            if (args.Container is ListBoxItem { Content: ComparisonRow row } item) {
-                item.Padding = new Thickness(8, 6);
-                item.HorizontalContentAlignment = HorizontalAlignment.Stretch;
-                AutomationProperties.SetName(item, row.AccessibleName);
-            }
-        };
-        Grid anchorRow = new() { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"), ColumnSpacing = 10, Children = {
-            new TextBlock { Text = "Сравнить с", VerticalAlignment = VerticalAlignment.Center }
-        }};
-        Grid.SetColumn(comparisonAnchor, 1);
-        anchorRow.Children.Add(comparisonAnchor);
-        Grid.SetColumn(comparisonHint, 2);
-        anchorRow.Children.Add(comparisonHint);
-        Grid area = new() { RowDefinitions = new RowDefinitions("Auto,*"), RowSpacing = 10,
-            Children = { anchorRow } };
+        AutomationProperties.SetName(comparisonViewport, "Таблица косинусного сходства образцов");
+        AutomationProperties.SetHelpText(comparisonViewport, "Стрелки прокручивают строки и столбцы");
+        AutomationProperties.SetName(comparisonHorizontal, "Прокрутка столбцов");
+        AutomationProperties.SetName(comparisonVertical, "Прокрутка строк");
+        comparisonViewport.Child = comparisonCells;
+        comparisonViewport.SizeChanged += (_, _) => UpdateComparisonAxes();
+        comparisonViewport.KeyDown += ComparisonKeyDown;
+        comparisonViewport.PointerPressed += (_, _) => comparisonViewport.Focus(NavigationMethod.Pointer);
+        comparisonViewport.PointerWheelChanged += ComparisonWheel;
+        comparisonHorizontal.ValueChanged += (_, _) => DrawComparison();
+        comparisonVertical.ValueChanged += (_, _) => DrawComparison();
+
+        comparisonTable.Children.Add(comparisonViewport);
+        Grid.SetRow(comparisonHorizontal, 1);
+        comparisonTable.Children.Add(comparisonHorizontal);
+        Grid.SetColumn(comparisonVertical, 1);
+        comparisonTable.Children.Add(comparisonVertical);
+        Grid area = new() { RowDefinitions = new RowDefinitions("Auto,*"), RowSpacing = 8,
+            Children = { comparisonHint } };
         Grid.SetRow(comparisonEmpty, 1);
         area.Children.Add(comparisonEmpty);
-        Grid.SetRow(comparisonRows, 1);
-        area.Children.Add(comparisonRows);
+        Grid.SetRow(comparisonTable, 1);
+        area.Children.Add(comparisonTable);
         return area;
     }
 
-    // ранжируем образцы текущего профиля по полному косинусу, сохраняя порядок добавления при равенстве
+    // при смене профиля или вкладки начинаем таблицу с первой пары
     private void ShowComparison() {
-        int anchor = comparisonAnchor.SelectedIndex;
-        if (sampleProfile is not { } profile || (uint)anchor >= (uint)profile.Samples.Count ||
-            savedSampleControls?.SelectedIndex != 1) {
-            comparisonRows.ItemsSource = null;
-            comparisonRows.IsVisible = false;
-            comparisonEmpty.IsVisible = false;
-            comparisonHint.IsVisible = false;
+        int count = savedSampleControls?.SelectedIndex == 1 ? sampleProfile?.Samples.Count ?? 0 : 0;
+        comparisonEmpty.IsVisible = count == 1;
+        comparisonTable.IsVisible = comparisonHint.IsVisible = count > 1;
+        UpdateComparisonAxes(reset: true);
+    }
+
+    // по размеру области определяем число ячеек и пределы обеих полос
+    private void UpdateComparisonAxes(bool reset = false) {
+        if (!comparisonTable.IsVisible || sampleProfile is not { } profile) {
+            comparisonCells.Children.Clear();
             return;
         }
 
-        comparisonEmpty.IsVisible = profile.Samples.Count == 1;
-        comparisonRows.IsVisible = comparisonHint.IsVisible = comparisonAnchor.IsEnabled = profile.Samples.Count > 1;
-        IReadOnlyList<float> reference = profile.Samples[anchor];
-        ComparisonRow[] ranked = Enumerable.Range(0, profile.Samples.Count)
-            .Where(index => index != anchor)
-            .Select(index => (Index: index, Score: SampleCosine(reference, profile.Samples[index])))
-            .OrderByDescending(pair => pair.Score)
-            .ThenBy(pair => pair.Index)
-            .Select((pair, order) => new ComparisonRow(pair.Index + 1, order == 0 ? anchor + 1 : null, pair.Score))
-            .ToArray();
-        comparisonRows.ItemsSource = ranked;
-        if (ranked.Length > 0) {
-            comparisonRows.ScrollIntoView(0);
+        int count = profile.Samples.Count;
+        Size size = comparisonViewport.Bounds.Size;
+        int columns = Math.Clamp((int)(size.Width / ComparisonCellWidth) - 1, 1, count);
+        int rows = Math.Clamp((int)(size.Height / ComparisonCellHeight) - 1, 1, count);
+        updatingComparisonAxes = true;
+        SetComparisonAxis(comparisonHorizontal, columns, count, reset);
+        SetComparisonAxis(comparisonVertical, rows, count, reset);
+        updatingComparisonAxes = false;
+        DrawComparison();
+    }
+
+    // единица каждой полосы соответствует одному заголовку образца
+    private static void SetComparisonAxis(ScrollBar axis, int visible, int count, bool reset) {
+        axis.Maximum = count - visible;
+        axis.ViewportSize = visible;
+        axis.LargeChange = visible;
+        axis.IsVisible = visible < count;
+        if (reset) {
+            axis.Value = 0;
         }
     }
 
-    // выводим номер и округленное значение в одной строке, дополнение есть только у первой пары
-    private static Grid CreateComparisonRow(ComparisonRow row) {
-        StackPanel sample = new() { Spacing = 2, Children = {
-            new TextBlock { Text = row.Label, FontWeight = FontWeight.SemiBold }
-        }};
-        if (row.NearestHint is { } nearest) {
-            sample.Children.Add(new TextBlock { Text = nearest });
+    // пересчитываем только пересечения видимых строк и столбцов
+    private void DrawComparison() {
+        if (updatingComparisonAxes || !comparisonTable.IsVisible || sampleProfile is not { } profile) {
+            return;
         }
-        Grid content = new() { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 10,
-            Children = { sample } };
-        TextBlock score = new() { Text = row.ScoreText, VerticalAlignment = VerticalAlignment.Center };
-        Grid.SetColumn(score, 1);
-        content.Children.Add(score);
-        return content;
+
+        int firstRow = (int)Math.Round(comparisonVertical.Value, MidpointRounding.AwayFromZero);
+        int firstColumn = (int)Math.Round(comparisonHorizontal.Value, MidpointRounding.AwayFromZero);
+        int rows = (int)comparisonVertical.ViewportSize;
+        int columns = (int)comparisonHorizontal.ViewportSize;
+        comparisonCells.Children.Clear();
+        comparisonCells.RowDefinitions.Clear();
+        comparisonCells.ColumnDefinitions.Clear();
+        for (int column = 0; column <= columns; column++) {
+            comparisonCells.ColumnDefinitions.Add(new ColumnDefinition(ComparisonCellWidth, GridUnitType.Pixel));
+        }
+        for (int row = 0; row <= rows; row++) {
+            comparisonCells.RowDefinitions.Add(new RowDefinition(ComparisonCellHeight, GridUnitType.Pixel));
+            for (int column = 0; column <= columns; column++) {
+                int sourceRow = firstRow + row - 1;
+                int sourceColumn = firstColumn + column - 1;
+                Border cell = CreateComparisonCell(profile.Samples, row, column, sourceRow, sourceColumn);
+                Grid.SetRow(cell, row);
+                Grid.SetColumn(cell, column);
+                comparisonCells.Children.Add(cell);
+            }
+        }
+    }
+
+    // подписываем координаты пары, а на пересечении одинаковых номеров ставим прочерк
+    private static Border CreateComparisonCell(IReadOnlyList<IReadOnlyList<float>> samples,
+        int row, int column, int sourceRow, int sourceColumn) {
+        int rowNumber = sourceRow + 1;
+        int columnNumber = sourceColumn + 1;
+        bool header = row == 0 || column == 0;
+        string text;
+        string description;
+        if (row == 0 && column == 0) {
+            text = "№";
+            description = "Номера образцов";
+        }
+        else if (row == 0) {
+            text = columnNumber.ToString(CultureInfo.InvariantCulture);
+            description = $"Столбец, образец №{columnNumber}";
+        }
+        else if (column == 0) {
+            text = rowNumber.ToString(CultureInfo.InvariantCulture);
+            description = $"Строка, образец №{rowNumber}";
+        }
+        else if (sourceRow == sourceColumn) {
+            text = "—";
+            description = $"Один и тот же образец №{rowNumber}";
+        }
+        else {
+            text = SampleCosine(samples[sourceRow], samples[sourceColumn]).ToString("F2", ComparisonCulture);
+            if (text == ComparisonCulture.NumberFormat.NegativeSign + "0,00") {
+                text = "0,00";
+            }
+            description = $"Строка №{rowNumber}, столбец №{columnNumber}, косинусное сходство {text}";
+        }
+        ComparisonCellLabel label = new() { Text = text, HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center, FontWeight = header ? FontWeight.SemiBold : FontWeight.Normal };
+        AutomationProperties.SetName(label, description);
+        return new Border { BorderBrush = ComparisonLine,
+            BorderThickness = new Thickness(column == 0 ? 1 : 0, row == 0 ? 1 : 0, 1, 1),
+            Background = header ? ComparisonHeader : null, Child = label };
+    }
+
+    // поддерживаем обе оси трекпада и горизонтальную прокрутку колесом с Shift
+    private void ComparisonWheel(object? sender, PointerWheelEventArgs args) {
+        int horizontal = Math.Sign(args.Delta.X);
+        int vertical = Math.Sign(args.Delta.Y);
+        if (args.KeyModifiers.HasFlag(KeyModifiers.Shift)) {
+            horizontal = horizontal == 0 ? vertical : horizontal;
+            vertical = 0;
+        }
+        comparisonHorizontal.Value -= horizontal;
+        comparisonVertical.Value -= vertical;
+        args.Handled = true;
+    }
+
+    // стрелки двигают матрицу по одному образцу, PageUp и PageDown по видимой высоте
+    private void ComparisonKeyDown(object? sender, KeyEventArgs args) {
+        switch (args.Key) {
+            case Key.Left: comparisonHorizontal.Value--; break;
+            case Key.Right: comparisonHorizontal.Value++; break;
+            case Key.Up: comparisonVertical.Value--; break;
+            case Key.Down: comparisonVertical.Value++; break;
+            case Key.PageUp: comparisonVertical.Value -= comparisonVertical.LargeChange; break;
+            case Key.PageDown: comparisonVertical.Value += comparisonVertical.LargeChange; break;
+            default: return;
+        }
+        args.Handled = true;
     }
 
     // учитываем реальные длины обоих сохраненных векторов и считаем суммы в double
@@ -113,15 +219,18 @@ internal sealed partial class FaceDatabaseView {
             firstSquared += left * left;
             secondSquared += right * right;
         }
-        return dot / (Math.Sqrt(firstSquared) * Math.Sqrt(secondSquared));
+        return Math.Clamp(dot / (Math.Sqrt(firstSquared) * Math.Sqrt(secondSquared)), -1, 1);
     }
 
-    private sealed record ComparisonRow(int Number, int? NearestTo, double Score) {
-        public string Label => $"Образец №{Number}";
-        public string? NearestHint => NearestTo is int anchor ? $"Ближе всего к №{anchor}" : null;
-        public string ScoreText => $"Косинусное сходство {Score.ToString("F2", ComparisonCulture)}";
-        public string AccessibleName => NearestHint is { } hint
-            ? $"{Label}, {hint}, {ScoreText}"
-            : $"{Label}, {ScoreText}";
+    private sealed class ComparisonCellLabel : TextBlock {
+        protected override Type StyleKeyOverride => typeof(TextBlock);
+
+        // сохраняем роль текста и передаем скринридеру номер пары вместе со значением
+        protected override AutomationPeer OnCreateAutomationPeer() => new ComparisonCellPeer(this);
+    }
+
+    private sealed class ComparisonCellPeer(TextBlock owner) : TextBlockAutomationPeer(owner) {
+        // стандартный текстовый элемент читает только выводимое в ячейке число
+        protected override string? GetNameCore() => AutomationProperties.GetName(Owner) ?? base.GetNameCore();
     }
 }

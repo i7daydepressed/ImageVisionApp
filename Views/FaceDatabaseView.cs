@@ -95,8 +95,11 @@ internal sealed partial class FaceDatabaseView : UserControl {
                 ShowSelectedProfile();
             }
         };
-        savedSamples.SelectionChanged += (_, _) => SelectSample(savedSamples.SelectedIndex);
-        comparisonAnchor.SelectionChanged += (_, _) => SelectSample(comparisonAnchor.SelectedIndex);
+        savedSamples.SelectionChanged += (_, _) => {
+            if (!changingSelection) {
+                ShowSelectedVector();
+            }
+        };
         photos.SelectionChanged += (_, _) => {
             if (!changingSelection) {
                 ShowSelectedPhoto();
@@ -512,31 +515,10 @@ internal sealed partial class FaceDatabaseView : UserControl {
         int index = sampleProfile?.Id == profile?.Id ? savedSamples.SelectedIndex : 0;
         sampleProfile = profile;
         int count = profile?.Samples.Count ?? 0;
-        string[] labels = Enumerable.Range(1, count).Select(number => $"Образец {number}").ToArray();
-        int selectedIndex = count == 0 ? -1 : Math.Clamp(index, 0, count - 1);
         changingSelection = true;
         try {
-            savedSamples.ItemsSource = labels;
-            comparisonAnchor.ItemsSource = labels;
-            savedSamples.SelectedIndex = selectedIndex;
-            comparisonAnchor.SelectedIndex = selectedIndex;
-        }
-        finally {
-            changingSelection = false;
-        }
-        ShowSelectedVector();
-        ShowComparison();
-    }
-
-    // синхронизируем исходный образец между вкладками, пропуская ответное событие выбора
-    private void SelectSample(int index) {
-        if (changingSelection || index < 0) {
-            return;
-        }
-        changingSelection = true;
-        try {
-            savedSamples.SelectedIndex = index;
-            comparisonAnchor.SelectedIndex = index;
+            savedSamples.ItemsSource = Enumerable.Range(1, count).Select(number => $"Образец {number}").ToArray();
+            savedSamples.SelectedIndex = count == 0 ? -1 : Math.Clamp(index, 0, count - 1);
         }
         finally {
             changingSelection = false;
