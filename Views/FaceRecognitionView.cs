@@ -1,6 +1,6 @@
 using System;
 using System.ComponentModel;
-using System.Diagnostics;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
@@ -30,20 +30,21 @@ internal sealed class FaceRecognitionView : UserControl {
     private readonly Border resultPane;
 
     private MainViewModel? model;
-    private MediaDocument? requestedDocument;
-    private FaceRecognitionService? recognizer;
-    private string? initializationFailure;
+    private FaceVideoWork? observedWork;
     private FaceVideoPreview? submitted;
+    private readonly List<Task> liveJobs = [];
+    private CancellationTokenSource? liveStop;
+    private Task? capacityWait;
     private bool active;
     private bool closing;
     private bool refreshQueued;
     private bool previewHasNoResult = true;
-    private Task work = Task.CompletedTask;
-    private Task cleanup = Task.CompletedTask;
-    private CancellationTokenSource? workStop;
+    private bool presentingPrepared;
+    private long issued;
+    private long shown;
 
     private bool ShowsResult => tabs.SelectedIndex == 1;
-    public bool HasWork => !work.IsCompleted || !cleanup.IsCompleted || recognizer is not null;
+    public bool HasWork => liveJobs.Exists(task => !task.IsCompleted) || model?.HasFaceVideoWork == true;
 
     // располагаем исходный кадр, распознавание и вход в базу как соседние части одной вкладки
     public FaceRecognitionView(Button openDatabase) {
@@ -69,6 +70,7 @@ internal sealed class FaceRecognitionView : UserControl {
                 UpdateVisiblePane();
                 if (!ShowsResult) {
                     ClearResult();
+                    model?.SetFaceVideoVisible(false);
                 }
                 QueueRefresh();
             }
@@ -119,33 +121,41 @@ internal sealed class FaceRecognitionView : UserControl {
         }
         input.Source = null;
         ClearResult();
-        requestedDocument = null;
-        initializationFailure = null;
-        if (recognizer is { } old) {
-            recognizer = null;
-            cleanup = ReleaseAfterAsync(Task.WhenAll(work, cleanup), old);
+        observedWork = null;
+        model?.SetFaceVideoVisible(false);
+    }
+
+    // запрещаем новый вход и дожидаемся захваченных кадров и освобождения моделей
+    public async Task StopAsync() {
+        closing = true;
+        Deactivate();
+        await Task.WhenAll(liveJobs);
+        if (model is not null) {
+            await model.DrainFaceVideoWorkAsync();
         }
     }
 
-    // запрещаем повторный вход и дожидаемся единственного фонового вызова модели
-    public Task StopAsync() {
-        closing = true;
-        Deactivate();
-        return Task.WhenAll(work, cleanup);
-    }
-
-    // обновляем ссылку сразу, а съемку откладываем до завершения общей публикации кадра
+    // подготовленную пару передаем синхронно, живой кадр забираем после общей публикации
     private void OnMediaChanged(object? sender, PropertyChangedEventArgs args) {
         switch (args.PropertyName) {
+            case nameof(MainViewModel.PreparedFaceVideo):
+                if (!PresentPrepared()) {
+                    ClearPreparedPreview();
+                }
+                break;
             case nameof(MainViewModel.CurrentDocument):
             case nameof(MainViewModel.OriginalImage):
             case nameof(MainViewModel.VideoPreviewFrame):
             case nameof(MainViewModel.VideoPreviewRevision):
                 UpdateInput();
+                if (model?.PreparedFaceVideo is null) {
+                    ClearPreparedPreview();
+                }
                 break;
             case nameof(MainViewModel.PlaybackStatus):
             case nameof(MainViewModel.IsVideoEditorSourceReady):
             case nameof(MainViewModel.VideoEditorSourceNotice):
+            case nameof(MainViewModel.CurrentFaceVideoWork):
                 break;
             default:
                 return;
@@ -185,141 +195,177 @@ internal sealed class FaceRecognitionView : UserControl {
         });
     }
 
-    // захватываем только последний готовый вход, когда закончился предыдущий расчет
+    // при нехватке рабочего места живой режим оставляет следующий шанс последнему кадру
     private void RefreshRecognition() {
-        if (!active || !ShowsResult) {
+        liveJobs.RemoveAll(task => task.IsCompleted);
+        if (!active || !ShowsResult || model is not { } media) {
             return;
         }
-
-        MediaDocument? document = model?.CurrentDocument;
-        if (!ReferenceEquals(requestedDocument, document)) {
-            requestedDocument = document;
+        media.SetFaceVideoVisible(true);
+        if (!ReferenceEquals(observedWork, media.CurrentFaceVideoWork)) {
             ClearResult();
-            initializationFailure = null;
+            observedWork = media.CurrentFaceVideoWork;
         }
-        if (document is not { Kind: MediaKind.Video }) {
-            SetStatus(document is null ? "Откройте видео" : "Распознавание фото пока недоступно");
+        if (PresentPrepared()) {
             return;
         }
-        if (model?.ReadFaceVideoPreview() is not { } current) {
+        if (media.CurrentDocument is not { Kind: MediaKind.Video }) {
+            SetStatus(media.CurrentDocument is null ? "Откройте видео" : "Распознавание фото пока недоступно");
+            return;
+        }
+        if (media.IsFaceVideoPrepared || media.ReadFaceVideoPreview() is not { } current) {
             ClearResult();
-            model?.ResolveFacePreviewAfterLivePause();
-            SetStatus(model?.VideoEditorSourceNotice ?? "Ожидаем видеокадр…");
+            media.ResolveFacePreviewAfterLivePause();
+            SetStatus(media.VideoEditorSourceNotice ?? "Ожидаем видеокадр…");
             return;
         }
-        if (submitted is { } previous && (!previous.SameRun(current) || !current.IsPlaying && !previous.SameFrame(current))) {
+        if (submitted is { } previous && (!previous.SameRun(current) ||
+            !current.IsPlaying && !previous.SameFrame(current))) {
             ClearResult();
         }
-        if (initializationFailure is { } problem) {
-            SetStatus(problem);
+        if (observedWork is not { } worker || submitted is { } same && same.SameFrame(current)) {
             return;
         }
-        if (!work.IsCompleted || submitted is { } same && same.SameFrame(current)) {
+        if (worker.WorkerCapacity(current.Bitmap.PixelSize, live: true) == 0) {
+            ClearResult();
+            SetStatus(FaceVideoWork.BudgetError);
             return;
         }
-
+        FaceVideoLease? lease = worker.TryReserve(current.Bitmap.PixelSize, live: true, out Task available);
+        if (lease is null) {
+            if (capacityWait is null || capacityWait.IsCompleted) {
+                liveStop ??= new CancellationTokenSource();
+                capacityWait = NotifyCapacityAsync(available, liveStop.Token);
+            }
+            return;
+        }
         submitted = current;
         if (previewHasNoResult) {
             SetStatus("Распознаем кадр…");
         }
         try {
+            long acceptedAt = Environment.TickCount64;
             VideoEditorFrame pixels = VideoEditorFrame.Capture(current.Bitmap);
-            workStop = new CancellationTokenSource();
-            work = RecognizeAsync(current, pixels, workStop);
+            liveStop ??= new CancellationTokenSource();
+            liveJobs.Add(RecognizeAsync(current, pixels, worker, lease, ++issued, acceptedAt, liveStop.Token));
         }
         catch (Exception error) {
+            lease.Dispose();
             SetStatus($"Не удалось получить кадр. {error.Message}");
         }
     }
 
-    // кадр и рамки публикуются вместе, на паузе требуется точный текущий штамп
-    private async Task RecognizeAsync(FaceVideoPreview frame, VideoEditorFrame pixels, CancellationTokenSource stop) {
-        using (pixels)
-        using (stop) {
-            CancellationToken token = stop.Token;
+    // общий подготовитель выдает immutable bitmap и метаданные одного физического кадра
+    private bool PresentPrepared() {
+        if (!active || !ShowsResult) {
+            return false;
+        }
+        if (model?.PreparedFaceVideo is not { } prepared) {
+            return false;
+        }
+        if (submitted is not null) {
+            ClearResult();
+        }
+        preview.ShowPrepared(prepared.Bitmap, prepared.Result);
+        presentingPrepared = true;
+        previewHasNoResult = false;
+        ShowResultStatus(prepared.Result);
+        return true;
+    }
+
+    // выдаем только более новый завершенный кадр в том же запуске
+    private async Task RecognizeAsync(FaceVideoPreview frame, VideoEditorFrame pixels, FaceVideoWork worker,
+        FaceVideoLease lease, long sequence, long acceptedAt, CancellationToken token) {
+        using (lease)
+        using (pixels) {
             try {
-                await cleanup;
-                token.ThrowIfCancellationRequested();
-                if (recognizer is null) {
-                    try {
-                        await LoadRecognizerAsync(token);
-                    }
-                    catch (Exception error) when (IsCurrent(frame, token)) {
-                        initializationFailure = $"Не удалось распознать лица. {error.Message}";
-                        SetStatus(initializationFailure);
-                        return;
-                    }
+                var recognized = await Task.Run(() => {
+                    FaceVideoResult result = worker.Process(pixels, token, out FaceImage? image);
+                    return (Result: result, Image: image);
+                }, token);
+                if (sequence <= shown || !IsCurrent(frame, worker, token)) {
+                    return;
                 }
-                FaceRecognitionService engine = recognizer!;
-                FaceRecognitionFrame result = await Task.Run(() =>
-                    engine.Recognize(FaceRecognitionService.CopyVideoImage(pixels, token), token), token);
-                if (IsCurrent(frame, token)) {
-                    preview.Show(result.Image, result);
+                shown = sequence;
+                if (recognized.Image is { } image) {
+                    preview.ShowLive(image, recognized.Result);
                     previewHasNoResult = false;
-                    SetStatus(result.EmptyCatalogue ? "База пуста" : result.Faces.Count == 0 ? "Лицо не найдено" : "");
+                    worker.Budget.Presented(acceptedAt);
                 }
+                ShowResultStatus(recognized.Result);
+                lease.Finish(recognized.Result.Delay);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) {
             }
             catch (Exception error) {
-                if (IsCurrent(frame, token)) {
+                if (IsCurrent(frame, worker, token)) {
                     SetStatus($"Не удалось обработать кадр. {error.Message}");
                 }
             }
             finally {
-                workStop = null;
                 QueueRefresh();
             }
         }
     }
 
-    // живой результат может догонять общий просмотр, но не пересекать команду перехода
-    private bool IsCurrent(FaceVideoPreview frame, CancellationToken token) =>
-        active && ShowsResult && !token.IsCancellationRequested && model?.ReadFaceVideoPreview() is { } current &&
-        frame.SameRun(current) && (current.IsPlaying || frame.SameFrame(current));
+    // живой результат отстает только в пределах текущей команды и текущего каталога
+    private bool IsCurrent(FaceVideoPreview frame, FaceVideoWork worker, CancellationToken token) =>
+        active && ShowsResult && !token.IsCancellationRequested &&
+        ReferenceEquals(worker, model?.CurrentFaceVideoWork) && model?.PreparedFaceVideo is null &&
+        model?.ReadFaceVideoPreview() is { } current && frame.SameRun(current) &&
+        (current.IsPlaying || frame.SameFrame(current));
 
-    // перечитываем сохраненный каталог после возвращения из базы
-    private async Task LoadRecognizerAsync(CancellationToken token) {
-        FaceRecognitionService candidate = await Task.Run(() => {
-            FaceWorkspacePaths paths = FaceWorkspacePaths.Resolve(AppContext.BaseDirectory,
-                Environment.GetEnvironmentVariable(FaceWorkspacePaths.RootVariable));
-            var profiles = new FaceProfileStore(paths.CheckoutRoot).Load();
-            token.ThrowIfCancellationRequested();
-            return new FaceRecognitionService(paths.CreatePipeline(), profiles);
-        }, token);
-        if (token.IsCancellationRequested) {
-            candidate.Dispose();
-            token.ThrowIfCancellationRequested();
-        }
-        recognizer = candidate;
-    }
-
-    // сбрасываем кадр и доступную подпись при смене контекста
+    // снимаем картинку и отменяем уже взятые работы при смене контекста
     private void ClearResult() {
-        workStop?.Cancel();
+        Task wake = capacityWait ?? Task.CompletedTask;
+        capacityWait = null;
+        if (liveStop is { } ending) {
+            liveStop = null;
+            ending.Cancel();
+            _ = DisposeStopAsync(Task.WhenAll(Task.WhenAll(liveJobs), wake), ending);
+        }
         submitted = null;
-        if (!previewHasNoResult) {
-            preview.Show(null);
+        preview.ShowPrepared(null);
+        previewHasNoResult = true;
+        presentingPrepared = false;
+    }
+
+    // отвязываем общий bitmap до освобождения или замены его владельцем
+    private void ClearPreparedPreview() {
+        if (presentingPrepared) {
+            preview.ShowPrepared(null);
             previewHasNoResult = true;
+            presentingPrepared = false;
         }
     }
+
+    // просыпаемся по освобождению буфера, без очереди кадров и ожидания таймера
+    private async Task NotifyCapacityAsync(Task available, CancellationToken token) {
+        try {
+            await available.WaitAsync(token);
+            QueueRefresh();
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) {
+        }
+    }
+
+    // регистрация рабочего токена еще возможна до фактического возврата всех задач
+    private static async Task DisposeStopAsync(Task workers, CancellationTokenSource stop) {
+        try {
+            await workers.ConfigureAwait(false);
+        }
+        finally {
+            stop.Dispose();
+        }
+    }
+
+    // оставляем явными ошибки, отсутствие лица и пустую базу
+    private void ShowResultStatus(FaceVideoResult result) =>
+        SetStatus(result.Error ?? (result.EmptyCatalogue ? "База пуста" : result.Faces.Count == 0 ? "Лицо не найдено" : ""));
 
     // текст пустого состояния объявляется только в выбранном представлении
     private void SetStatus(string message) {
         status.Text = message;
         status.IsVisible = ShowsResult && message.Length > 0;
-    }
-
-    // освобождаем нативные модели только после возврата их последнего вызова
-    private static async Task ReleaseAfterAsync(Task previous, FaceRecognitionService engine) {
-        await previous.ConfigureAwait(false);
-        await Task.Run(() => {
-            try {
-                engine.Dispose();
-            }
-            catch (Exception error) {
-                Trace.TraceWarning($"Ошибка освобождения распознавания: {error.Message}");
-            }
-        }).ConfigureAwait(false);
     }
 }

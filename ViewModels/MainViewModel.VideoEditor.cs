@@ -311,12 +311,15 @@ public partial class MainViewModel {
             previous.AnalysisBudgetMiB != settings.AnalysisBudgetMiB;
         bool foregroundSettingsChanged = previous.ForegroundBudgetMiB != settings.ForegroundBudgetMiB ||
             previous.ForegroundDecoderThreads != settings.ForegroundDecoderThreads;
+        bool facesChanged = previous.FaceMaximumWorkers != settings.FaceMaximumWorkers ||
+            previous.FaceBudgetMiB != settings.FaceBudgetMiB;
         bool foregroundWorkChanged = foregroundSettingsChanged ||
             (VideoSequenceInputs & (VideoPipelineStage.Editing | VideoPipelineStage.Analysis)) != 0 &&
                 previous.BudgetMiB != settings.BudgetMiB ||
             (VideoSequenceInputs & VideoPipelineStage.Analysis) != 0 && analysisChanged ||
             IsCombinedAnalysisOutputSelected && (analysisChanged || previous.BudgetMiB != settings.BudgetMiB);
-        bool retrySource = !analysisChanged && !foregroundSettingsChanged && settings.Mode != VideoPreviewMode.Live && preparedSource is null &&
+        bool retrySource = !analysisChanged && !foregroundSettingsChanged && !facesChanged &&
+            settings.Mode != VideoPreviewMode.Live && preparedSource is null &&
             preparedOpening is null && IsVideoOpen;
         if (settings == PreviewSettings && !retrySource) {
             return;
@@ -324,6 +327,9 @@ public partial class MainViewModel {
         if (!retrySource && previous.Mode == settings.Mode && previous.MaximumWorkers == settings.MaximumWorkers &&
             previous.BudgetMiB == settings.BudgetMiB) {
             PreviewSettings = settings;
+            if (facesChanged) {
+                SetFaceVideoVisible(faceVideoVisible, settingsChanged: true);
+            }
             UpdateFrameAnalysisPlaybackPlan();
             if (foregroundWorkChanged) {
                 RestartVideoForeground();
@@ -332,6 +338,9 @@ public partial class MainViewModel {
         }
         StopVideoPreviewMonitoring(keepLast: false);
         PreviewSettings = settings;
+        if (facesChanged) {
+            SetFaceVideoVisible(faceVideoVisible, settingsChanged: true);
+        }
         UpdateFrameAnalysisPlaybackPlan(restartStrict: false);
         ResetVideoPreviewAuto();
         if (previous.Mode != settings.Mode || retrySource) {

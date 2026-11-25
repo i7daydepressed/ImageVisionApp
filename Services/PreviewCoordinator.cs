@@ -21,7 +21,8 @@ internal readonly record struct PreparedVideoWindow(
 // все картинки принадлежат вызывающей стороне до окончания копирования в интерфейс
 internal sealed class PreparedVideoFrame(
     TimedVideoInput input, VideoEditorFrame edited, VideoEditorGeometry geometry, Action release,
-    long? acceptedAt = null, VideoPipelineOutput? pipelineOutput = null) : IDisposable {
+    long? acceptedAt = null, VideoPipelineOutput? pipelineOutput = null,
+    FaceVideoResult? faceResult = null, FaceVideoLease? faceLease = null, FaceVideoWork? faceOwner = null) : IDisposable {
     private Action? releaseReservation = release;
     private VideoPipelineOutput? ownedOutput = pipelineOutput;
 
@@ -33,6 +34,8 @@ internal sealed class PreparedVideoFrame(
     public VideoEditorGeometry Geometry => geometry;
     public long? AcceptedAt => acceptedAt;
     public VideoPipelineOutput? PipelineOutput => ownedOutput;
+    public FaceVideoResult? FaceResult { get; } = faceResult;
+    public FaceVideoWork? FaceOwner { get; } = faceOwner;
 
     // кадр действует на полуоткрытом интервале до следующей подтвержденной метки
     public bool Contains(VideoPresentationTime time) =>
@@ -49,6 +52,7 @@ internal sealed class PreparedVideoFrame(
                     Edited.Dispose();
                 }
                 Original.Dispose();
+                faceLease?.Dispose();
                 free();
             }
         }
@@ -59,7 +63,7 @@ internal sealed class PreparedVideoFrame(
 internal sealed partial class PreviewCoordinator : IAsyncDisposable {
     private sealed record RequestData(long Generation, IVideoMediaSource Source, VideoFrameReadRequest Start,
         VideoEditorPlan Plan, long Budget, PixelSize Size, long ReaderBytes, long ResultBytes, long ScratchBytes,
-        bool Strict, int WorkerLimit, int ResumeCapacity, StrictVideoPipeline? Pipeline);
+        bool Strict, int WorkerLimit, int ResumeCapacity, StrictVideoPipeline? Pipeline, FaceVideoWork? Faces, int FaceCapacity);
 
     private sealed class Reading(RequestData request) {
         public RequestData Request { get; } = request;
@@ -107,12 +111,13 @@ internal sealed partial class PreviewCoordinator : IAsyncDisposable {
     }
 
     // оставляем только последний запрос, старый читатель освобождает собственные буферы при выходе
-    public long Request(IVideoMediaSource source, VideoFrameReadRequest start, VideoEditorPlan plan, long budgetBytes) =>
-        RequestCore(source, start, plan, budgetBytes, strict: false, workers: 1);
+    public long Request(IVideoMediaSource source, VideoFrameReadRequest start, VideoEditorPlan plan, long budgetBytes,
+        FaceVideoWork? faces = null) =>
+        RequestCore(source, start, plan, budgetBytes, strict: false, workers: 1, faces: faces);
 
     // используем тот же бюджет и поколение, сохраняя особый порядок потребления строгого запроса
     private long RequestCore(IVideoMediaSource source, VideoFrameReadRequest start, VideoEditorPlan plan, long budgetBytes,
-        bool strict, int workers, StrictVideoPipeline? pipeline = null) {
+        bool strict, int workers, StrictVideoPipeline? pipeline = null, FaceVideoWork? faces = null) {
         PixelSize size = source.FrameSize;
         long readerBytes = source.ReadScratchBytes;
         if (size.Width <= 0 || size.Height <= 0 || readerBytes < 0 || budgetBytes <= 0 ||
@@ -126,6 +131,12 @@ internal sealed partial class PreviewCoordinator : IAsyncDisposable {
         int limit = strict ? (int)Math.Min(plan.HasSteps ? workers : 1, frameBudget / frameBytes) : 1;
         int capacity = strict && limit > 0
             ? (int)Math.Min(MaximumReadyFrames, 1 + (frameBudget - frameBytes) / resultBytes) : 0;
+        int faceCapacity = faces?.ReadyCapacity(size) ?? 0;
+        if (strict && pipeline is null && faceCapacity > 0) {
+            int faceWorkers = faces!.WorkerCapacity(size, live: false);
+            limit = (int)Math.Min(plan.HasSteps ? Math.Min(workers, faceWorkers) : faceWorkers, frameBudget / frameBytes);
+            capacity = Math.Min(capacity, faceCapacity);
+        }
         if (pipeline is not null) {
             capacity = Math.Min(capacity, pipeline.Capacity);
             limit = capacity > 0 ? 1 : 0;
@@ -145,7 +156,7 @@ internal sealed partial class PreviewCoordinator : IAsyncDisposable {
             resumeCapacity = capacity;
             strictMeasuring = strictRequest = strict;
             pending = new(generation, source, start, plan, budgetBytes, size, readerBytes, resultBytes, scratchBytes,
-                strict, limit, capacity, pipeline);
+                strict, limit, capacity, pipeline, pipeline is null ? faces : null, faceCapacity);
             producer ??= Task.Run(RunAsync);
             return generation;
         }
@@ -313,6 +324,7 @@ internal sealed partial class PreviewCoordinator : IAsyncDisposable {
                 long remaining = frameBytes;
                 TimedVideoInput frame = default;
                 VideoEditorFrame? edited = null;
+                FaceVideoLease? faceLease = null;
                 try {
                     if (!await input.MoveNextAsync().ConfigureAwait(false)) {
                         if (previous is not null) {
@@ -342,11 +354,16 @@ internal sealed partial class PreviewCoordinator : IAsyncDisposable {
                     if (request.Plan.HasSteps) {
                         edited.ProcessingTime = Stopwatch.GetElapsedTime(started);
                     }
+                    faceLease = await ReservePreparedFaceAsync(request, token).ConfigureAwait(false);
+                    long? acceptedAt = faceLease is not null ? Environment.TickCount64 : null;
+                    FaceVideoResult? face = ProcessFace(request, frame.Pixels, faceLease, token);
                     lock (gate) {
                         if (!IsCurrent(request)) {
                             return;
                         }
-                        ready.Enqueue(new(frame, edited, geometry, () => Release(request.ResultBytes)));
+                        ready.Enqueue(new(frame, edited, geometry, () => Release(request.ResultBytes), acceptedAt,
+                            faceResult: face, faceLease: faceLease, faceOwner: request.Faces));
+                        faceLease = null;
                         last = frame.Time;
                         through = frame.Until;
                         ended = frame.IsLast;
@@ -359,6 +376,7 @@ internal sealed partial class PreviewCoordinator : IAsyncDisposable {
                     }
                 }
                 finally {
+                    faceLease?.Dispose();
                     if (edited is not null && !ReferenceEquals(edited, frame.Pixels)) {
                         edited.Dispose();
                     }
@@ -370,6 +388,34 @@ internal sealed partial class PreviewCoordinator : IAsyncDisposable {
         finally {
             Release(request.ReaderBytes);
         }
+    }
+
+    // последовательный участок ждет память только в фоновом подготовителе
+    private static async Task<FaceVideoLease?> ReservePreparedFaceAsync(RequestData request, CancellationToken token) {
+        if (request.Faces is not { } faces || request.FaceCapacity == 0) {
+            return null;
+        }
+        while (true) {
+            token.ThrowIfCancellationRequested();
+            if (faces.TryReserve(request.Size, live: false, out Task wait) is { } lease) {
+                return lease;
+            }
+            await wait.WaitAsync(token).ConfigureAwait(false);
+        }
+    }
+
+    // готовая пара хранит коробки и решения, а временный BGR исходника ей больше не нужен
+    private static FaceVideoResult? ProcessFace(RequestData request, VideoEditorFrame original,
+        FaceVideoLease? lease, CancellationToken token) {
+        if (request.Faces is not { } faces) {
+            return null;
+        }
+        if (lease is null) {
+            return FaceVideoResult.Unavailable(FaceVideoWork.BudgetError);
+        }
+        FaceVideoResult result = faces.Process(original, token, out _);
+        lease.Finish(result.Delay);
+        return result;
     }
 
     // ждём свободной памяти и места в ближайшем участке до следующего чтения или копирования

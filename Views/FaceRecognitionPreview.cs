@@ -16,19 +16,21 @@ namespace ImageVisionApp.Views;
 
 internal sealed class FaceRecognitionPreview : Control {
     private static readonly IPen FramePen = new Pen(Brushes.Gold, 2);
-    private WriteableBitmap? bitmap;
-    private FaceImage? image;
-    private FaceRecognitionFrame? result;
+    private Bitmap? bitmap;
+    private bool ownsBitmap;
+    private FaceVideoResult? result;
 
     // заменяем пиксели и подписи вместе, сохраняя bitmap только текущего кадра
-    public void Show(FaceImage? frame, FaceRecognitionFrame? recognized = null) {
-        if (recognized is not null && !ReferenceEquals(frame, recognized.Image)) {
-            throw new ArgumentException("Рамки распознавания относятся к другому кадру.", nameof(recognized));
-        }
-        WriteableBitmap? next = frame is null ? null : CreateBitmap(frame);
-        WriteableBitmap? previous = bitmap;
+    public void ShowLive(FaceImage frame, FaceVideoResult recognized) => Show(CreateBitmap(frame), recognized, owns: true);
+
+    // подготовленный кадр уже принадлежит общему плееру и совпадает с метаданными слоя
+    public void ShowPrepared(Bitmap? original, FaceVideoResult? recognized = null) => Show(original, recognized, owns: false);
+
+    // публикуем изображение, подписи и доступное имя в одном вызове
+    private void Show(Bitmap? next, FaceVideoResult? recognized, bool owns) {
+        Bitmap? previous = ownsBitmap ? bitmap : null;
         bitmap = next;
-        image = frame;
+        ownsBitmap = owns;
         result = recognized;
         string name = recognized is { Faces.Count: > 0 } ? "Кадр распознавания. " +
             string.Join(", ", recognized.Faces.Select(face => LabelFor(face, recognized.EmptyCatalogue))) : "Кадр распознавания";
@@ -41,24 +43,25 @@ internal sealed class FaceRecognitionPreview : Control {
     public override void Render(DrawingContext context) {
         base.Render(context);
         context.FillRectangle(Brushes.Black, new Rect(Bounds.Size));
-        if (image is null || bitmap is null || Bounds.Width <= 0 || Bounds.Height <= 0) {
+        if (bitmap is null || Bounds.Width <= 0 || Bounds.Height <= 0) {
             return;
         }
 
-        Rect content = FaceImportPreview.Fit(Bounds.Size, image);
+        PixelSize size = bitmap.PixelSize;
+        Rect content = FaceImportPreview.Fit(Bounds.Size, size.Width, size.Height);
         context.DrawImage(bitmap, new Rect(bitmap.Size), content);
         using (context.PushClip(content)) {
             if (result is null) {
                 return;
             }
             foreach (RecognizedFace face in result.Faces) {
-                Rect bounds = FaceImportPreview.MapBounds(content, image, face.Bounds);
+                Rect bounds = FaceImportPreview.MapBounds(content, size.Width, size.Height, face.Bounds);
                 context.DrawRectangle(null, FramePen, bounds);
             }
 
             List<Rect> plaques = new(result.Faces.Count);
             foreach (RecognizedFace face in result.Faces) {
-                Rect bounds = FaceImportPreview.MapBounds(content, image, face.Bounds);
+                Rect bounds = FaceImportPreview.MapBounds(content, size.Width, size.Height, face.Bounds);
                 string name = LabelFor(face, result.EmptyCatalogue);
                 FormattedText label = new(name, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
                     Typeface.Default, 14, Brushes.Black);

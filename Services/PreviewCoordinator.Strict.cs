@@ -28,7 +28,7 @@ internal sealed partial class PreviewCoordinator {
 
     // от нуля читаем физический первый кадр, даже если следующая метка совпадает с его временем
     public long RequestStrict(IVideoMediaSource source, VideoFrameReadRequest start,
-        VideoEditorPlan plan, long budgetBytes, int workers, StrictVideoPipeline? pipeline = null) {
+        VideoEditorPlan plan, long budgetBytes, int workers, StrictVideoPipeline? pipeline = null, FaceVideoWork? faces = null) {
         if (pipeline is { } combined && (combined.PersistentBytes < 0 || combined.ScratchBytes < 0 ||
             combined.SelectedFrameBytes <= 0 || combined.Capacity < 0 || start.FrameOffset != 0 ||
             start.DecodedAnchor is not null || start.Anchor is { } anchor && (anchor.Ordinal < 0 || !anchor.Time.IsKnown))) {
@@ -37,7 +37,7 @@ internal sealed partial class PreviewCoordinator {
         if (!start.AtEnd && start.PositionMilliseconds == 0 && start.Anchor is null) {
             start = start with { Anchor = new(new(0, 1000), 0, false) };
         }
-        return RequestCore(source, start, plan, budgetBytes, strict: true, workers, pipeline);
+        return RequestCore(source, start, plan, budgetBytes, strict: true, workers, pipeline, faces);
     }
 
     // выдаем ровно голову непрерывной очереди, включая разные кадры одного времени
@@ -66,7 +66,7 @@ internal sealed partial class PreviewCoordinator {
                 request.Source.ReadFramesAsync(request.Start, token).GetAsyncEnumerator(token);
             TimedVideoInput? previous = null;
             while (true) {
-                await ReserveStrictSlotAsync(work, stage, frameBytes, token).ConfigureAwait(false);
+                FaceVideoLease? faceLease = await ReserveStrictSlotAsync(work, stage, frameBytes, token).ConfigureAwait(false);
                 TimedVideoInput frame = default;
                 bool handedOff = false;
                 try {
@@ -94,7 +94,7 @@ internal sealed partial class PreviewCoordinator {
 
                     // выполняющийся кадр сам освобождает свой резерв, в том числе после отмены
                     TimedVideoInput owned = frame;
-                    _ = Task.Run(() => ProcessStrictFrame(work, stage, owned, frameBytes, acceptedAt));
+                    _ = Task.Run(() => ProcessStrictFrame(work, stage, owned, frameBytes, acceptedAt, faceLease));
                     handedOff = true;
                     if (frame.IsLast || request.Start.SingleFrame) {
                         return;
@@ -102,6 +102,7 @@ internal sealed partial class PreviewCoordinator {
                 }
                 finally {
                     if (!handedOff) {
+                        faceLease?.Dispose();
                         frame.Pixels?.Dispose();
                         FinishStrictSlot(stage, frameBytes);
                     }
@@ -124,27 +125,40 @@ internal sealed partial class PreviewCoordinator {
     }
 
     // очередь не читает следующие пиксели, пока одновременно помещаются вход, копия и рабочие буферы
-    private async Task ReserveStrictSlotAsync(Reading work, StrictStage stage, long bytes, CancellationToken token) {
+    private async Task<FaceVideoLease?> ReserveStrictSlotAsync(Reading work, StrictStage stage, long bytes, CancellationToken token) {
         RequestData request = work.Request;
         while (true) {
             token.ThrowIfCancellationRequested();
+            Task? faceWait = null;
             lock (gate) {
                 if (!IsCurrent(request) || error is not null) {
                     throw new OperationCanceledException(token);
                 }
                 VideoPresentationTime horizon = new(position + AheadMilliseconds, 1000);
-                int capacity = request.Pipeline is null ? MaximumReadyFrames : request.ResumeCapacity;
+                int capacity = request.Pipeline is null && request.FaceCapacity == 0 ? MaximumReadyFrames : request.ResumeCapacity;
                 if (stage.Active < request.WorkerLimit && bytes <= request.Budget - reserved &&
                     ready.Count + stage.Completed.Count + stage.Active < capacity &&
                     (through is null || through.Value.CompareTo(horizon) < 0)) {
-                    stage.Active++;
-                    peakActiveWorkers = Math.Max(peakActiveWorkers, stage.Active);
-                    reserved += bytes;
-                    peakReserved = Math.Max(peakReserved, reserved);
-                    return;
+                    FaceVideoLease? lease = null;
+                    if (request.FaceCapacity > 0 && request.Faces is { } faces) {
+                        lease = faces.TryReserve(request.Size, live: false, out Task wait);
+                        faceWait = lease is null ? wait : null;
+                    }
+                    if (faceWait is null) {
+                        stage.Active++;
+                        peakActiveWorkers = Math.Max(peakActiveWorkers, stage.Active);
+                        reserved += bytes;
+                        peakReserved = Math.Max(peakReserved, reserved);
+                        return lease;
+                    }
                 }
             }
-            await changed.WaitAsync(token).ConfigureAwait(false);
+            if (faceWait is null) {
+                await changed.WaitAsync(token).ConfigureAwait(false);
+            }
+            else {
+                await faceWait.WaitAsync(token).ConfigureAwait(false);
+            }
         }
     }
 
@@ -156,7 +170,8 @@ internal sealed partial class PreviewCoordinator {
             prior.Until is { } next && frame.Time.CompareTo(next) == 0);
 
     // готовый поздний кадр занимает свой резерв, пока не заполнится пропуск перед ним
-    private void ProcessStrictFrame(Reading work, StrictStage stage, TimedVideoInput frame, long remaining, long acceptedAt) {
+    private void ProcessStrictFrame(Reading work, StrictStage stage, TimedVideoInput frame, long remaining, long acceptedAt,
+        FaceVideoLease? faceLease) {
         RequestData request = work.Request;
         VideoEditorFrame? edited = null;
         try {
@@ -167,11 +182,14 @@ internal sealed partial class PreviewCoordinator {
             if (request.Plan.HasSteps) {
                 edited.ProcessingTime = Stopwatch.GetElapsedTime(started);
             }
+            FaceVideoResult? face = ProcessFace(request, frame.Pixels, faceLease, work.Stop.Token);
             lock (gate) {
                 if (!IsCurrent(request) || error is not null) {
                     return;
                 }
-                stage.Completed.Add(frame.Ordinal, new(frame, edited, geometry, () => Release(request.ResultBytes), acceptedAt));
+                stage.Completed.Add(frame.Ordinal, new(frame, edited, geometry, () => Release(request.ResultBytes), acceptedAt,
+                    faceResult: face, faceLease: faceLease, faceOwner: request.Faces));
+                faceLease = null;
                 remaining -= request.ResultBytes;
                 frame = default;
                 edited = null;
@@ -188,6 +206,7 @@ internal sealed partial class PreviewCoordinator {
             FailStrict(work, stage, failure);
         }
         finally {
+            faceLease?.Dispose();
             if (edited is not null && !ReferenceEquals(edited, frame.Pixels)) {
                 edited.Dispose();
             }

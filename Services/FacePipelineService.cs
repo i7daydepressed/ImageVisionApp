@@ -15,6 +15,7 @@ internal sealed class FacePipelineService : IDisposable {
     public const string PipelineVersion = "yunet-2023mar.sface-2021dec.bgr8-black-letterbox640-align112-l2.v1";
 
     private const int DetectionSize = 640;
+    internal const int MaximumDetections = 5000;
     private const int AlignedSize = 112;
     private const int EmbeddingLength = 128;
     private const string YuNetHash = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4";
@@ -242,7 +243,7 @@ internal sealed class FacePipelineService : IDisposable {
             string snapshot = Path.Combine(directory, "yunet.onnx");
             File.WriteAllBytes(snapshot, verifiedModel);
             model = FaceDetectorYN.Create(snapshot, "",
-                new Size(DetectionSize, DetectionSize), 0.75f, 0.3f, 5000, Backend.OPENCV, Target.CPU);
+                new Size(DetectionSize, DetectionSize), 0.75f, 0.3f, MaximumDetections, Backend.OPENCV, Target.CPU);
         }
         finally {
             try {

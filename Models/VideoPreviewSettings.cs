@@ -13,6 +13,8 @@ internal readonly record struct VideoPreviewSettings(int MaximumWorkers, int Bud
     public int AnalysisBudgetMiB { get; init; } = BudgetLimitMiB;
     public int ForegroundDecoderThreads { get; init; } = WorkerLimit;
     public int ForegroundBudgetMiB { get; init; } = BudgetLimitMiB;
+    public int FaceMaximumWorkers { get; init; } = WorkerLimit;
+    public int FaceBudgetMiB { get; init; } = BudgetLimitMiB;
     public VideoPreviewMode Mode { get; init; } = VideoPreviewMode.Strict;
     public bool BufferBeforeStrictResume { get; init; }
     public VideoArrowStep ArrowStep { get; init; }
@@ -20,5 +22,6 @@ internal readonly record struct VideoPreviewSettings(int MaximumWorkers, int Bud
     public int EffectiveWorkers => MaximumWorkers == 0 ? Math.Min(2, Environment.ProcessorCount) : MaximumWorkers;
     public long ForegroundBudgetBytes => (long)ForegroundBudgetMiB * 1024 * 1024;
     public long AnalysisBudgetBytes => (long)AnalysisBudgetMiB * 1024 * 1024;
+    public long FaceBudgetBytes => (long)FaceBudgetMiB * 1024 * 1024;
     public long BudgetBytes => (long)BudgetMiB * 1024 * 1024;
 }

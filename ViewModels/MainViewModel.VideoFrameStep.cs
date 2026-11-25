@@ -176,13 +176,14 @@ public partial class MainViewModel {
                 }
 
                 VideoEditorPlan plan = work.Prepared ? videoEditorPlan : ExactOriginalOnly;
+                FaceVideoWork? faceOwner = work.Prepared ? faceVideoWork : null;
                 preparedVideo ??= new PreviewCoordinator();
                 long generation = preparedVideo.Request(source, new(work.Position, work.AtEnd) {
                     Anchor = cursor,
                     DecodedAnchor = cursor is null ? work.DecodedAnchor : null,
                     FrameOffset = distance,
                     SingleFrame = true
-                }, plan, PreviewSettings.BudgetBytes);
+                }, plan, PreviewSettings.BudgetBytes, faceOwner);
 
                 using PreparedVideoFrame frame = await TakeVideoFrameStepAsync(preparedVideo, generation, token);
                 cursor = new(frame.Time, frame.Ordinal, frame.Until is null);
@@ -196,7 +197,7 @@ public partial class MainViewModel {
                 if (work.Pending.Count != 0) {
                     continue;
                 }
-                if (work.Prepared && plan.Revision != videoEditorPlan.Revision) {
+                if (work.Prepared && (plan.Revision != videoEditorPlan.Revision || !ReferenceEquals(faceOwner, faceVideoWork))) {
                     work.Add(0);
                     continue;
                 }
@@ -309,6 +310,9 @@ public partial class MainViewModel {
 
         videoPinnedFrame = cursor;
         videoFrameStep = null;
+        if (work.Prepared) {
+            OnPropertyChanged(nameof(PreparedFaceVideo));
+        }
         UpdatePlaybackStatus(PlaybackStatus with {
             Position = position, IsPlaying = false, CanPlay = true, Notice = null
         });

@@ -99,17 +99,24 @@ internal sealed class FaceImportPreview : Control {
     }
 
     // считаем одинаковое поле с обеих сторон ориентированного изображения
-    internal static Rect Fit(Size viewport, FaceImage source) {
-        double scale = Math.Min(viewport.Width / source.Width, viewport.Height / source.Height);
-        double width = source.Width * scale;
-        double height = source.Height * scale;
+    internal static Rect Fit(Size viewport, FaceImage source) => Fit(viewport, source.Width, source.Height);
+
+    // принимаем размеры общего bitmap без копирования его пикселей в модель фото
+    internal static Rect Fit(Size viewport, int sourceWidth, int sourceHeight) {
+        double scale = Math.Min(viewport.Width / sourceWidth, viewport.Height / sourceHeight);
+        double width = sourceWidth * scale;
+        double height = sourceHeight * scale;
         return new Rect((viewport.Width - width) / 2, (viewport.Height - height) / 2, width, height);
     }
 
     // переносим рамку из координат фото в тот же прямоугольник, где оно показано
-    internal static Rect MapBounds(Rect image, FaceImage source, FaceBounds bounds) {
-        double scaleX = image.Width / source.Width;
-        double scaleY = image.Height / source.Height;
+    internal static Rect MapBounds(Rect image, FaceImage source, FaceBounds bounds) =>
+        MapBounds(image, source.Width, source.Height, bounds);
+
+    // используем ту же геометрию для исходного размера видео
+    internal static Rect MapBounds(Rect image, int sourceWidth, int sourceHeight, FaceBounds bounds) {
+        double scaleX = image.Width / sourceWidth;
+        double scaleY = image.Height / sourceHeight;
         return new Rect(image.X + bounds.Left * scaleX, image.Y + bounds.Top * scaleY,
             (bounds.Right - bounds.Left) * scaleX, (bounds.Bottom - bounds.Top) * scaleY);
     }

@@ -65,6 +65,7 @@ public partial class MainViewModel {
         preparedDetached = false;
         preparedWaitingPosition = null;
         preparedUnavailable = null;
+        ClearPreparedFaceVideo();
         WriteableBitmap? previous = preparedOriginal;
         preparedOriginal = null;
         if (previous is not null) {
@@ -211,6 +212,7 @@ public partial class MainViewModel {
         bool readFrame = (wasPrepared && !keepOriginal && !keepPriorLivePin && position > 0) || preparedInterruptedLiveSeek;
         bool seek = readFrame || (wasPrepared && (preparedNeedsSeek || preparedWaitingPosition is not null)) ||
             videoPlayback is { Position: >= 0 } playback && Math.Abs(playback.Position - position) > 25;
+        ClearPreparedFaceVideo();
         WriteableBitmap? retained = preparedOriginal;
         CancelPreviewModeHandoff(keepReplay: true);
         preparedVideo?.Cancel();
@@ -366,6 +368,7 @@ public partial class MainViewModel {
         preparedSeekDeadline = 0;
         preparedRestarting = false;
         if (!keepWindow || !PreparedFrameCovers(time)) {
+            ClearPreparedFaceVideo();
             preparedFrom = preparedUntil = null;
             InvalidateVideoEditorSource();
             OnPropertyChanged(nameof(VideoPreviewFrame));
@@ -428,8 +431,8 @@ public partial class MainViewModel {
                 }
                 preparedGeneration = IsStrictVideo
                     ? preparedVideo.RequestStrict(source, start with { Anchor = strictStartAnchor },
-                        editor, PreviewSettings.BudgetBytes, PreviewSettings.EffectiveWorkers, pipeline)
-                    : preparedVideo.Request(source, start, videoEditorPlan, PreviewSettings.BudgetBytes);
+                        editor, PreviewSettings.BudgetBytes, PreviewSettings.EffectiveWorkers, pipeline, faceVideoWork)
+                    : preparedVideo.Request(source, start, videoEditorPlan, PreviewSettings.BudgetBytes, faceVideoWork);
             }
             catch (Exception error) {
                 FailPreparedVideo(error.Message);
@@ -486,6 +489,7 @@ public partial class MainViewModel {
     private void DetachPreparedVideo() {
         if (preparedSource is not null || preparedOpening is not null) {
             preparedVideo?.Cancel();
+            ClearPreparedFaceVideo();
             preparedWaitingPosition = null;
             preparedFrom = preparedUntil = null;
             preparedDetached = true;
@@ -656,7 +660,9 @@ public partial class MainViewModel {
     private void PublishPreparedVideo(PreparedVideoFrame frame) {
         WriteableBitmap? previousOriginal = preparedOriginal;
         WriteableBitmap? previousEdited = videoEditorOutput;
-        WriteableBitmap original = GetPreparedBitmap(previousOriginal, frame.Original.Size);
+        // кадр с рамками не переписывается после передачи в рисование
+        bool immutable = frame.FaceResult is { Error: null } || presentedFaceVideo is { Result.Error: null };
+        WriteableBitmap original = GetPreparedBitmap(immutable ? null : previousOriginal, frame.Original.Size);
         WriteableBitmap? edited = null;
         try {
             using (ILockedFramebuffer target = original.Lock()) {
@@ -678,6 +684,7 @@ public partial class MainViewModel {
             videoEditorSourceError = null;
             videoEditorError = null;
             VideoPreviewRevision++;
+            PublishPreparedFaceVideo(frame, original);
             if (strictPipelineActive && frame.PipelineOutput is { } output) {
                 if (IsCombinedStrictOutputSelected) {
                     PublishCombinedOutput(output);

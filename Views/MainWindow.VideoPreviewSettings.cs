@@ -83,6 +83,15 @@ public partial class MainWindow {
             SelectedIndex = Array.IndexOf(budgets, settings.ForegroundBudgetMiB),
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
+        int[] faceBudgets = [4, 8, .. budgets];
+        ComboBox faceWorkers = new() {
+            ItemsSource = Enumerable.Range(1, VideoPreviewSettings.WorkerLimit).ToArray(),
+            SelectedIndex = settings.FaceMaximumWorkers - 1, HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        ComboBox faceBudget = new() {
+            ItemsSource = faceBudgets, SelectedIndex = Array.IndexOf(faceBudgets, settings.FaceBudgetMiB),
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
         ComboBox mode = new() {
             ItemsSource = new[] { "Живой предпросмотр", "С подготовкой участка", "Строгий показ" },
             SelectedIndex = (int)settings.Mode,
@@ -103,10 +112,13 @@ public partial class MainWindow {
         AutomationProperties.SetName(analysisBudget, "Анализ. Бюджет буферов, МиБ");
         AutomationProperties.SetName(foregroundThreads, "Работа с видеорядом. Потоки декодирования");
         AutomationProperties.SetName(foregroundBudget, "Работа с видеорядом. Бюджет буферов, МиБ");
+        AutomationProperties.SetName(faceWorkers, "Лица. Максимум обработчиков");
+        AutomationProperties.SetName(faceBudget, "Лица. Бюджет буферов, МиБ");
         const string budgetHelp = "Предел для учитываемых кадровых буферов в оперативной памяти.";
         ToolTip.SetTip(budget, budgetHelp);
         ToolTip.SetTip(analysisBudget, budgetHelp);
         ToolTip.SetTip(foregroundBudget, budgetHelp);
+        ToolTip.SetTip(faceBudget, budgetHelp);
 
         TextBlock modeHelp = new() { TextWrapping = TextWrapping.Wrap };
         TextBlock actualMode = new() { TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold };
@@ -146,6 +158,14 @@ public partial class MainWindow {
                 Text = "Декодер может готовить кадры параллельно. MOG2 обновляет модель в порядке кадров.",
                 TextWrapping = TextWrapping.Wrap
             }
+        } };
+        TextBlock faceLoad = new() { TextWrapping = TextWrapping.Wrap };
+        ToolTip.SetTip(faceLoad, "Пик учитывает еще освобождаемые буферы прежней подготовки. " +
+            "Задержка показа начинается с допуска кадра, включая его ожидание в подготовленном участке.");
+        StackPanel facePerformance = new() { Spacing = 8, Children = {
+            BuildPreviewSettingsRow("Максимум обработчиков", faceWorkers),
+            BuildPreviewSettingsRow("Бюджет буферов, МиБ", faceBudget),
+            faceLoad
         } };
         TextBlock status = new() { TextWrapping = TextWrapping.Wrap, MinHeight = 22, Margin = new Thickness(0, 0, 0, 4) };
         StackPanel load = new() { Children = { status } };
@@ -255,6 +275,7 @@ public partial class MainWindow {
         // выбор среза показывает фактический выход или отдельный этап, не меняя настройки работы
         void RefreshMeasurements() {
             UpdatePreviewLoad(viewModel, status, actualMode, preparedReserve, rows);
+            UpdateFaceVideoLoad(viewModel, faceLoad);
             bool isStrict = viewModel.ActiveVideoPreviewMode == VideoPreviewMode.Strict;
             foreach (TextBlock value in strictOnlyRows) {
                 value.IsVisible = isStrict;
@@ -307,7 +328,8 @@ public partial class MainWindow {
         apply.Click += (_, _) => {
             if (mode.SelectedIndex >= 0 && workers.SelectedIndex >= 0 && budget.SelectedIndex >= 0 &&
                 arrowStep.SelectedIndex >= 0 && analysisWorkers.SelectedIndex >= 0 && analysisBudget.SelectedIndex >= 0 &&
-                foregroundThreads.SelectedIndex >= 0 && foregroundBudget.SelectedIndex >= 0) {
+                foregroundThreads.SelectedIndex >= 0 && foregroundBudget.SelectedIndex >= 0 &&
+                faceWorkers.SelectedIndex >= 0 && faceBudget.SelectedIndex >= 0) {
                 dialog.Close(new VideoPreviewSettings(workers.SelectedIndex, budgets[budget.SelectedIndex]) {
                     Mode = (VideoPreviewMode)mode.SelectedIndex,
                     BufferBeforeStrictResume = strictBuffer.IsChecked == true,
@@ -315,7 +337,9 @@ public partial class MainWindow {
                     AnalysisMaximumWorkers = analysisWorkers.SelectedIndex + 1,
                     AnalysisBudgetMiB = budgets[analysisBudget.SelectedIndex],
                     ForegroundDecoderThreads = foregroundThreads.SelectedIndex + 1,
-                    ForegroundBudgetMiB = budgets[foregroundBudget.SelectedIndex]
+                    ForegroundBudgetMiB = budgets[foregroundBudget.SelectedIndex],
+                    FaceMaximumWorkers = faceWorkers.SelectedIndex + 1,
+                    FaceBudgetMiB = faceBudgets[faceBudget.SelectedIndex]
                 });
             }
         };
@@ -333,6 +357,7 @@ public partial class MainWindow {
                             BuildPreviewSettingsCard("Производительность · Редактирование", performance),
                             BuildPreviewSettingsCard("Производительность · Анализ", analysisPerformance),
                             BuildPreviewSettingsCard("Производительность · Работа с видеорядом", foregroundPerformance),
+                            BuildPreviewSettingsCard("Производительность · Лица", facePerformance),
                             BuildPreviewSettingsCard("Нагрузка предпросмотра", measurements)
                         }
                     }
@@ -485,6 +510,16 @@ public partial class MainWindow {
     }
 
     // одно вычисление на паузе измеряем временем, без частоты кадров
+    // показываем фактический пик активной работы и учтенный кадровый резерв
+    private static void UpdateFaceVideoLoad(MainViewModel model, TextBlock text) {
+        FaceVideoLoad load = model.ReadFaceVideoLoad();
+        const double mib = 1024 * 1024;
+        text.Text = $"Модели: {load.Inference}, пик {load.PeakInference}. Места обработки: {load.Active}, пик {load.PeakWorkers}. " +
+            $"Буферы: {load.Bytes / mib:0.##} МиБ, пик {load.PeakBytes / mib:0.##} МиБ, " +
+            $"в том числе резерв показа {load.PresentationBytes / mib:0.##} МиБ. " +
+            $"Последний расчет: {FormatAnalysisTime(load.Delay)}. До показа: {FormatAnalysisTime(load.PresentationDelay)}.";
+    }
+
     private static string FormatAnalysisTime(TimeSpan? duration) =>
         duration is { } time ? $"{time.TotalMilliseconds:0.##} мс" : "—";
 
