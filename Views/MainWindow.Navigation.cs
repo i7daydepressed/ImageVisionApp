@@ -16,12 +16,10 @@ public partial class MainWindow {
     private Grid? analysisPage;
     private Grid? videoForegroundPage;
     private FaceDatabaseView? facesPage;
-    private Control? documentOpenControl;
-    private Control? documentStatusControl;
-    private Control? documentSettingsControl;
     private bool facesCloseConfirmed;
     private bool facesClosePending;
     private bool IsFacesPageVisible => facesPage is not null && ReferenceEquals(pageHost.Content, facesPage);
+    private bool IsFacesDatabaseVisible => IsFacesPageVisible && facesPage!.ShowsDatabase;
 
     private readonly ToggleButton informationPageButton = new ToggleButton {
         Content = "Информация",
@@ -53,6 +51,7 @@ public partial class MainWindow {
         analysisPage = CreateAnalysisPage();
         videoForegroundPage = CreateVideoForegroundPage();
         facesPage = new FaceDatabaseView(this);
+        facesPage.SectionChanged += UpdateFacesSection;
 
         informationPageButton.Click += async (_, _) => await NavigateMainPageAsync(simplePage);
         editingPageButton.Click += async (_, _) => await NavigateMainPageAsync(editingPage);
@@ -81,7 +80,6 @@ public partial class MainWindow {
         settings.Bind(IsVisibleProperty, new Binding(nameof(MainViewModel.IsVideoOpen)));
         settings.Click += OpenMediaSettingsButton_OnClick;
         Border settingsHost = new() { Child = settings };
-        documentSettingsControl = settingsHost;
         navigation.Children.Add(settingsHost);
         return navigation;
     }
@@ -132,18 +130,21 @@ public partial class MainWindow {
         facesPageButton.IsChecked = IsFacesPageVisible;
     }
 
-    // скрываем управление общим документом и снимаем удержание клавиш при переходе
+    // снимаем удержание клавиш и передаем экрану тот же документ окна
     private void UpdateFacesNavigation() {
-        bool showFaces = IsFacesPageVisible;
-        documentOpenControl!.IsVisible = !showFaces;
-        documentStatusControl!.IsVisible = !showFaces;
-        documentSettingsControl!.IsVisible = !showFaces;
         videoSpaceHeld = false;
         videoPreviewUpHeld = false;
-        if (showFaces) {
+        if (IsFacesPageVisible) {
             videoDragDocument = null;
             facesPage!.Activate();
         }
+    }
+
+    // скрываем общий таймлайн в базе и не переносим туда удержание клавиш
+    private void UpdateFacesSection() {
+        videoSpaceHeld = videoPreviewUpHeld = false;
+        videoDragDocument = null;
+        UpdateAnalysisSection();
     }
 
     // пробел на входе в «Лица» остается командой кнопки при открытом видео

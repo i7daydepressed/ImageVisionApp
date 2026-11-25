@@ -82,7 +82,8 @@ public partial class MainWindow {
 
     // управляет плеером с клавиатуры, сохраняя обычный ввод в текстовых полях
     private void VideoPlayback_OnKeyDown(object? sender, KeyEventArgs e) {
-        if (IsComparisonPageVisible || IsFacesPageVisible || videoExportButton.Flyout?.IsOpen == true ||
+        if (IsComparisonPageVisible || IsFacesDatabaseVisible || UsesFacesSectionKeys(e.Source) ||
+            videoExportButton.Flyout?.IsOpen == true ||
             e.Key == Key.Space && (IsComparisonButtonInput(e.Source) || IsVideoExportButtonInput(e.Source) ||
                 IsFacesNavigationInput(e.Source)) ||
             UsesVideoForegroundControlKey(e) ||
@@ -117,6 +118,11 @@ public partial class MainWindow {
                 break;
         }
     }
+
+    // переключатели вида и кнопки раздела сохраняют собственный клавиатурный ввод
+    private bool UsesFacesSectionKeys(object? source) =>
+        IsFacesPageVisible && source is Visual visual && visual.GetSelfAndVisualAncestors().Any(control =>
+            control is TabStrip || control is Button && !ReferenceEquals(control, videoPlayButton));
 
     // пробел на кнопках сохранения выполняет выбранную команду
     private bool IsVideoExportButtonInput(object? source) =>

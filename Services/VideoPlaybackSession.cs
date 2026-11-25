@@ -1,5 +1,4 @@
 using System;
-using System.Globalization;
 using Avalonia;
 using Avalonia.Media.Imaging;
 using ImageVisionApp.Models;
@@ -21,7 +20,7 @@ internal sealed class VideoPlaybackSession : IDisposable {
     internal long PreviewBufferBytes => frames.PreviewBufferBytes;
 
     // загружает библиотеку из сборки и соединяет декодер с предпросмотром
-    public VideoPlaybackSession(string sourcePath, PixelSize visibleSize, long startPosition = 0) {
+    public VideoPlaybackSession(string sourcePath, PixelSize visibleSize) {
         frames = new VideoPlaybackFrames(visibleSize);
         Core.Initialize();
         engine = new LibVLC("--ignore-config", "--no-video-title-show", "--no-sub-autodetect-file", "--avcodec-hw=none");
@@ -29,9 +28,6 @@ internal sealed class VideoPlaybackSession : IDisposable {
             source = new Media(engine, sourcePath, FromType.FromPath);
             try {
                 source.AddOption(":start-paused");
-                if (startPosition > 0) {
-                    source.AddOption(":start-time=" + (startPosition / 1000m).ToString(CultureInfo.InvariantCulture));
-                }
                 player = new MediaPlayer(engine);
                 try {
                     player.SetVideoFormatCallbacks(frames.Configure, frames.Release);
@@ -109,9 +105,6 @@ internal sealed class VideoPlaybackSession : IDisposable {
 
     // переносит последний готовый кадр в переиспользуемое Avalonia-изображение
     public bool CopyFrame(ref WriteableBitmap? bitmap, ref long revision) => frames.CopyTo(ref bitmap, ref revision);
-
-    // отдаем копию одного кадра, пригодную для фонового распознавания
-    internal VideoEditorFrame? CaptureFrame(ref long revision) => frames.Capture(ref revision);
 
     // освобождает источник только после завершения нативных callback
     public void Dispose() {

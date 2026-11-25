@@ -104,6 +104,7 @@ public partial class MainWindow : Window {
         }
 
         histogramViewModel = DataContext as MainViewModel;
+        facesPage?.UseMedia(histogramViewModel);
 
         if (histogramViewModel is not null) {
             histogramViewModel.PropertyChanged += HistogramViewModel_OnPropertyChanged;
@@ -167,7 +168,6 @@ public partial class MainWindow : Window {
         // верх панель выбора картинки
         Button openButton = new Button { Content = "Открыть файл" };
         openButton.Click += OpenMediaButton_OnClick;
-        documentOpenControl = openButton;
 
         TextBlock fileName = CreateBoundText(viewModel => viewModel.CurrentDocument!.FileName);
         fileName.TextTrimming = TextTrimming.CharacterEllipsis;
@@ -181,7 +181,6 @@ public partial class MainWindow : Window {
             VerticalAlignment = VerticalAlignment.Center,
             Children = { fileName, statusText }
         };
-        documentStatusControl = fileStatus;
 
         Grid toolbarContent = new Grid {
             ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),

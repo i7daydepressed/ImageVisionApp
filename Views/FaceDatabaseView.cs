@@ -23,7 +23,9 @@ internal sealed partial class FaceDatabaseView : UserControl {
     private static readonly FontFamily VectorFont = new("Menlo, monospace");
     private readonly Window owner;
     private readonly FaceRecognitionView recognition;
-    private readonly TabControl faceTabs;
+    private readonly Grid databaseSection;
+    private readonly Button openDatabase = new() { Content = "База лиц" };
+    private readonly Button backToRecognition = new() { Content = "К распознаванию" };
     private readonly ListBox profiles = new();
     private readonly ListBox photos = new();
     private readonly ListBox savedSamples = new();
@@ -65,8 +67,7 @@ internal sealed partial class FaceDatabaseView : UserControl {
     private bool leaveDialogOpen;
     private bool facesActive;
     private bool facesClosing;
-    private bool restoringSection;
-    private int section;
+    private MainViewModel? media;
     private ProfileRow? SelectedProfileRow => (profiles.SelectedItem as ListBoxItem)?.Tag as ProfileRow;
     private FaceProfile? SelectedProfile => SelectedProfileRow?.Profile;
     private FaceImportItem? SelectedPhoto => (photos.SelectedItem as ListBoxItem)?.Tag as FaceImportItem;
@@ -76,11 +77,13 @@ internal sealed partial class FaceDatabaseView : UserControl {
     private bool LeaveBlocked => page is { IsSaving: true } or { IsWriting: true };
     public bool NeedsLeaveDecision => LeaveBlocked || HasDraftChanges;
     public bool HasRecognitionWork => recognition.HasWork;
+    public bool ShowsDatabase { get; private set; }
+    public event Action? SectionChanged;
 
     // собираем независимые контролы лица, данные загружаются только при входе
     public FaceDatabaseView(Window owner) {
         this.owner = owner;
-        recognition = new FaceRecognitionView(owner);
+        recognition = new FaceRecognitionView(openDatabase);
         AutomationProperties.SetName(name, "Имя профиля");
         AutomationProperties.SetName(profiles, "Профили");
         AutomationProperties.SetName(photos, "Файлы импорта");
@@ -91,15 +94,17 @@ internal sealed partial class FaceDatabaseView : UserControl {
         ScrollViewer.SetHorizontalScrollBarVisibility(profiles, ScrollBarVisibility.Disabled);
         ScrollViewer.SetHorizontalScrollBarVisibility(photos, ScrollBarVisibility.Disabled);
 
-        faceTabs = new TabControl {
-            Items = {
-                new TabItem { Header = "База лиц", FontSize = 16, Content = CreateDatabaseLayout() },
-                new TabItem { Header = "Распознавание", FontSize = 16, Content = recognition }
-            },
-            SelectedIndex = 0
+        backToRecognition.HorizontalAlignment = HorizontalAlignment.Right;
+        backToRecognition.Margin = new Thickness(12, 12, 12, 0);
+        Grid catalogue = CreateDatabaseLayout();
+        Grid.SetRow(catalogue, 1);
+        databaseSection = new Grid {
+            RowDefinitions = new RowDefinitions("Auto,*"), Children = { backToRecognition, catalogue },
+            IsVisible = false
         };
-        Content = faceTabs;
-        faceTabs.SelectionChanged += ChangeSection;
+        Content = new Grid { Children = { recognition, databaseSection } };
+        openDatabase.Click += (_, _) => ShowDatabase();
+        backToRecognition.Click += async (_, _) => await ReturnToRecognitionAsync();
         profiles.SelectionChanged += (_, _) => {
             if (!changingSelection && draft is null) {
                 ShowSelectedProfile();
@@ -132,13 +137,19 @@ internal sealed partial class FaceDatabaseView : UserControl {
         ShowSelectedProfile();
     }
 
-    // при возвращении включаем только сохраненную вкладку раздела
+    // подключаем то же окно документа, которое управляет общим транспортом
+    public void UseMedia(MainViewModel? model) {
+        media = model;
+        recognition.UseModel(model);
+    }
+
+    // при возвращении включаем только сохраненный раздел
     public void Activate() {
         if (facesActive || facesClosing) {
             return;
         }
         facesActive = true;
-        if (section == 0) {
+        if (ShowsDatabase) {
             ActivateDatabase();
         }
         else {
@@ -161,47 +172,35 @@ internal sealed partial class FaceDatabaseView : UserControl {
         return recognition.StopAsync();
     }
 
-    // внутренний переход соблюдает то же подтверждение черновика, что и выход из «Лиц»
-    private async void ChangeSection(object? sender, SelectionChangedEventArgs args) {
-        if (!ReferenceEquals(args.Source, faceTabs) || restoringSection ||
-            faceTabs.SelectedIndex is < 0 or > 1 || faceTabs.SelectedIndex == section) {
+    // ставим на паузу общий плеер, а отдельный импорт продолжаем только в базе
+    private void ShowDatabase() {
+        if (!facesActive || facesClosing || ShowsDatabase) {
             return;
         }
-        if (facesClosing) {
-            SetSection(section);
-            return;
-        }
-        int selected = faceTabs.SelectedIndex;
-        if (facesActive && section == 0) {
-            if (NeedsLeaveDecision) {
-                SetSection(0);
-            }
-            if (!await ConfirmLeaveAsync() || !facesActive) {
-                return;
-            }
-            DeactivateDatabase();
-        }
-        else {
-            recognition.Deactivate();
-        }
-
-        section = selected;
-        SetSection(section);
-        if (facesActive) {
-            if (section == 0) {
-                ActivateDatabase();
-            }
-            else {
-                recognition.Activate();
-            }
-        }
+        media?.PauseVideoPlayback();
+        recognition.Deactivate();
+        SetSection(database: true);
+        ActivateDatabase();
+        backToRecognition.Focus();
     }
 
-    // восстанавливаем вкладку без повторного запроса перехода
-    private void SetSection(int index) {
-        restoringSection = true;
-        faceTabs.SelectedIndex = index;
-        restoringSection = false;
+    // после подтверждения снова смотрим общую позицию и перечитываем каталог для распознавания
+    private async Task ReturnToRecognitionAsync() {
+        if (!facesActive || facesClosing || !ShowsDatabase || !await ConfirmLeaveAsync() || !facesActive || facesClosing) {
+            return;
+        }
+        DeactivateDatabase();
+        SetSection(database: false);
+        recognition.Activate();
+        openDatabase.Focus();
+    }
+
+    // скрываем один раздел целиком, чтобы его клавиши и контролы не принимали ввод
+    private void SetSection(bool database) {
+        ShowsDatabase = database;
+        recognition.IsVisible = !database;
+        databaseSection.IsVisible = database;
+        SectionChanged?.Invoke();
     }
 
     // перечитываем базу при входе, дождавшись начатой записи с прошлого посещения
