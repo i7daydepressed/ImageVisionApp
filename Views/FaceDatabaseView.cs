@@ -22,6 +22,8 @@ internal sealed partial class FaceDatabaseView : UserControl {
     private const int VectorColumns = 4;
     private static readonly FontFamily VectorFont = new("Menlo, monospace");
     private readonly Window owner;
+    private readonly FaceRecognitionView recognition;
+    private readonly TabControl faceTabs;
     private readonly ListBox profiles = new();
     private readonly ListBox photos = new();
     private readonly ListBox savedSamples = new();
@@ -61,6 +63,10 @@ internal sealed partial class FaceDatabaseView : UserControl {
     private FaceProfile? sampleProfile;
     private bool changingSelection;
     private bool leaveDialogOpen;
+    private bool facesActive;
+    private bool facesClosing;
+    private bool restoringSection;
+    private int section;
     private ProfileRow? SelectedProfileRow => (profiles.SelectedItem as ListBoxItem)?.Tag as ProfileRow;
     private FaceProfile? SelectedProfile => SelectedProfileRow?.Profile;
     private FaceImportItem? SelectedPhoto => (photos.SelectedItem as ListBoxItem)?.Tag as FaceImportItem;
@@ -69,10 +75,12 @@ internal sealed partial class FaceDatabaseView : UserControl {
         (draft is null && SelectedProfile is { } profile && name.Text != profile.Name);
     private bool LeaveBlocked => page is { IsSaving: true } or { IsWriting: true };
     public bool NeedsLeaveDecision => LeaveBlocked || HasDraftChanges;
+    public bool HasRecognitionWork => recognition.HasWork;
 
     // собираем независимые контролы лица, данные загружаются только при входе
     public FaceDatabaseView(Window owner) {
         this.owner = owner;
+        recognition = new FaceRecognitionView(owner);
         AutomationProperties.SetName(name, "Имя профиля");
         AutomationProperties.SetName(profiles, "Профили");
         AutomationProperties.SetName(photos, "Файлы импорта");
@@ -83,13 +91,15 @@ internal sealed partial class FaceDatabaseView : UserControl {
         ScrollViewer.SetHorizontalScrollBarVisibility(profiles, ScrollBarVisibility.Disabled);
         ScrollViewer.SetHorizontalScrollBarVisibility(photos, ScrollBarVisibility.Disabled);
 
-        Content = new TabControl {
+        faceTabs = new TabControl {
             Items = {
                 new TabItem { Header = "База лиц", FontSize = 16, Content = CreateDatabaseLayout() },
-                new TabItem { Header = "Распознавание", FontSize = 16, IsEnabled = false }
+                new TabItem { Header = "Распознавание", FontSize = 16, Content = recognition }
             },
             SelectedIndex = 0
         };
+        Content = faceTabs;
+        faceTabs.SelectionChanged += ChangeSection;
         profiles.SelectionChanged += (_, _) => {
             if (!changingSelection && draft is null) {
                 ShowSelectedProfile();
@@ -122,8 +132,80 @@ internal sealed partial class FaceDatabaseView : UserControl {
         ShowSelectedProfile();
     }
 
-    // перечитываем базу при входе, дождавшись начатой записи с прошлого посещения
+    // при возвращении включаем только сохраненную вкладку раздела
     public void Activate() {
+        if (facesActive || facesClosing) {
+            return;
+        }
+        facesActive = true;
+        if (section == 0) {
+            ActivateDatabase();
+        }
+        else {
+            recognition.Activate();
+        }
+    }
+
+    // прекращаем работу обеих вкладок при уходе из раздела
+    public void Deactivate() {
+        facesActive = false;
+        recognition.Deactivate();
+        DeactivateDatabase();
+    }
+
+    // дожидаемся нативной работы распознавания перед выходом из приложения
+    public Task StopRecognitionAsync() {
+        facesClosing = true;
+        facesActive = false;
+        DeactivateDatabase();
+        return recognition.StopAsync();
+    }
+
+    // внутренний переход соблюдает то же подтверждение черновика, что и выход из «Лиц»
+    private async void ChangeSection(object? sender, SelectionChangedEventArgs args) {
+        if (!ReferenceEquals(args.Source, faceTabs) || restoringSection ||
+            faceTabs.SelectedIndex is < 0 or > 1 || faceTabs.SelectedIndex == section) {
+            return;
+        }
+        if (facesClosing) {
+            SetSection(section);
+            return;
+        }
+        int selected = faceTabs.SelectedIndex;
+        if (facesActive && section == 0) {
+            if (NeedsLeaveDecision) {
+                SetSection(0);
+            }
+            if (!await ConfirmLeaveAsync() || !facesActive) {
+                return;
+            }
+            DeactivateDatabase();
+        }
+        else {
+            recognition.Deactivate();
+        }
+
+        section = selected;
+        SetSection(section);
+        if (facesActive) {
+            if (section == 0) {
+                ActivateDatabase();
+            }
+            else {
+                recognition.Activate();
+            }
+        }
+    }
+
+    // восстанавливаем вкладку без повторного запроса перехода
+    private void SetSection(int index) {
+        restoringSection = true;
+        faceTabs.SelectedIndex = index;
+        restoringSection = false;
+    }
+
+    // перечитываем базу при входе, дождавшись начатой записи с прошлого посещения
+    private void ActivateDatabase() {
         if (page is not null) {
             return;
         }
@@ -146,7 +228,7 @@ internal sealed partial class FaceDatabaseView : UserControl {
     }
 
     // отсекаем результаты прежней страницы, модель освобождается после ее последней работы
-    public void Deactivate() {
+    private void DeactivateDatabase() {
         PageSession? leaving = page;
         if (leaving is null) {
             return;

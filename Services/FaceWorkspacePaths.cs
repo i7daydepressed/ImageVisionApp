@@ -27,14 +27,14 @@ internal sealed record FaceWorkspacePaths(string CheckoutRoot) {
         throw new InvalidOperationException($"Не найдена рабочая копия ImageVisionApp. Укажите ее абсолютный путь через {RootVariable}.");
     }
 
-    // загружаем модели только для фотоимпорта и показываем ожидаемые пути при ошибке
+    // загружаем общие модели лиц и показываем ожидаемые пути при ошибке
     public FacePipelineService CreatePipeline() {
         try {
             return new FacePipelineService(Path.Combine(ModelsDirectory, YuNetFileName), Path.Combine(ModelsDirectory, SFaceFileName));
         }
         catch (Exception error) {
             throw new InvalidOperationException(
-                $"Модели для фото недоступны. Ожидаются {YuNetFileName} и {SFaceFileName} в папке {ModelsDirectory}.{Environment.NewLine}{error.Message}",
+                $"Модели лиц недоступны. Ожидаются {YuNetFileName} и {SFaceFileName} в папке {ModelsDirectory}.{Environment.NewLine}{error.Message}",
                 error);
         }
     }

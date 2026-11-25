@@ -20,6 +20,7 @@ public partial class MainWindow {
     private Control? documentStatusControl;
     private Control? documentSettingsControl;
     private bool facesCloseConfirmed;
+    private bool facesClosePending;
     private bool IsFacesPageVisible => facesPage is not null && ReferenceEquals(pageHost.Content, facesPage);
 
     private readonly ToggleButton informationPageButton = new ToggleButton {
@@ -149,15 +150,33 @@ public partial class MainWindow {
     private bool IsFacesNavigationInput(object? source) =>
         source is Avalonia.Visual visual && visual.GetSelfAndVisualAncestors().Contains(facesPageButton);
 
-    // откладываем обычное закрытие окна до явного решения или завершения записи базы
+    // откладываем закрытие до решения по черновику и освобождения распознавания
     private async void ConfirmFacesClose(object? sender, WindowClosingEventArgs args) {
-        if (facesCloseConfirmed || !IsFacesPageVisible || facesPage?.NeedsLeaveDecision != true) {
+        if (facesCloseConfirmed || facesPage is not { } faces) {
+            return;
+        }
+        bool decision = IsFacesPageVisible && faces.NeedsLeaveDecision;
+        if (!decision && !faces.HasRecognitionWork && !facesClosePending) {
             return;
         }
         args.Cancel = true;
-        if (await facesPage.ConfirmLeaveAsync() && !mediaWindowClosed) {
+        if (facesClosePending) {
+            return;
+        }
+        facesClosePending = true;
+        try {
+            if (decision && !await faces.ConfirmLeaveAsync()) {
+                return;
+            }
+            await faces.StopRecognitionAsync();
+            await Task.Yield();
             facesCloseConfirmed = true;
-            Close();
+            if (!mediaWindowClosed) {
+                Close();
+            }
+        }
+        finally {
+            facesClosePending = false;
         }
     }
 }

@@ -121,6 +121,23 @@ internal sealed class VideoPlaybackFrames : IDisposable {
         }
     }
 
+    // копируем плотные пиксели и номер одной ревизии, пока декодер не сменил кадр
+    internal VideoEditorFrame? Capture(ref long revisionSeen) {
+        lock (frameLock) {
+            if (!hasFrame || revision == revisionSeen) {
+                return null;
+            }
+            int rowBytes = checked(width * 4);
+            byte[] copy = new byte[checked(rowBytes * height)];
+            for (int row = 0; row < height; row++) {
+                Buffer.BlockCopy(pixels, row * stride, copy, row * rowBytes, rowBytes);
+            }
+            VideoEditorFrame frame = VideoEditorFrame.TakeBgra(new PixelSize(width, height), copy);
+            revisionSeen = revision;
+            return frame;
+        }
+    }
+
     // освобождает пулы вывода, когда декодер прекращает использовать данный формат
     public void Release(ref IntPtr opaque) {
         lock (frameLock) {
