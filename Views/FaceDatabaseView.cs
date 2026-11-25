@@ -42,7 +42,9 @@ internal sealed partial class FaceDatabaseView : UserControl {
     private readonly Button cancel = new() { Content = "Отменить черновик" };
     private readonly Button removePhoto = new() { Content = "Убрать фото" };
     private readonly ComboBox faces = new() { MinWidth = 100 };
-    private readonly TextBlock profileTitle = new() { FontSize = 18, FontWeight = FontWeight.SemiBold };
+    private readonly TextBlock profileTitle = new() { FontSize = 18, FontWeight = FontWeight.SemiBold,
+        VerticalAlignment = VerticalAlignment.Center };
+    private readonly ContentControl selectedProfileAvatar = new();
     private readonly TextBlock savedCount = new() { VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock toSave = new() { TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap };
@@ -51,7 +53,7 @@ internal sealed partial class FaceDatabaseView : UserControl {
         HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private readonly FaceImportPreview preview = new() { ClipToBounds = true };
     private Grid? importControls;
-    private Grid? savedSampleControls;
+    private TabControl? savedSampleControls;
 
     private PageSession? page;
     private Task pendingWrite = Task.CompletedTask;
@@ -59,7 +61,8 @@ internal sealed partial class FaceDatabaseView : UserControl {
     private FaceProfile? sampleProfile;
     private bool changingSelection;
     private bool leaveDialogOpen;
-    private FaceProfile? SelectedProfile => (profiles.SelectedItem as ListBoxItem)?.Tag as FaceProfile;
+    private ProfileRow? SelectedProfileRow => (profiles.SelectedItem as ListBoxItem)?.Tag as ProfileRow;
+    private FaceProfile? SelectedProfile => SelectedProfileRow?.Profile;
     private FaceImportItem? SelectedPhoto => (photos.SelectedItem as ListBoxItem)?.Tag as FaceImportItem;
     private bool HasDraftChanges => page?.IsImporting == true || draft?.Photos.Count > 0 ||
         (draft is { ProfileId: null } && !string.IsNullOrWhiteSpace(name.Text)) ||
@@ -92,11 +95,8 @@ internal sealed partial class FaceDatabaseView : UserControl {
                 ShowSelectedProfile();
             }
         };
-        savedSamples.SelectionChanged += (_, _) => {
-            if (!changingSelection) {
-                ShowSelectedVector();
-            }
-        };
+        savedSamples.SelectionChanged += (_, _) => SelectSample(savedSamples.SelectedIndex);
+        comparisonAnchor.SelectionChanged += (_, _) => SelectSample(comparisonAnchor.SelectedIndex);
         photos.SelectionChanged += (_, _) => {
             if (!changingSelection) {
                 ShowSelectedPhoto();
@@ -497,9 +497,10 @@ internal sealed partial class FaceDatabaseView : UserControl {
 
     // обновляем имя и сохраненные образцы из одного выбранного профиля
     private void ShowSelectedProfile() {
-        FaceProfile? selected = SelectedProfile;
-        name.Text = selected?.Name ?? "";
-        ShowSavedSamples(selected);
+        ProfileRow? selected = SelectedProfileRow;
+        selectedProfileAvatar.Content = selected is null ? null : new FaceProfileAvatar(selected.Avatar);
+        name.Text = selected?.Profile.Name ?? "";
+        ShowSavedSamples(selected?.Profile);
         UpdateControls();
     }
 
@@ -511,15 +512,37 @@ internal sealed partial class FaceDatabaseView : UserControl {
         int index = sampleProfile?.Id == profile?.Id ? savedSamples.SelectedIndex : 0;
         sampleProfile = profile;
         int count = profile?.Samples.Count ?? 0;
+        string[] labels = Enumerable.Range(1, count).Select(number => $"Образец {number}").ToArray();
+        int selectedIndex = count == 0 ? -1 : Math.Clamp(index, 0, count - 1);
         changingSelection = true;
         try {
-            savedSamples.ItemsSource = Enumerable.Range(1, count).Select(number => $"Образец {number}").ToArray();
-            savedSamples.SelectedIndex = count == 0 ? -1 : Math.Clamp(index, 0, count - 1);
+            savedSamples.ItemsSource = labels;
+            comparisonAnchor.ItemsSource = labels;
+            savedSamples.SelectedIndex = selectedIndex;
+            comparisonAnchor.SelectedIndex = selectedIndex;
         }
         finally {
             changingSelection = false;
         }
         ShowSelectedVector();
+        ShowComparison();
+    }
+
+    // синхронизируем исходный образец между вкладками, пропуская ответное событие выбора
+    private void SelectSample(int index) {
+        if (changingSelection || index < 0) {
+            return;
+        }
+        changingSelection = true;
+        try {
+            savedSamples.SelectedIndex = index;
+            comparisonAnchor.SelectedIndex = index;
+        }
+        finally {
+            changingSelection = false;
+        }
+        ShowSelectedVector();
+        ShowComparison();
     }
 
     // показываем исходный порядок и все значащие цифры сохраненных float
@@ -604,6 +627,7 @@ internal sealed partial class FaceDatabaseView : UserControl {
 
         profileTitle.Text = editing ? (createMode ? "Новый профиль" : "Добавить образцы") :
             (selected ? "Профиль" : "Выберите или создайте профиль");
+        selectedProfileAvatar.IsVisible = ready && selected;
         profiles.IsEnabled = ready && idle && !editing;
         create.IsEnabled = ready && idle && !editing;
         name.IsVisible = showEditor;
@@ -638,6 +662,8 @@ internal sealed partial class FaceDatabaseView : UserControl {
         status.IsVisible = !string.IsNullOrEmpty(status.Text);
         catalogueStatus.IsVisible = !string.IsNullOrEmpty(catalogueStatus.Text);
     }
+
+    private sealed record ProfileRow(FaceProfile Profile, FaceProfileAvatarPattern? Avatar);
 
     private sealed class PageSession {
         public FaceWorkspacePaths? Paths { get; set; }

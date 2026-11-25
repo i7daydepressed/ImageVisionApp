@@ -34,7 +34,8 @@ internal sealed partial class FaceDatabaseView {
     // держим строку имени и команды рядом, свободную высоту отдаем фото и рамкам
     private Grid CreateProfileEditor() {
         Grid header = new() { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 10 };
-        header.Children.Add(profileTitle);
+        header.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8,
+            Children = { selectedProfileAvatar, profileTitle } });
         Grid.SetColumn(savedCount, 1);
         header.Children.Add(savedCount);
         Grid nameRow = new() { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), ColumnSpacing = 8 };
@@ -45,7 +46,18 @@ internal sealed partial class FaceDatabaseView {
         nameRow.Children.Add(delete);
 
         importControls = CreateImportArea();
-        savedSampleControls = CreateSavedSampleArea();
+        savedSampleControls = new TabControl {
+            Items = {
+                new TabItem { Header = "Образцы", FontSize = 16, Content = CreateSavedSampleArea() },
+                new TabItem { Header = "Сравнение образцов", FontSize = 16, Content = CreateComparisonArea() }
+            },
+            SelectedIndex = 0
+        };
+        savedSampleControls.SelectionChanged += (_, args) => {
+            if (ReferenceEquals(args.Source, savedSampleControls)) {
+                ShowComparison();
+            }
+        };
         StackPanel actions = new() { Spacing = 4, Children = {
             new WrapPanel { ItemSpacing = 8, LineSpacing = 4, Children = { add, save, cancel } }, toSave
         }};
@@ -137,5 +149,5 @@ internal sealed partial class FaceDatabaseView {
 
     // добавляем значок к строке профиля, доступное имя остается текстовым
     private static ListBoxItem CreateProfileRow(FaceProfile profile, FaceProfileAvatarPattern? avatar) =>
-        CreateRow(profile.Name, $"Образцов: {profile.Samples.Count}", profile, new FaceProfileAvatar(avatar));
+        CreateRow(profile.Name, $"Образцов: {profile.Samples.Count}", new ProfileRow(profile, avatar), new FaceProfileAvatar(avatar));
 }
