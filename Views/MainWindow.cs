@@ -33,10 +33,12 @@ public partial class MainWindow : Window {
         MinHeight = 600;
         Content = CreateLayout();
         DataContextChanged += MainWindow_OnDataContextChanged;
+        Closing += ConfirmFacesClose;
         Closed += (_, _) => {
             mediaWindowClosed = true;
             videoExportStop?.Cancel();
             DisposeComparisonView();
+            facesPage?.Deactivate();
             if (DataContext is MainViewModel viewModel) {
                 viewModel.DisposeAnalysis();
                 viewModel.DisposeMediaPreviews();
@@ -165,6 +167,7 @@ public partial class MainWindow : Window {
         // верх панель выбора картинки
         Button openButton = new Button { Content = "Открыть файл" };
         openButton.Click += OpenMediaButton_OnClick;
+        documentOpenControl = openButton;
 
         TextBlock fileName = CreateBoundText(viewModel => viewModel.CurrentDocument!.FileName);
         fileName.TextTrimming = TextTrimming.CharacterEllipsis;
@@ -178,6 +181,7 @@ public partial class MainWindow : Window {
             VerticalAlignment = VerticalAlignment.Center,
             Children = { fileName, statusText }
         };
+        documentStatusControl = fileStatus;
 
         Grid toolbarContent = new Grid {
             ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),

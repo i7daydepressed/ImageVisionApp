@@ -37,7 +37,7 @@ internal sealed class FaceProfileStore {
         }
 
         this.checkoutRoot = Path.GetFullPath(checkoutRoot);
-        if (!HasCheckoutMarkers()) {
+        if (!IsCheckoutRoot(this.checkoutRoot)) {
             throw new ArgumentException("В рабочей копии ImageVisionApp должны быть ImageVisionApp.csproj и .git.", nameof(checkoutRoot));
         }
 
@@ -110,7 +110,7 @@ internal sealed class FaceProfileStore {
 
     // проверяем рабочую копию и прямые пути перед чтением или созданием папки
     private void CheckStoragePaths() {
-        if (!HasCheckoutMarkers()) {
+        if (!IsCheckoutRoot(checkoutRoot)) {
             throw new IOException("Рабочая копия ImageVisionApp недоступна или в ней нет маркеров проекта.");
         }
         CheckStorageEntry(new DirectoryInfo(directory), isDirectory: true);
@@ -119,9 +119,9 @@ internal sealed class FaceProfileStore {
     }
 
     // принимаем и обычный .git, и файл-ссылку Git на отдельный каталог метаданных
-    private bool HasCheckoutMarkers() {
-        string git = Path.Combine(checkoutRoot, ".git");
-        return File.Exists(Path.Combine(checkoutRoot, "ImageVisionApp.csproj")) &&
+    internal static bool IsCheckoutRoot(string root) {
+        string git = Path.Combine(root, ".git");
+        return File.Exists(Path.Combine(root, "ImageVisionApp.csproj")) &&
             (Directory.Exists(git) || File.Exists(git));
     }
 

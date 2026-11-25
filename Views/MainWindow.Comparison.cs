@@ -83,7 +83,7 @@ public partial class MainWindow {
     private void UpdateAnalysisSection() {
         (DataContext as MainViewModel)?.SetVideoAnalysisVisible(IsAnalysisMethodsVisible);
         if (videoPlaybackHost is not null) {
-            videoPlaybackHost.IsVisible = !IsComparisonPageVisible;
+            videoPlaybackHost.IsVisible = !IsComparisonPageVisible && !IsFacesPageVisible;
         }
     }
 

@@ -63,6 +63,7 @@ artifacts/
 
 # Локальная база лиц
 /face-data/
+/face-models/
 
 /docs/*
 !/docs/v0.4.0/
