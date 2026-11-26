@@ -5,7 +5,7 @@ using ImageVisionApp.Models;
 
 namespace ImageVisionApp.ViewModels;
 
-internal readonly record struct FaceImportSelection(FaceDetectionResult Detection, int Index);
+internal readonly record struct FaceImportSelection(FaceDetectionResult Detection, int Index, string? Name);
 
 internal sealed class FaceImportItem {
     public string FileName { get; }
@@ -13,6 +13,7 @@ internal sealed class FaceImportItem {
     public byte[]? PreviewPng { get; }
     public string? Error { get; }
     public int? SelectedIndex { get; private set; }
+    public string? SampleName { get; set; }
     public bool NeedsSelection => Detection is { Faces.Count: > 1 } && SelectedIndex is null;
 
     public string Status => Error is not null ? Error : SelectedIndex is int index
@@ -52,6 +53,6 @@ internal sealed class FaceProfileDraft {
             throw new InvalidOperationException("Выберите лицо на каждом групповом фото или уберите это фото.");
         }
         return Photos.Where(photo => photo.SelectedIndex.HasValue)
-            .Select(photo => new FaceImportSelection(photo.Detection!, photo.SelectedIndex!.Value)).ToArray();
+            .Select(photo => new FaceImportSelection(photo.Detection!, photo.SelectedIndex!.Value, photo.SampleName)).ToArray();
     }
 }

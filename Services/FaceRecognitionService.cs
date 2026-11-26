@@ -45,9 +45,9 @@ internal sealed class FaceRecognitionService(FacePipelineService pipeline, IRead
         double nextScore = double.NegativeInfinity;
         foreach (FaceProfile profile in catalogue) {
             double score = double.NegativeInfinity;
-            foreach (IReadOnlyList<float> sample in profile.Samples) {
+            foreach (FaceProfileSample sample in profile.Samples) {
                 token.ThrowIfCancellationRequested();
-                score = Math.Max(score, Cosine(embedding.Values, sample));
+                score = Math.Max(score, Cosine(embedding.Values, sample.Values));
             }
             if (score > bestScore) {
                 best = profile;

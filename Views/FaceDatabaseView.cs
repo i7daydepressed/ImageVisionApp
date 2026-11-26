@@ -45,6 +45,12 @@ internal sealed partial class FaceDatabaseView : UserControl {
     private readonly Button save = new() { Content = "Сохранить" };
     private readonly Button cancel = new() { Content = "Отменить черновик" };
     private readonly Button removePhoto = new() { Content = "Убрать фото" };
+    private readonly TextBox importSampleName = new() { PlaceholderText = "Имя образца (необязательно)" };
+    private readonly Button renameSavedSample = new() { Content = "Переименовать образец" };
+    private readonly Button removeSavedSample = new() { Content = "Удалить образец" };
+    private readonly TextBlock lastSampleHint = new() {
+        Text = "Последний образец можно удалить вместе с профилем.", TextWrapping = TextWrapping.Wrap
+    };
     private readonly ComboBox faces = new() { MinWidth = 100 };
     private readonly TextBlock profileTitle = new() { FontSize = 18, FontWeight = FontWeight.SemiBold,
         VerticalAlignment = VerticalAlignment.Center };
@@ -71,6 +77,8 @@ internal sealed partial class FaceDatabaseView : UserControl {
     private ProfileRow? SelectedProfileRow => (profiles.SelectedItem as ListBoxItem)?.Tag as ProfileRow;
     private FaceProfile? SelectedProfile => SelectedProfileRow?.Profile;
     private FaceImportItem? SelectedPhoto => (photos.SelectedItem as ListBoxItem)?.Tag as FaceImportItem;
+    private FaceProfileSample? SelectedSample => sampleProfile is { } profile &&
+        (uint)savedSamples.SelectedIndex < (uint)profile.Samples.Count ? profile.Samples[savedSamples.SelectedIndex] : null;
     private bool HasDraftChanges => page?.IsImporting == true || draft?.Photos.Count > 0 ||
         (draft is { ProfileId: null } && !string.IsNullOrWhiteSpace(name.Text)) ||
         (draft is null && SelectedProfile is { } profile && name.Text != profile.Name);
@@ -88,6 +96,7 @@ internal sealed partial class FaceDatabaseView : UserControl {
         AutomationProperties.SetName(profiles, "Профили");
         AutomationProperties.SetName(photos, "Файлы импорта");
         AutomationProperties.SetName(savedSamples, "Образцы");
+        AutomationProperties.SetName(importSampleName, "Имя образца при импорте");
         AutomationProperties.SetName(vectorScroll, "Компоненты вектора образца");
         AutomationProperties.SetName(faces, "Номер лица");
         AutomationProperties.SetName(preview, "Предпросмотр фото с рамками");
@@ -115,6 +124,12 @@ internal sealed partial class FaceDatabaseView : UserControl {
                 ShowSelectedVector();
             }
         };
+        savedSamples.ContainerPrepared += (_, args) => {
+            if (args.Container is ListBoxItem { Content: string label } item) {
+                AutomationProperties.SetName(item, label);
+                ToolTip.SetTip(item, label);
+            }
+        };
         photos.SelectionChanged += (_, _) => {
             if (!changingSelection) {
                 ShowSelectedPhoto();
@@ -127,6 +142,12 @@ internal sealed partial class FaceDatabaseView : UserControl {
         };
         preview.FaceChosen += ChooseFace;
         name.TextChanged += (_, _) => UpdateControls();
+        importSampleName.PropertyChanged += (_, args) => {
+            if (args.Property == TextBox.TextProperty && !changingSelection &&
+                SelectedPhoto is { SelectedIndex: not null } photo) {
+                photo.SampleName = importSampleName.Text;
+            }
+        };
         create.Click += (_, _) => StartDraft(null);
         add.Click += async (_, _) => await PickPhotosAsync();
         removePhoto.Click += (_, _) => RemoveSelectedPhoto();
@@ -134,6 +155,8 @@ internal sealed partial class FaceDatabaseView : UserControl {
         cancel.Click += (_, _) => CancelDraft();
         rename.Click += async (_, _) => await RenameAsync();
         delete.Click += async (_, _) => await DeleteAsync();
+        renameSavedSample.Click += async (_, _) => await RenameSampleAsync();
+        removeSavedSample.Click += async (_, _) => await DeleteSampleAsync();
         ShowSelectedProfile();
     }
 
@@ -475,8 +498,9 @@ internal sealed partial class FaceDatabaseView : UserControl {
             active.IsSaving = true;
             status.Text = "Рассчитываем образцы…";
             UpdateControls();
-            FaceEmbedding[] embeddings = await Task.Run(() => chosen.Select(choice =>
-                active.Pipeline!.ExtractEmbedding(choice.Detection, choice.Index, token)).ToArray(), token);
+            FaceSampleInput[] embeddings = await Task.Run(() => chosen.Select(choice =>
+                new FaceSampleInput(active.Pipeline!.ExtractEmbedding(choice.Detection, choice.Index, token), choice.Name))
+                .ToArray(), token);
             if (!IsCurrent(active, token) || !ReferenceEquals(draft, target)) {
                 return;
             }
@@ -490,6 +514,44 @@ internal sealed partial class FaceDatabaseView : UserControl {
             RefreshPhotos();
             status.Text = $"Записано образцов: {embeddings.Length}.";
             await ReloadAfterWriteAsync(active, written.Id, token);
+        });
+    }
+
+    // записываем имя конкретного образца, а пустой ввод возвращает подпись по номеру
+    private Task RenameSampleAsync() {
+        if (draft is not null || SelectedProfile is not { } profile || SelectedSample is not { } sample) {
+            return Task.CompletedTask;
+        }
+        string? pendingProfileName = name.Text == profile.Name ? null : name.Text ?? "";
+        return RunWorkAsync("Не удалось переименовать образец.", async (active, token) => {
+            SampleNameEdit? edit = await AskSampleNameAsync(sample);
+            if (edit is null || edit.Name == sample.Name || !IsCurrent(active, token)) {
+                return;
+            }
+            FaceProfile saved = await CommitAsync(active, token, () => active.Store!.RenameSample(profile.Id, sample.Number, edit.Name));
+            if (IsCurrent(active, token)) {
+                status.Text = "Имя образца сохранено.";
+                await ReloadAfterWriteAsync(active, saved.Id, token, pendingProfileName);
+            }
+        });
+    }
+
+    // подтверждаем удаление конкретного номера и оставляем выбор ближайшему образцу
+    private Task DeleteSampleAsync() {
+        if (draft is not null || SelectedProfile is not { Samples.Count: > 1 } profile || SelectedSample is not { } sample) {
+            return Task.CompletedTask;
+        }
+        string? pendingProfileName = name.Text == profile.Name ? null : name.Text ?? "";
+        return RunWorkAsync("Не удалось удалить образец.", async (active, token) => {
+            if (!await ConfirmActionAsync("Удалить образец?", $"Удалить образец {SampleReference(sample)} из профиля «{profile.Name}»?",
+                "Отмена", "Удалить образец") || !IsCurrent(active, token)) {
+                return;
+            }
+            FaceProfile saved = await CommitAsync(active, token, () => active.Store!.DeleteSample(profile.Id, sample.Number));
+            if (IsCurrent(active, token)) {
+                status.Text = $"Образец №{sample.Number} удален.";
+                await ReloadAfterWriteAsync(active, saved.Id, token, pendingProfileName);
+            }
         });
     }
 
@@ -544,9 +606,13 @@ internal sealed partial class FaceDatabaseView : UserControl {
     }
 
     // отличаем записанное изменение от возможной ошибки повторного чтения
-    private async Task ReloadAfterWriteAsync(PageSession active, Guid? selected, CancellationToken token) {
+    private async Task ReloadAfterWriteAsync(PageSession active, Guid? selected, CancellationToken token,
+        string? pendingProfileName = null) {
         try {
             await ReloadProfilesAsync(active, selected, token);
+            if (pendingProfileName is not null && IsCurrent(active, token) && SelectedProfile?.Id == selected) {
+                name.Text = pendingProfileName;
+            }
         }
         catch (Exception error) when (IsCurrent(active, token)) {
             active.CatalogueLoaded = false;
@@ -555,6 +621,26 @@ internal sealed partial class FaceDatabaseView : UserControl {
             catalogueStatus.Text = "База лиц недоступна.";
             status.Text = $"Изменение сохранено. Не удалось перечитать базу лиц. {error.Message}";
         }
+    }
+
+    // отдельный диалог держит несохраненное имя только до явного решения пользователя
+    private Task<SampleNameEdit?> AskSampleNameAsync(FaceProfileSample sample) {
+        Window dialog = new() { Title = $"Переименовать образец №{sample.Number}", Width = 430, CanResize = false,
+            SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        TextBox input = new() { Text = sample.Name ?? "", PlaceholderText = "Имя образца (необязательно)" };
+        AutomationProperties.SetName(input, "Имя сохраненного образца");
+        Button cancelEdit = new() { Content = "Отмена", IsCancel = true };
+        Button saveEdit = new() { Content = "Сохранить имя", IsDefault = true };
+        cancelEdit.Click += (_, _) => dialog.Close();
+        saveEdit.Click += (_, _) => dialog.Close(new SampleNameEdit(FaceProfileStore.NormalizeSampleName(input.Text)));
+        dialog.Opened += (_, _) => input.Focus();
+        dialog.Content = new StackPanel { Margin = new Thickness(16), Spacing = 12, Children = {
+            input,
+            new TextBlock { Text = "Пустое имя возвращает подпись с номером.", TextWrapping = TextWrapping.Wrap },
+            new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right,
+                Spacing = 8, Children = { cancelEdit, saveEdit } }
+        }};
+        return dialog.ShowDialog<SampleNameEdit?>(owner);
     }
 
     // подтверждение относится к одному имени и числу сохраненных образцов
@@ -593,13 +679,13 @@ internal sealed partial class FaceDatabaseView : UserControl {
         if (ReferenceEquals(sampleProfile, profile)) {
             return;
         }
-        int index = sampleProfile?.Id == profile?.Id ? savedSamples.SelectedIndex : 0;
+        long? number = sampleProfile?.Id == profile?.Id ? SelectedSample?.Number : null;
         sampleProfile = profile;
         int count = profile?.Samples.Count ?? 0;
         changingSelection = true;
         try {
-            savedSamples.ItemsSource = Enumerable.Range(1, count).Select(number => $"Образец {number}").ToArray();
-            savedSamples.SelectedIndex = count == 0 ? -1 : Math.Clamp(index, 0, count - 1);
+            savedSamples.ItemsSource = profile?.Samples.Select(DescribeSample).ToArray();
+            savedSamples.SelectedIndex = count == 0 ? -1 : ClosestSampleIndex(profile!.Samples, number);
         }
         finally {
             changingSelection = false;
@@ -608,18 +694,39 @@ internal sealed partial class FaceDatabaseView : UserControl {
         ShowComparison();
     }
 
+    // при удалении выбираем ближайший номер, при равенстве предпочитаем следующий
+    private static int ClosestSampleIndex(IReadOnlyList<FaceProfileSample> samples, long? number) {
+        int index = 0;
+        if (number is long target) {
+            while (index + 1 < samples.Count &&
+                Math.Abs(samples[index + 1].Number - target) <= Math.Abs(samples[index].Number - target)) {
+                index++;
+            }
+        }
+        return index;
+    }
+
+    // даже одинаковые имена различимы по постоянному номеру в списке и подсказках
+    private static string DescribeSample(FaceProfileSample sample) =>
+        sample.Name is { } name ? $"№{sample.Number} · {name}" : sample.Label;
+
+    // подписываем число в ячейке или диалоге именем, когда оно задано
+    private static string SampleReference(FaceProfileSample sample) =>
+        sample.Name is { } name ? $"№{sample.Number} «{name}»" : $"№{sample.Number}";
+
     // показываем исходный порядок и все значащие цифры сохраненных float
     private void ShowSelectedVector() {
         vectorValues.Children.Clear();
         vectorValues.RowDefinitions.Clear();
         vectorScroll.Offset = default;
-        int index = savedSamples.SelectedIndex;
-        if (sampleProfile is not { } profile || (uint)index >= (uint)profile.Samples.Count) {
+        FaceProfileSample? sample = SelectedSample;
+        UpdateControls();
+        if (sample is null) {
             vectorTitle.Text = "Вектор образца";
             return;
         }
 
-        IReadOnlyList<float> values = profile.Samples[index];
+        IReadOnlyList<float> values = sample.Values;
         vectorTitle.Text = $"Вектор образца · {values.Count} компонент";
         for (int i = 0; i < values.Count; i++) {
             if (i % VectorColumns == 0) {
@@ -670,6 +777,7 @@ internal sealed partial class FaceDatabaseView : UserControl {
             int count = photo?.Detection?.Faces.Count ?? 0;
             faces.ItemsSource = Enumerable.Range(1, count).Select(index => $"Лицо {index}").ToArray();
             faces.SelectedIndex = photo?.SelectedIndex ?? -1;
+            importSampleName.Text = photo?.SampleName ?? "";
         }
         finally {
             changingSelection = false;
@@ -714,6 +822,11 @@ internal sealed partial class FaceDatabaseView : UserControl {
         if (savedSampleControls is not null) {
             savedSampleControls.IsVisible = ready && selected && idle;
         }
+        renameSavedSample.IsEnabled = ready && idle && selected && SelectedSample is not null;
+        removeSavedSample.IsEnabled = renameSavedSample.IsEnabled && profile?.Samples.Count > 1;
+        lastSampleHint.IsVisible = ready && selected && profile?.Samples.Count == 1;
+        importSampleName.IsVisible = editing && SelectedPhoto?.SelectedIndex is not null;
+        importSampleName.IsEnabled = idle && importSampleName.IsVisible;
         toSave.IsVisible = editing;
         toSave.Text = $"К сохранению: {draft?.AcceptedCount ?? 0}." +
             (draft?.HasUnselectedFace == true ? " Выберите лицо на групповом фото или уберите это фото." : "");
@@ -727,6 +840,7 @@ internal sealed partial class FaceDatabaseView : UserControl {
     }
 
     private sealed record ProfileRow(FaceProfile Profile, FaceProfileAvatarPattern? Avatar);
+    private sealed record SampleNameEdit(string? Name);
 
     private sealed class PageSession {
         public FaceWorkspacePaths? Paths { get; set; }

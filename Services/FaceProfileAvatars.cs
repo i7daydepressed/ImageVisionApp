@@ -28,7 +28,13 @@ internal static class FaceProfileAvatars {
         CancellationToken token, string? testKeyPath = null) {
 
         var patterns = new FaceProfileAvatarPattern?[profiles.Count];
-        if (patterns.Length == 0) {
+        bool needsKey = false;
+        for (int i = 0; i < patterns.Length; i++) {
+            token.ThrowIfCancellationRequested();
+            patterns[i] = profiles[i].StoredAvatar;
+            needsKey |= patterns[i] is null;
+        }
+        if (!needsKey) {
             return patterns;
         }
         token.ThrowIfCancellationRequested();
@@ -44,11 +50,30 @@ internal static class FaceProfileAvatars {
             for (int i = 0; i < patterns.Length; i++) {
                 token.ThrowIfCancellationRequested();
                 FaceProfile profile = profiles[i];
-                if (profile.Samples.Count != 0 && profile.Samples[0].Count == VectorSize) {
-                    patterns[i] = BuildPattern(key, profile.Id, profile.Samples[0]);
+                if (patterns[i] is null && profile.Samples.Count != 0 && profile.Samples[0].Values.Count == VectorSize) {
+                    patterns[i] = BuildPattern(key, profile.Id, profile.Samples[0].Values);
                 }
             }
             return patterns;
+        }
+        finally {
+            CryptographicOperations.ZeroMemory(key);
+        }
+    }
+
+    // сохраняем готовый узор прежнего первого вектора, пока он доступен в транзакции
+    internal static FaceProfileAvatarPattern Freeze(Guid profile, IReadOnlyList<float> first, string? testKeyPath) {
+        byte[] key;
+        try {
+            string path = testKeyPath ?? GetLocalKeyPath();
+            ValidateKeyPath(path);
+            key = ReadKey(path);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or SecurityException or InvalidDataException) {
+            throw new InvalidOperationException("Не удалось сохранить аватар перед удалением первого образца. Проверьте локальный ключ аватара.", error);
+        }
+        try {
+            return BuildPattern(key, profile, first);
         }
         finally {
             CryptographicOperations.ZeroMemory(key);
@@ -84,16 +109,22 @@ internal static class FaceProfileAvatars {
 
     // создаем ключ только при отсутствии файла, неверные данные оставляем на месте
     private static byte[] ReadOrCreateKey(string keyPath) {
-        if (!Path.IsPathFullyQualified(keyPath) || Path.GetDirectoryName(keyPath) is not string directory) {
-            throw new IOException("Для ключа аватара нужен абсолютный путь.");
-        }
-        CheckKeyDirectory(directory);
+        string directory = ValidateKeyPath(keyPath);
         try {
             return ReadKey(keyPath);
         }
         catch (IOException error) when (error is FileNotFoundException or DirectoryNotFoundException) {
             return CreateKey(keyPath, directory);
         }
+    }
+
+    // используем те же ограничения пути для показа и закрепления аватара
+    private static string ValidateKeyPath(string keyPath) {
+        if (!Path.IsPathFullyQualified(keyPath) || Path.GetDirectoryName(keyPath) is not string directory) {
+            throw new IOException("Для ключа аватара нужен абсолютный путь.");
+        }
+        CheckKeyDirectory(directory);
+        return directory;
     }
 
     // проверяем только папку ключа, ссылки и доступ на запись для других пользователей отклоняем

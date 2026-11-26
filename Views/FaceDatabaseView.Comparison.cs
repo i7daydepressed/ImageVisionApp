@@ -9,6 +9,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using ImageVisionApp.Models;
 
 namespace ImageVisionApp.Views;
 
@@ -142,10 +143,8 @@ internal sealed partial class FaceDatabaseView {
     }
 
     // подписываем координаты пары, а на пересечении одинаковых номеров ставим прочерк
-    private static Border CreateComparisonCell(IReadOnlyList<IReadOnlyList<float>> samples,
+    private static Border CreateComparisonCell(IReadOnlyList<FaceProfileSample> samples,
         int row, int column, int sourceRow, int sourceColumn) {
-        int rowNumber = sourceRow + 1;
-        int columnNumber = sourceColumn + 1;
         bool header = row == 0 || column == 0;
         string text;
         string description;
@@ -154,30 +153,38 @@ internal sealed partial class FaceDatabaseView {
             description = "Номера образцов";
         }
         else if (row == 0) {
-            text = columnNumber.ToString(CultureInfo.InvariantCulture);
-            description = $"Столбец, образец №{columnNumber}";
+            FaceProfileSample sample = samples[sourceColumn];
+            text = sample.Number.ToString(CultureInfo.InvariantCulture);
+            description = $"Столбец, образец {SampleReference(sample)}";
         }
         else if (column == 0) {
-            text = rowNumber.ToString(CultureInfo.InvariantCulture);
-            description = $"Строка, образец №{rowNumber}";
+            FaceProfileSample sample = samples[sourceRow];
+            text = sample.Number.ToString(CultureInfo.InvariantCulture);
+            description = $"Строка, образец {SampleReference(sample)}";
         }
         else if (sourceRow == sourceColumn) {
             text = "—";
-            description = $"Один и тот же образец №{rowNumber}";
+            description = $"Один и тот же образец {SampleReference(samples[sourceRow])}";
         }
         else {
-            text = SampleCosine(samples[sourceRow], samples[sourceColumn]).ToString("F2", ComparisonCulture);
+            text = SampleCosine(samples[sourceRow].Values, samples[sourceColumn].Values).ToString("F2", ComparisonCulture);
             if (text == ComparisonCulture.NumberFormat.NegativeSign + "0,00") {
                 text = "0,00";
             }
-            description = $"Строка №{rowNumber}, столбец №{columnNumber}, косинусное сходство {text}";
+            description = $"Строка {SampleReference(samples[sourceRow])}, " +
+                $"столбец {SampleReference(samples[sourceColumn])}, косинусное сходство {text}";
         }
         ComparisonCellLabel label = new() { Text = text, HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center, FontWeight = header ? FontWeight.SemiBold : FontWeight.Normal };
+            VerticalAlignment = VerticalAlignment.Center, FontWeight = header ? FontWeight.SemiBold : FontWeight.Normal,
+            TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = ComparisonCellWidth - 4 };
         AutomationProperties.SetName(label, description);
-        return new Border { BorderBrush = ComparisonLine,
+        Border cell = new() { BorderBrush = ComparisonLine,
             BorderThickness = new Thickness(column == 0 ? 1 : 0, row == 0 ? 1 : 0, 1, 1),
             Background = header ? ComparisonHeader : null, Child = label };
+        if (header && (row != 0 || column != 0)) {
+            ToolTip.SetTip(cell, description);
+        }
+        return cell;
     }
 
     // поддерживаем обе оси трекпада и горизонтальную прокрутку колесом с Shift

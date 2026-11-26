@@ -11,7 +11,8 @@ using Microsoft.Win32.SafeHandles;
 namespace ImageVisionApp.Services;
 
 internal sealed class FaceProfileStore {
-    private const int SchemaVersion = 1;
+    private const int LegacySchemaVersion = 1;
+    private const int SchemaVersion = 2;
     private const int EmbeddingLength = 128;
     private const double NormTolerance = 1e-6;
     private const int LockExclusive = 2;
@@ -52,12 +53,13 @@ internal sealed class FaceProfileStore {
         return Array.AsReadOnly(ReadDocument().Profiles.Select(ToSnapshot).ToArray());
     }
 
-    // создаем профиль с новым ID и уже скопированными образцами текущего конвейера
-    public FaceProfile Create(string name, IEnumerable<FaceEmbedding> samples) {
+    // создаем профиль с новым ID и назначаем номера всей проверенной пачке
+    public FaceProfile Create(string name, IEnumerable<FaceSampleInput> samples) {
         string normalizedName = NormalizeName(name);
-        List<float[]> values = CopySamples(samples);
+        List<SampleRecord> values = CopySamples(samples);
         return Change(profiles => {
-            var profile = new ProfileRecord(Guid.NewGuid(), normalizedName, values);
+            long next = NumberSamples(values, 1);
+            var profile = new ProfileRecord(Guid.NewGuid(), normalizedName, next, values, null);
             profiles.Add(profile);
             return profile;
         });
@@ -74,17 +76,47 @@ internal sealed class FaceProfileStore {
         });
     }
 
-    // проверяем всю входную пачку до записи и дополняем образцы одного ID
-    public FaceProfile AddSamples(Guid id, IEnumerable<FaceEmbedding> samples) {
-        List<float[]> additions = CopySamples(samples);
+    // берем следующий номер из актуальной записи под общей блокировкой
+    public FaceProfile AddSamples(Guid id, IEnumerable<FaceSampleInput> samples) {
+        List<SampleRecord> additions = CopySamples(samples);
         return Change(profiles => {
             int index = FindIndex(profiles, id);
             ProfileRecord current = profiles[index];
-            ProfileRecord updated = current with { Samples = [.. current.Samples, .. additions] };
+            long next = NumberSamples(additions, current.NextSampleNumber);
+            ProfileRecord updated = current with { NextSampleNumber = next, Samples = [.. current.Samples, .. additions] };
             profiles[index] = updated;
             return updated;
         });
     }
+
+    // меняем имя по постоянному ключу, сохраняя номер и весь вектор
+    public FaceProfile RenameSample(Guid id, long number, string? name) {
+        string? normalized = NormalizeSampleName(name);
+        return Change(profiles => {
+            ProfileRecord profile = profiles[FindIndex(profiles, id)];
+            int index = FindSampleIndex(profile, number);
+            profile.Samples[index] = profile.Samples[index] with { Name = normalized };
+            return profile;
+        });
+    }
+
+    // сохраняем рисунок до удаления первого вектора в той же записи
+    public FaceProfile DeleteSample(Guid id, long number, string? testAvatarKeyPath = null) => Change(profiles => {
+        int profileIndex = FindIndex(profiles, id);
+        ProfileRecord profile = profiles[profileIndex];
+        int index = FindSampleIndex(profile, number);
+        if (profile.Samples.Count == 1) {
+            throw new InvalidOperationException("Последний образец можно удалить вместе с профилем.");
+        }
+        if (index == 0 && profile.Avatar is null) {
+            FaceProfileAvatarPattern pattern = FaceProfileAvatars.Freeze(id,
+                Array.AsReadOnly(profile.Samples[0].Values), testAvatarKeyPath);
+            profile = profile with { Avatar = new AvatarRecord(pattern.Bits, pattern.PaletteIndex) };
+            profiles[profileIndex] = profile;
+        }
+        profile.Samples.RemoveAt(index);
+        return profile;
+    });
 
     // удаляем запись по ID и возвращаем ее снимок после успешной замены файла
     public FaceProfile Delete(Guid id) => Change(profiles => {
@@ -182,8 +214,18 @@ internal sealed class FaceProfileStore {
         using (stream) {
             ProfileDocument document;
             try {
-                document = JsonSerializer.Deserialize<ProfileDocument>(stream, JsonOptions)
-                    ?? throw new InvalidDataException("В файле базы профилей отсутствуют данные.");
+                using JsonDocument json = JsonDocument.Parse(stream);
+                JsonElement root = json.RootElement;
+                if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("version", out JsonElement version) ||
+                    version.ValueKind != JsonValueKind.Number || !version.TryGetInt32(out int number)) {
+                    throw new InvalidDataException("В базе лиц не указана корректная версия схемы.");
+                }
+                document = number switch {
+                    LegacySchemaVersion => ReadLegacy(root),
+                    SchemaVersion => root.Deserialize<ProfileDocument>(JsonOptions)
+                        ?? throw new InvalidDataException("В файле базы профилей отсутствуют данные."),
+                    _ => throw new InvalidDataException($"Неподдерживаемая версия схемы базы лиц: {number}.")
+                };
             }
             catch (JsonException error) {
                 throw new InvalidDataException("Поврежден JSON базы профилей лиц.", error);
@@ -191,6 +233,24 @@ internal sealed class FaceProfileStore {
             ValidateDocument(document);
             return document;
         }
+    }
+
+    // назначаем старым векторам номера только в памяти, без записи во время чтения
+    private static ProfileDocument ReadLegacy(JsonElement root) {
+        LegacyDocument? legacy = root.Deserialize<LegacyDocument>(JsonOptions);
+        if (legacy?.Profiles is null) {
+            throw new InvalidDataException("В базе лиц отсутствует список профилей.");
+        }
+        var profiles = new List<ProfileRecord>(legacy.Profiles.Count);
+        foreach (LegacyProfile profile in legacy.Profiles) {
+            if (profile?.Samples is null) {
+                throw new InvalidDataException("В базе лиц есть профиль без образцов.");
+            }
+            List<SampleRecord> samples = profile.Samples.Select((values, index) =>
+                new SampleRecord(index + 1L, values, null)).ToList();
+            profiles.Add(new ProfileRecord(profile.Id, profile.Name, samples.Count + 1L, samples, null));
+        }
+        return new ProfileDocument(SchemaVersion, legacy.PipelineVersion, profiles);
     }
 
     // сбрасываем готовый JSON на диск, закрываем его и переносим в пределах одной папки
@@ -241,32 +301,62 @@ internal sealed class FaceProfileStore {
             if (string.IsNullOrWhiteSpace(profile.Name) || profile.Name != profile.Name.Trim()) {
                 throw new InvalidDataException($"У профиля {profile.Id} отсутствует корректное имя.");
             }
-            if (profile.Samples is null || profile.Samples.Count == 0 ||
-                profile.Samples.Any(values => values is null || !IsValidVector(values))) {
-                throw new InvalidDataException($"У профиля {profile.Id} есть неверный набор образцов.");
+            if (profile.Samples is null || profile.Samples.Count == 0) {
+                throw new InvalidDataException($"У профиля {profile.Id} отсутствуют образцы.");
+            }
+            long previous = 0;
+            foreach (SampleRecord sample in profile.Samples) {
+                if (sample is null || sample.Number <= previous || sample.Values is null || !IsValidVector(sample.Values) ||
+                    sample.Name != NormalizeSampleName(sample.Name)) {
+                    throw new InvalidDataException($"У профиля {profile.Id} есть неверный номер, имя или вектор образца.");
+                }
+                previous = sample.Number;
+            }
+            if (profile.NextSampleNumber <= previous) {
+                throw new InvalidDataException($"У профиля {profile.Id} неверный следующий номер образца.");
+            }
+            if (profile.Avatar is { } avatar && (avatar.Bits is 0 or > 0x0fffffffu || (uint)avatar.PaletteIndex > 7)) {
+                throw new InvalidDataException($"У профиля {profile.Id} неверный узор аватара.");
+            }
+            if (profile.Samples[0].Number > 1 && profile.Avatar is null) {
+                throw new InvalidDataException($"У профиля {profile.Id} отсутствует аватар удаленного первого образца.");
             }
         }
     }
 
-    // проверяем версию и копируем только признаки, выровненный фрагмент остается вне базы
-    private static List<float[]> CopySamples(IEnumerable<FaceEmbedding> samples) {
+    // проверяем версию и копируем только признаки и нормализованное имя
+    private static List<SampleRecord> CopySamples(IEnumerable<FaceSampleInput> samples) {
         ArgumentNullException.ThrowIfNull(samples);
-        var owned = new List<float[]>();
-        foreach (FaceEmbedding sample in samples) {
-            if (sample is null || sample.PipelineVersion != FacePipelineService.PipelineVersion) {
+        var owned = new List<SampleRecord>();
+        foreach (FaceSampleInput sample in samples) {
+            if (sample?.Embedding is not { PipelineVersion: FacePipelineService.PipelineVersion } embedding) {
                 throw new ArgumentException("Образец должен быть рассчитан текущей версией конвейера лиц.", nameof(samples));
             }
-            float[] vector = sample.Values.ToArray();
+            float[] vector = embedding.Values.ToArray();
             if (!IsValidVector(vector)) {
                 throw new ArgumentException("Образец должен содержать 128 конечных чисел с нормой 1.", nameof(samples));
             }
-            owned.Add(vector);
+            owned.Add(new SampleRecord(0, vector, NormalizeSampleName(sample.Name)));
         }
         if (owned.Count == 0) {
             throw new ArgumentException("Профилю нужен хотя бы один образец.", nameof(samples));
         }
         return owned;
     }
+
+    // не используем удаленные номера и отказываем при исчерпании счетчика
+    private static long NumberSamples(List<SampleRecord> samples, long first) {
+        if (first > long.MaxValue - samples.Count) {
+            throw new InvalidOperationException("Номера образцов исчерпаны.");
+        }
+        for (int i = 0; i < samples.Count; i++) {
+            samples[i] = samples[i] with { Number = first + i };
+        }
+        return first + samples.Count;
+    }
+
+    // пустое имя возвращает стандартную подпись с номером
+    internal static string? NormalizeSampleName(string? name) => string.IsNullOrWhiteSpace(name) ? null : name.Trim();
 
     // сверяем длину и норму, исходные значения вектора не исправляем
     private static bool IsValidVector(ReadOnlySpan<float> vector) {
@@ -300,13 +390,27 @@ internal sealed class FaceProfileStore {
         return index;
     }
 
+    // позиция внутри списка может меняться, ключ остается прежним
+    private static int FindSampleIndex(ProfileRecord profile, long number) {
+        int index = profile.Samples.FindIndex(sample => sample.Number == number);
+        return index >= 0 ? index : throw new KeyNotFoundException($"Образец №{number} не найден.");
+    }
+
     // передаем вызывающему проверенные значения без доступа к изменению записи
-    private static FaceProfile ToSnapshot(ProfileRecord profile) => new(profile.Id, profile.Name, profile.Samples);
+    private static FaceProfile ToSnapshot(ProfileRecord profile) => new(profile.Id, profile.Name,
+        profile.Samples.Select(sample => new FaceProfileSample(sample.Number, sample.Name, sample.Values)),
+        profile.Avatar is { } avatar ? new FaceProfileAvatarPattern(avatar.Bits, avatar.PaletteIndex) : null);
 
     // проверяем эксклюзивную блокировку на том же дескрипторе macOS
     [DllImport("libSystem.B.dylib", EntryPoint = "flock", SetLastError = true)]
     private static extern int Flock(SafeFileHandle handle, int operation);
 
     private sealed record ProfileDocument(int Version, string PipelineVersion, List<ProfileRecord> Profiles);
-    private sealed record ProfileRecord(Guid Id, string Name, List<float[]> Samples);
+    private sealed record ProfileRecord(Guid Id, string Name, long NextSampleNumber, List<SampleRecord> Samples,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AvatarRecord? Avatar);
+    private sealed record SampleRecord(long Number, float[] Values,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name);
+    private sealed record AvatarRecord([property: JsonRequired] uint Bits, [property: JsonRequired] int PaletteIndex);
+    private sealed record LegacyDocument(int Version, string PipelineVersion, List<LegacyProfile> Profiles);
+    private sealed record LegacyProfile(Guid Id, string Name, List<float[]> Samples);
 }

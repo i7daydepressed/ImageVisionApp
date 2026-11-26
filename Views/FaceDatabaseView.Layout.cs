@@ -87,15 +87,23 @@ internal sealed partial class FaceDatabaseView {
         vectorScroll.Content = vectorValues;
 
         Grid area = new() { ColumnDefinitions = new ColumnDefinitions("145,*"),
-            RowDefinitions = new RowDefinitions("Auto,*"), RowSpacing = 6, ColumnSpacing = 12 };
+            RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"), RowSpacing = 6, ColumnSpacing = 12 };
         area.Children.Add(sampleTitle);
-        Grid.SetRow(savedSamples, 1);
+        StackPanel actions = new() { Orientation = Orientation.Horizontal, Spacing = 8,
+            Children = { renameSavedSample, removeSavedSample } };
+        Grid.SetRow(actions, 1);
+        Grid.SetColumnSpan(actions, 2);
+        area.Children.Add(actions);
+        Grid.SetRow(savedSamples, 2);
         area.Children.Add(savedSamples);
         Grid.SetColumn(vectorTitle, 1);
         area.Children.Add(vectorTitle);
-        Grid.SetRow(vectorScroll, 1);
+        Grid.SetRow(vectorScroll, 2);
         Grid.SetColumn(vectorScroll, 1);
         area.Children.Add(vectorScroll);
+        Grid.SetRow(lastSampleHint, 3);
+        Grid.SetColumnSpan(lastSampleHint, 2);
+        area.Children.Add(lastSampleHint);
         return area;
     }
 
@@ -106,7 +114,7 @@ internal sealed partial class FaceDatabaseView {
         Grid.SetRow(removePhoto, 1);
         files.Children.Add(removePhoto);
 
-        Grid image = new() { RowDefinitions = new RowDefinitions("*,Auto"), RowSpacing = 6 };
+        Grid image = new() { RowDefinitions = new RowDefinitions("*,Auto,Auto"), RowSpacing = 6 };
         image.Children.Add(new Border {
             Background = new SolidColorBrush(Color.Parse("#242424")), CornerRadius = new CornerRadius(4),
             ClipToBounds = true, Child = new Grid { Children = { preview, photoHint } }
@@ -114,6 +122,8 @@ internal sealed partial class FaceDatabaseView {
         photoHint.Foreground = Brushes.White;
         Grid.SetRow(faces, 1);
         image.Children.Add(faces);
+        Grid.SetRow(importSampleName, 2);
+        image.Children.Add(importSampleName);
 
         Grid area = new() { ColumnDefinitions = new ColumnDefinitions("205,*"), ColumnSpacing = 10 };
         area.Children.Add(files);
