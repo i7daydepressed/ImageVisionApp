@@ -16,10 +16,11 @@ using ImageVisionApp.ViewModels;
 
 namespace ImageVisionApp.Views;
 
-internal sealed class FaceRecognitionView : UserControl {
+internal sealed partial class FaceRecognitionView : UserControl {
     private readonly TabStrip tabs = new() { ItemsSource = new[] { "Вход", "Результат" }, SelectedIndex = 0,
         HorizontalAlignment = HorizontalAlignment.Left };
     private readonly VideoPreviewImage input = new() { Stretch = Stretch.Uniform };
+    private readonly VideoPreviewImage unprocessed = new() { Stretch = Stretch.Uniform };
     private readonly TextBlock inputEmpty = new() {
         HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
         Foreground = Brushes.LightGray, TextWrapping = TextWrapping.Wrap
@@ -30,6 +31,7 @@ internal sealed class FaceRecognitionView : UserControl {
     private readonly Border resultPane;
 
     private MainViewModel? model;
+    private MediaDocument? observedDocument;
     private FaceVideoWork? observedWork;
     private FaceVideoPreview? submitted;
     private readonly List<Task> liveJobs = [];
@@ -44,14 +46,16 @@ internal sealed class FaceRecognitionView : UserControl {
     private long shown;
 
     private bool ShowsResult => tabs.SelectedIndex == 1;
-    public bool HasWork => liveJobs.Exists(task => !task.IsCompleted) || model?.HasFaceVideoWork == true;
+    public bool HasWork => !photoDecode.IsCompleted || !photoRecognition.IsCompleted || !profileOptionsRead.IsCompleted ||
+        liveJobs.Exists(task => !task.IsCompleted) || model?.HasFaceVideoWork == true;
 
     // располагаем исходный кадр, распознавание и вход в базу как соседние части одной вкладки
     public FaceRecognitionView(Button openDatabase) {
         AutomationProperties.SetName(input, "Исходный кадр «Лиц»");
+        AutomationProperties.SetName(unprocessed, "Оригинал без обработки");
         AutomationProperties.SetName(preview, "Кадр распознавания");
         inputPane = CreatePreviewPane(new Grid { Children = { input, inputEmpty } });
-        resultPane = CreatePreviewPane(preview);
+        resultPane = CreatePreviewPane(new Grid { Children = { preview, unprocessed } });
         inputPane.PointerPressed += (_, _) => inputPane.Focus();
         resultPane.PointerPressed += (_, _) => resultPane.Focus();
         Grid header = new() { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Children = { tabs } };
@@ -59,19 +63,24 @@ internal sealed class FaceRecognitionView : UserControl {
         header.Children.Add(openDatabase);
         Grid previews = new() { Children = { inputPane, resultPane } };
         Grid layout = new() { RowDefinitions = new RowDefinitions("Auto,*,Auto"), RowSpacing = 8,
-            Margin = new Thickness(12), Children = { header } };
+            Children = { header } };
         Grid.SetRow(previews, 1);
         layout.Children.Add(previews);
         Grid.SetRow(status, 2);
         layout.Children.Add(status);
-        Content = layout;
+        Grid workspace = new() { ColumnDefinitions = new ColumnDefinitions("305,*"), ColumnSpacing = 12,
+            Margin = new Thickness(12), Children = { CreateMethodsCard() } };
+        Grid.SetColumn(layout, 1);
+        workspace.Children.Add(layout);
+        Content = workspace;
         tabs.SelectionChanged += (_, args) => {
             if (ReferenceEquals(args.Source, tabs)) {
                 UpdateVisiblePane();
                 if (!ShowsResult) {
                     ClearResult();
-                    model?.SetFaceVideoVisible(false);
                 }
+                UpdateInput();
+                SyncVideoMode();
                 QueueRefresh();
             }
         };
@@ -104,9 +113,11 @@ internal sealed class FaceRecognitionView : UserControl {
         }
         active = true;
         if (model is not null) {
+            observedDocument = model.CurrentDocument;
             model.PropertyChanged += OnMediaChanged;
         }
         UpdateInput();
+        UpdateAppearanceControls();
         QueueRefresh();
     }
 
@@ -120,16 +131,20 @@ internal sealed class FaceRecognitionView : UserControl {
             model.PropertyChanged -= OnMediaChanged;
         }
         input.Source = null;
+        unprocessed.Source = null;
         ClearResult();
+        ClearPhotoInput();
+        ClearColorProfiles();
+        observedDocument = null;
         observedWork = null;
-        model?.SetFaceVideoVisible(false);
+        SyncVideoMode();
     }
 
     // запрещаем новый вход и дожидаемся захваченных кадров и освобождения моделей
     public async Task StopAsync() {
         closing = true;
         Deactivate();
-        await Task.WhenAll(liveJobs);
+        await Task.WhenAll(Task.WhenAll(liveJobs), photoDecode, photoRecognition, profileOptionsRead);
         if (model is not null) {
             await model.DrainFaceVideoWorkAsync();
         }
@@ -137,6 +152,11 @@ internal sealed class FaceRecognitionView : UserControl {
 
     // подготовленную пару передаем синхронно, живой кадр забираем после общей публикации
     private void OnMediaChanged(object? sender, PropertyChangedEventArgs args) {
+        if (!ReferenceEquals(observedDocument, model?.CurrentDocument)) {
+            observedDocument = model?.CurrentDocument;
+            ClearResult();
+            ClearPhotoInput();
+        }
         switch (args.PropertyName) {
             case nameof(MainViewModel.PreparedFaceVideo):
                 if (!PresentPrepared()) {
@@ -152,10 +172,12 @@ internal sealed class FaceRecognitionView : UserControl {
                     ClearPreparedPreview();
                 }
                 break;
+            case nameof(MainViewModel.CurrentFaceVideoWork):
+                UpdateVideoOwner();
+                break;
             case nameof(MainViewModel.PlaybackStatus):
             case nameof(MainViewModel.IsVideoEditorSourceReady):
             case nameof(MainViewModel.VideoEditorSourceNotice):
-            case nameof(MainViewModel.CurrentFaceVideoWork):
                 break;
             default:
                 return;
@@ -166,11 +188,13 @@ internal sealed class FaceRecognitionView : UserControl {
     // общий bitmap остается у медиаконтейнера, его ревизия обновляет отображение
     private void UpdateInput() {
         input.Source = model?.CurrentDocument?.Kind switch {
-            MediaKind.Image => model.OriginalImage,
+            MediaKind.Image => orientedPhoto ?? model.OriginalImage,
             MediaKind.Video => model.VideoPreviewFrame,
             _ => null
         };
         input.SetValue(VideoPreviewImage.RevisionProperty, model?.VideoPreviewRevision ?? 0);
+        unprocessed.Source = ShowsResult && !methodEnabled ? input.Source : null;
+        unprocessed.SetValue(VideoPreviewImage.RevisionProperty, model?.VideoPreviewRevision ?? 0);
         inputEmpty.IsVisible = input.Source is null;
         inputEmpty.Text = model?.CurrentDocument?.Kind == MediaKind.Video
             ? model.VideoEditorSourceNotice ?? "Ожидаем видеокадр" : "Откройте фото или видео";
@@ -180,7 +204,9 @@ internal sealed class FaceRecognitionView : UserControl {
     private void UpdateVisiblePane() {
         inputPane.IsVisible = !ShowsResult;
         resultPane.IsVisible = ShowsResult;
-        status.IsVisible = ShowsResult;
+        preview.IsVisible = methodEnabled;
+        unprocessed.IsVisible = !methodEnabled;
+        status.IsVisible = ShowsResult && !string.IsNullOrEmpty(status.Text);
     }
 
     // объединяем события пикселей, штампа и шкалы в один проход после общего тика
@@ -198,19 +224,28 @@ internal sealed class FaceRecognitionView : UserControl {
     // при нехватке рабочего места живой режим оставляет следующий шанс последнему кадру
     private void RefreshRecognition() {
         liveJobs.RemoveAll(task => task.IsCompleted);
-        if (!active || !ShowsResult || model is not { } media) {
+        if (!active || model is not { } media) {
             return;
         }
-        media.SetFaceVideoVisible(true);
-        if (!ReferenceEquals(observedWork, media.CurrentFaceVideoWork)) {
-            ClearResult();
-            observedWork = media.CurrentFaceVideoWork;
+        RefreshPhotoInput(media);
+        if (!ShowsResult) {
+            return;
+        }
+        SyncVideoMode();
+        UpdateVideoOwner();
+        if (!methodEnabled) {
+            SetStatus(input.Source is null ? inputEmpty.Text ?? "" : "");
+            return;
+        }
+        if (media.CurrentDocument is { Kind: MediaKind.Image } photo) {
+            RefreshPhotoRecognition(photo);
+            return;
         }
         if (PresentPrepared()) {
             return;
         }
         if (media.CurrentDocument is not { Kind: MediaKind.Video }) {
-            SetStatus(media.CurrentDocument is null ? "Откройте видео" : "Распознавание фото пока недоступно");
+            SetStatus("Откройте фото или видео");
             return;
         }
         if (media.IsFaceVideoPrepared || media.ReadFaceVideoPreview() is not { } current) {
@@ -257,7 +292,7 @@ internal sealed class FaceRecognitionView : UserControl {
 
     // общий подготовитель выдает immutable bitmap и метаданные одного физического кадра
     private bool PresentPrepared() {
-        if (!active || !ShowsResult) {
+        if (!active || !ShowsResult || !methodEnabled) {
             return false;
         }
         if (model?.PreparedFaceVideo is not { } prepared) {
@@ -266,7 +301,7 @@ internal sealed class FaceRecognitionView : UserControl {
         if (submitted is not null) {
             ClearResult();
         }
-        preview.ShowPrepared(prepared.Bitmap, prepared.Result);
+        preview.ShowBitmap(prepared.Bitmap, prepared.Result);
         presentingPrepared = true;
         previewHasNoResult = false;
         ShowResultStatus(prepared.Result);
@@ -288,7 +323,7 @@ internal sealed class FaceRecognitionView : UserControl {
                 }
                 shown = sequence;
                 if (recognized.Image is { } image) {
-                    preview.ShowLive(image, recognized.Result);
+                    preview.ShowImage(image, recognized.Result);
                     previewHasNoResult = false;
                     worker.Budget.Presented(acceptedAt);
                 }
@@ -310,7 +345,7 @@ internal sealed class FaceRecognitionView : UserControl {
 
     // живой результат отстает только в пределах текущей команды и текущего каталога
     private bool IsCurrent(FaceVideoPreview frame, FaceVideoWork worker, CancellationToken token) =>
-        active && ShowsResult && !token.IsCancellationRequested &&
+        active && ShowsResult && methodEnabled && !token.IsCancellationRequested &&
         ReferenceEquals(worker, model?.CurrentFaceVideoWork) && model?.PreparedFaceVideo is null &&
         model?.ReadFaceVideoPreview() is { } current && frame.SameRun(current) &&
         (current.IsPlaying || frame.SameFrame(current));
@@ -325,17 +360,33 @@ internal sealed class FaceRecognitionView : UserControl {
             _ = DisposeStopAsync(Task.WhenAll(Task.WhenAll(liveJobs), wake), ending);
         }
         submitted = null;
-        preview.ShowPrepared(null);
+        photoRecognitionRequested = false;
+        stopPhotoRecognition?.Cancel();
+        preview.ShowBitmap(null);
         previewHasNoResult = true;
         presentingPrepared = false;
+        SetStatus("");
     }
 
     // отвязываем общий bitmap до освобождения или замены его владельцем
     private void ClearPreparedPreview() {
         if (presentingPrepared) {
-            preview.ShowPrepared(null);
+            preview.ShowBitmap(null);
             previewHasNoResult = true;
             presentingPrepared = false;
+        }
+    }
+
+    // параметры действуют только для активного результата, вход и база не занимают моделей
+    private void SyncVideoMode() =>
+        model?.SetFaceVideoMode(active && ShowsResult && methodEnabled ? recognitionMode : null);
+
+    // при отзыве владельца сразу снимаем метаданные и заимствованный кадр
+    private void UpdateVideoOwner() {
+        FaceVideoWork? current = model?.CurrentFaceVideoWork;
+        if (!ReferenceEquals(observedWork, current)) {
+            ClearResult();
+            observedWork = current;
         }
     }
 
@@ -361,7 +412,7 @@ internal sealed class FaceRecognitionView : UserControl {
 
     // оставляем явными ошибки, отсутствие лица и пустую базу
     private void ShowResultStatus(FaceVideoResult result) =>
-        SetStatus(result.Error ?? (result.EmptyCatalogue ? "База пуста" : result.Faces.Count == 0 ? "Лицо не найдено" : ""));
+        SetStatus(result.Error ?? (result.Faces.Count == 0 ? "Лицо не найдено" : result.EmptyCatalogue ? "База пуста" : ""));
 
     // текст пустого состояния объявляется только в выбранном представлении
     private void SetStatus(string message) {

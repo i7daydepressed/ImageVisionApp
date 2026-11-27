@@ -8,7 +8,8 @@ using ImageVisionApp.Models;
 
 namespace ImageVisionApp.Services;
 
-internal sealed record FaceVideoResult(IReadOnlyList<RecognizedFace> Faces, bool EmptyCatalogue, string? Error, TimeSpan? Delay) {
+internal sealed record FaceVideoResult(IReadOnlyList<RecognizedFace> Faces, bool EmptyCatalogue, string? Error,
+    TimeSpan? Delay, bool ShowLabels = true) {
     // ошибка одного слоя сохраняет возможность показать общий видеокадр
     public static FaceVideoResult Unavailable(string reason) => new([], false, reason, null);
 }
@@ -124,11 +125,12 @@ internal sealed class FaceVideoWork : IDisposable {
     internal const string BudgetError = "Бюджета буферов «Лиц» недостаточно для видеокадра";
     // верхняя граница метаданных YuNet TopK, коробок, решений и ссылок на существующие профили
     private const long MetadataBytes = FacePipelineService.MaximumDetections * 160L + 4096;
-    // управляемая копия BGR, входы YuNet 640², выравнивание и вход одного SFace 112²
-    private const long ModelInputScratch = 3L * 640 * 640 * 2 + 4L * 3 * 112 * 112 * 2 + MetadataBytes;
+    private const long DetectorScratch = 3L * 640 * 640 * 2 + MetadataBytes;
+    private const long RecognitionScratch = 4L * 3 * 112 * 112 * 2;
     private readonly object gate = new();
     private readonly Stack<FaceRecognitionService> available = new();
-    private readonly Lazy<(FaceWorkspacePaths Paths, IReadOnlyList<FaceProfile> Catalogue)> catalogue = new(ReadCatalogue);
+    private readonly Lazy<(FaceWorkspacePaths Paths, IReadOnlyList<FaceProfile>? Catalogue)> source;
+    private readonly FaceRecognitionMode mode;
     private readonly CancellationTokenSource ending = new();
     private readonly Task previousRetirement;
     private readonly TaskCompletionSource drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -142,11 +144,13 @@ internal sealed class FaceVideoWork : IDisposable {
     public long Limit { get; }
     public Task Drained => drained.Task;
 
-    // каждому работнику принадлежит отдельная пара моделей, профили читаются один раз
-    public FaceVideoWork(FaceVideoBudget budget, int workers, long limit, Task? previous = null) {
+    // каждый работник получает модели выбранного режима, каталог один на все поколение
+    public FaceVideoWork(FaceVideoBudget budget, int workers, long limit, FaceRecognitionMode mode, Task? previous = null) {
         Budget = budget;
         Workers = workers;
         Limit = limit;
+        this.mode = mode;
+        source = new(() => FaceRecognitionService.LoadSource(mode));
         previousRetirement = previous ?? Task.CompletedTask;
     }
 
@@ -175,8 +179,9 @@ internal sealed class FaceVideoWork : IDisposable {
         return Budget.TryAcquire(Scratch(size, live), MetadataBytes, PresentationReserve(size), Limit, capacity, out wait);
     }
 
-    // бюджет рабочей части не включает память сетей и внутренние выделения OpenCV
-    private static long Scratch(PixelSize size, bool live) => checked(ModelInputScratch +
+    // в режиме детекции не резервируем выравнивание и вход SFace
+    private long Scratch(PixelSize size, bool live) => checked(DetectorScratch +
+        (mode == FaceRecognitionMode.WithProfiles ? RecognitionScratch : 0) +
         (long)size.Width * size.Height * 3 + (live ? VideoEditorFrame.GetBufferBytes(size) : 0));
 
     // сохраняем пиксели живого кадра только до его выдачи, подготовленному нужны одни метаданные
@@ -235,7 +240,7 @@ internal sealed class FaceVideoWork : IDisposable {
             finally {
                 Budget.ChangeInference(-1);
             }
-            return new(frame.Faces, frame.EmptyCatalogue, null, Stopwatch.GetElapsedTime(started));
+            return new(frame.Faces, frame.EmptyCatalogue, null, Stopwatch.GetElapsedTime(started), frame.ShowLabels);
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested && ending.IsCancellationRequested) {
             return FaceVideoResult.Unavailable("Распознавание остановлено");
@@ -260,8 +265,8 @@ internal sealed class FaceVideoWork : IDisposable {
                 return engine;
             }
         }
-        var source = catalogue.Value;
-        return new FaceRecognitionService(source.Paths.CreatePipeline(), source.Catalogue);
+        var (paths, catalogue) = source.Value;
+        return new FaceRecognitionService(paths.CreatePipeline(mode), catalogue);
     }
 
     // модель в выполняющемся кадре освобождает только его работник
@@ -320,12 +325,5 @@ internal sealed class FaceVideoWork : IDisposable {
     private static void ReleaseEngine(FaceRecognitionService engine) {
         try { engine.Dispose(); }
         catch (Exception error) { Trace.TraceWarning($"Ошибка освобождения распознавания: {error.Message}"); }
-    }
-
-    // удерживаем проверенный каталог исключительно на время одного посещения или набора настроек
-    private static (FaceWorkspacePaths Paths, IReadOnlyList<FaceProfile> Catalogue) ReadCatalogue() {
-        FaceWorkspacePaths paths = FaceWorkspacePaths.Resolve(AppContext.BaseDirectory,
-            Environment.GetEnvironmentVariable(FaceWorkspacePaths.RootVariable));
-        return (paths, new FaceProfileStore(paths.CheckoutRoot).Load());
     }
 }

@@ -328,7 +328,7 @@ public partial class MainViewModel {
             previous.BudgetMiB == settings.BudgetMiB) {
             PreviewSettings = settings;
             if (facesChanged) {
-                SetFaceVideoVisible(faceVideoVisible, settingsChanged: true);
+                SetFaceVideoMode(faceVideoMode, settingsChanged: true);
             }
             UpdateFrameAnalysisPlaybackPlan();
             if (foregroundWorkChanged) {
@@ -339,7 +339,7 @@ public partial class MainViewModel {
         StopVideoPreviewMonitoring(keepLast: false);
         PreviewSettings = settings;
         if (facesChanged) {
-            SetFaceVideoVisible(faceVideoVisible, settingsChanged: true);
+            SetFaceVideoMode(faceVideoMode, settingsChanged: true);
         }
         UpdateFrameAnalysisPlaybackPlan(restartStrict: false);
         ResetVideoPreviewAuto();

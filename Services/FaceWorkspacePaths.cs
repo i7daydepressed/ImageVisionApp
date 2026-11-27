@@ -27,14 +27,17 @@ internal sealed record FaceWorkspacePaths(string CheckoutRoot) {
         throw new InvalidOperationException($"Не найдена рабочая копия ImageVisionApp. Укажите ее абсолютный путь через {RootVariable}.");
     }
 
-    // загружаем общие модели лиц и показываем ожидаемые пути при ошибке
-    public FacePipelineService CreatePipeline() {
+    // по умолчанию импорт получает полный конвейер, детекция требует только YuNet
+    public FacePipelineService CreatePipeline(FaceRecognitionMode mode = FaceRecognitionMode.WithProfiles) {
+        bool detectOnly = mode == FaceRecognitionMode.DetectOnly;
         try {
-            return new FacePipelineService(Path.Combine(ModelsDirectory, YuNetFileName), Path.Combine(ModelsDirectory, SFaceFileName));
+            return new FacePipelineService(Path.Combine(ModelsDirectory, YuNetFileName),
+                detectOnly ? null : Path.Combine(ModelsDirectory, SFaceFileName));
         }
         catch (Exception error) {
+            string expected = detectOnly ? YuNetFileName : $"{YuNetFileName} и {SFaceFileName}";
             throw new InvalidOperationException(
-                $"Модели лиц недоступны. Ожидаются {YuNetFileName} и {SFaceFileName} в папке {ModelsDirectory}.{Environment.NewLine}{error.Message}",
+                $"Модели лиц недоступны. Файлы для этого режима: {expected} в папке {ModelsDirectory}.{Environment.NewLine}{error.Message}",
                 error);
         }
     }

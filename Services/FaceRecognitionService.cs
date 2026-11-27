@@ -6,21 +6,38 @@ using ImageVisionApp.Models;
 
 namespace ImageVisionApp.Services;
 
+internal enum FaceRecognitionMode { DetectOnly, WithProfiles }
+
 internal sealed record FaceRecognitionMatch(FaceProfile? Profile, double? BestScore, double? NextScore);
 internal sealed record RecognizedFace(FaceBounds Bounds, FaceRecognitionMatch Match);
-internal sealed record FaceRecognitionFrame(FaceImage Image, IReadOnlyList<RecognizedFace> Faces, bool EmptyCatalogue);
+internal sealed record FaceRecognitionFrame(FaceImage Image, IReadOnlyList<RecognizedFace> Faces, bool EmptyCatalogue, bool ShowLabels);
 
-internal sealed class FaceRecognitionService(FacePipelineService pipeline, IReadOnlyList<FaceProfile> profiles) : IDisposable {
+internal sealed class FaceRecognitionService(FacePipelineService pipeline, IReadOnlyList<FaceProfile>? profiles) : IDisposable {
     internal const double AcceptanceThreshold = 0.363;
 
-    // выравниваем каждое лицо по точкам той же детекции и связываем решения с ее пикселями
+    // в режиме детекции к локальной базе не обращаемся, в полном режиме читаем один снимок
+    internal static (FaceWorkspacePaths Paths, IReadOnlyList<FaceProfile>? Catalogue) LoadSource(FaceRecognitionMode mode) {
+        FaceWorkspacePaths paths = FaceWorkspacePaths.Resolve(AppContext.BaseDirectory,
+            Environment.GetEnvironmentVariable(FaceWorkspacePaths.RootVariable));
+        if (mode == FaceRecognitionMode.DetectOnly) {
+            return (paths, null);
+        }
+        try {
+            return (paths, new FaceProfileStore(paths.CheckoutRoot).Load());
+        }
+        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) {
+            throw new InvalidOperationException($"База лиц недоступна. {error.Message}", error);
+        }
+    }
+
+    // рамки принадлежат одному входу, а признаки и подписи нужны только при работе с профилями
     public FaceRecognitionFrame Recognize(FaceImage image, CancellationToken token) {
         FaceDetectionResult detection = pipeline.Detect(image, token);
         var faces = new RecognizedFace[detection.Faces.Count];
         for (int index = 0; index < faces.Length; index++) {
             token.ThrowIfCancellationRequested();
             FaceRecognitionMatch match = new(null, null, null);
-            if (profiles.Count > 0) {
+            if (profiles is { Count: > 0 }) {
                 try {
                     match = Match(pipeline.ExtractEmbedding(detection, index, token), profiles, token);
                 }
@@ -30,7 +47,7 @@ internal sealed class FaceRecognitionService(FacePipelineService pipeline, IRead
             }
             faces[index] = new RecognizedFace(detection.Faces[index].Bounds, match);
         }
-        return new FaceRecognitionFrame(image, Array.AsReadOnly(faces), profiles.Count == 0);
+        return new FaceRecognitionFrame(image, Array.AsReadOnly(faces), profiles is { Count: 0 }, profiles is not null);
     }
 
     // берем максимум по образцам каждого профиля и отклоняем ничью между разными ID

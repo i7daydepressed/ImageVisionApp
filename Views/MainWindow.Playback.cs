@@ -122,7 +122,8 @@ public partial class MainWindow {
     // переключатели вида и кнопки раздела сохраняют собственный клавиатурный ввод
     private bool UsesFacesSectionKeys(object? source) =>
         IsFacesPageVisible && source is Visual visual && visual.GetSelfAndVisualAncestors().Any(control =>
-            control is TabStrip || control is Button && !ReferenceEquals(control, videoPlayButton));
+            control is TabStrip or ComboBox or ComboBoxItem ||
+            control is Button && !ReferenceEquals(control, videoPlayButton));
 
     // пробел на кнопках сохранения выполняет выбранную команду
     private bool IsVideoExportButtonInput(object? source) =>

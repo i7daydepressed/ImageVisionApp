@@ -25,7 +25,7 @@ internal readonly record struct PresentedFaceVideo(Bitmap Bitmap, FaceVideoResul
 
 public partial class MainViewModel {
     private readonly FaceVideoBudget faceVideoBudget = new();
-    private bool faceVideoVisible;
+    private FaceRecognitionMode? faceVideoMode;
     private MediaDocument? faceVideoDocument;
     private FaceVideoWork? faceVideoWork;
     private Task retiredFaceWork = Task.CompletedTask;
@@ -34,21 +34,21 @@ public partial class MainViewModel {
     internal bool IsFaceVideoPrepared => preparedSource is not null || preparedOpening is not null;
     internal bool HasFaceVideoWork => faceVideoWork is not null || !retiredFaceWork.IsCompleted;
 
-    // меняем каталог и модель только при смене источника, настроек или видимости результата
-    internal void SetFaceVideoVisible(bool visible, bool settingsChanged = false) {
-        MediaDocument? document = visible && CurrentDocument is { Kind: MediaKind.Video } video ? video : null;
-        if (!settingsChanged && faceVideoVisible == visible && ReferenceEquals(faceVideoDocument, document)) {
+    // разрешаем результату только одну пару из видео и режима, выключение также отзывает владельца
+    internal void SetFaceVideoMode(FaceRecognitionMode? mode, bool settingsChanged = false) {
+        MediaDocument? document = mode is not null && CurrentDocument is { Kind: MediaKind.Video } video ? video : null;
+        if (!settingsChanged && faceVideoMode == mode && ReferenceEquals(faceVideoDocument, document)) {
             return;
         }
         bool rebuildPrepared = faceVideoWork is not null || document is not null;
-        faceVideoVisible = visible;
+        faceVideoMode = mode;
         faceVideoDocument = document;
         if (faceVideoWork is { } previous) {
             previous.Dispose();
             retiredFaceWork = Task.WhenAll(retiredFaceWork, previous.Drained);
         }
-        faceVideoWork = document is null ? null : new FaceVideoWork(faceVideoBudget,
-            PreviewSettings.FaceMaximumWorkers, PreviewSettings.FaceBudgetBytes, retiredFaceWork);
+        faceVideoWork = document is not null && mode is { } selected ? new FaceVideoWork(faceVideoBudget,
+            PreviewSettings.FaceMaximumWorkers, PreviewSettings.FaceBudgetBytes, selected, retiredFaceWork) : null;
         faceVideoBudget.ResetPeaks();
         ClearPreparedFaceVideo();
         OnPropertyChanged(nameof(CurrentFaceVideoWork));

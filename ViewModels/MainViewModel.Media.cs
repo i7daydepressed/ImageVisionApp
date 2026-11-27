@@ -12,6 +12,11 @@ public partial class MainViewModel {
     public VideoInfo? CurrentVideoInfo { get; private set; }
     private VideoFileIdentity? videoFileIdentity;
 
+    // отдаем только снимок принятых байтов того же фотодокумента для фонового чтения
+    internal (MediaDocument Document, byte[] Bytes)? ReadFacePhotoSource() =>
+        !mediaPreviewsDisposed && CurrentDocument is { Kind: MediaKind.Image } photo && originalImageData is { } bytes
+            ? (photo, bytes) : null;
+
     // готовим bitmap первого кадра и публикуем видео без входных данных фото
     public void LoadVideoFirstFrame(byte[] framePng, string fileName, string sourcePath, long? fileSizeBytes = null) =>
         LoadVideoFirstFrame(framePng, fileName, sourcePath, fileSizeBytes, VideoFileIdentity.TryCapture(sourcePath));

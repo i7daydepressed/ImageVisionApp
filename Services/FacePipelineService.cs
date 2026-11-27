@@ -24,24 +24,26 @@ internal sealed class FacePipelineService : IDisposable {
     private readonly object gate = new();
     private readonly object sessionKey = new();
     private readonly FaceDetectorYN detector;
-    private readonly Net recognizer;
+    private readonly Net? recognizer;
     private bool disposed;
 
-    // проверяем заданные файлы, затем поднимаем одну пару моделей на CPU
-    public FacePipelineService(string yuNetPath, string sFacePath) {
+    // загружаем SFace только для конвейера, который извлекает признаки
+    public FacePipelineService(string yuNetPath, string? sFacePath = null) {
         byte[] yuNet = ReadVerifiedModel("YuNet", yuNetPath, 232589, YuNetHash);
-        byte[] sFace = ReadVerifiedModel("SFace", sFacePath, 38696353, SFaceHash);
+        byte[]? sFace = sFacePath is null ? null : ReadVerifiedModel("SFace", sFacePath, 38696353, SFaceHash);
 
         FaceDetectorYN? loadedDetector = null;
         Net? loadedRecognizer = null;
         string loadingModel = "YuNet";
         try {
             loadedDetector = LoadDetector(yuNet);
-            loadingModel = "SFace";
-            loadedRecognizer = Net.ReadNetFromONNX(sFace.AsSpan())
-                ?? throw new InvalidDataException("OpenCV вернул пустую модель SFace.");
-            loadedRecognizer.SetPreferableBackend(Backend.OPENCV);
-            loadedRecognizer.SetPreferableTarget(Target.CPU);
+            if (sFace is not null) {
+                loadingModel = "SFace";
+                loadedRecognizer = Net.ReadNetFromONNX(sFace.AsSpan())
+                    ?? throw new InvalidDataException("OpenCV вернул пустую модель SFace.");
+                loadedRecognizer.SetPreferableBackend(Backend.OPENCV);
+                loadedRecognizer.SetPreferableTarget(Target.CPU);
+            }
             detector = loadedDetector;
             recognizer = loadedRecognizer;
         }
@@ -79,6 +81,7 @@ internal sealed class FacePipelineService : IDisposable {
         lock (gate) {
             ObjectDisposedException.ThrowIf(disposed, this);
             cancellationToken.ThrowIfCancellationRequested();
+            Net network = recognizer ?? throw new InvalidOperationException("Для извлечения признаков требуется модель SFace.");
             FaceDetection face = detection.Select(sessionKey, index);
             using Mat input = detection.Source.BorrowBgr8();
             using Mat transform = CreateAlignmentTransform(face.Landmarks);
@@ -89,8 +92,8 @@ internal sealed class FacePipelineService : IDisposable {
 
             // SFace принимает RGB с множителем 1, нулевым средним и без обрезки
             using Mat blob = CvDnn.BlobFromImage(aligned, 1, alignedSize, Scalar.All(0), swapRB: true, crop: false);
-            recognizer.SetInput(blob);
-            using Mat output = recognizer.Forward();
+            network.SetInput(blob);
+            using Mat output = network.Forward();
             cancellationToken.ThrowIfCancellationRequested();
 
             float[] embedding = NormalizeEmbedding(output);
@@ -102,7 +105,7 @@ internal sealed class FacePipelineService : IDisposable {
         }
     }
 
-    // освобождаем обе модели после окончания текущего вызова OpenCV
+    // освобождаем загруженные модели после окончания текущего вызова OpenCV
     public void Dispose() {
         lock (gate) {
             if (disposed) {
@@ -110,7 +113,7 @@ internal sealed class FacePipelineService : IDisposable {
             }
             disposed = true;
             try {
-                recognizer.Dispose();
+                recognizer?.Dispose();
             }
             finally {
                 detector.Dispose();

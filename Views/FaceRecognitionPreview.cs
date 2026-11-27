@@ -15,16 +15,17 @@ using ImageVisionApp.Services;
 namespace ImageVisionApp.Views;
 
 internal sealed class FaceRecognitionPreview : Control {
-    private static readonly IPen FramePen = new Pen(Brushes.Gold, 2);
+    private readonly Dictionary<Color, IPen> framePens = new();
     private Bitmap? bitmap;
     private bool ownsBitmap;
     private FaceVideoResult? result;
+    public FaceRecognitionAppearance Appearance { get; } = new();
 
-    // заменяем пиксели и подписи вместе, сохраняя bitmap только текущего кадра
-    public void ShowLive(FaceImage frame, FaceVideoResult recognized) => Show(CreateBitmap(frame), recognized, owns: true);
+    // заменяем пиксели и подписи вместе, сохраняя bitmap только текущего фото или кадра
+    public void ShowImage(FaceImage image, FaceVideoResult? recognized = null) => Show(CreateBitmap(image), recognized, owns: true);
 
-    // подготовленный кадр уже принадлежит общему плееру и совпадает с метаданными слоя
-    public void ShowPrepared(Bitmap? original, FaceVideoResult? recognized = null) => Show(original, recognized, owns: false);
+    // фото или подготовленный кадр уже принадлежат источнику, который держит их до смены результата
+    public void ShowBitmap(Bitmap? original, FaceVideoResult? recognized = null) => Show(original, recognized, owns: false);
 
     // публикуем изображение, подписи и доступное имя в одном вызове
     private void Show(Bitmap? next, FaceVideoResult? recognized, bool owns) {
@@ -32,11 +33,19 @@ internal sealed class FaceRecognitionPreview : Control {
         bitmap = next;
         ownsBitmap = owns;
         result = recognized;
-        string name = recognized is { Faces.Count: > 0 } ? "Кадр распознавания. " +
-            string.Join(", ", recognized.Faces.Select(face => LabelFor(face, recognized.EmptyCatalogue))) : "Кадр распознавания";
+        RefreshAppearance();
+        previous?.Dispose();
+    }
+
+    // перерисовываем готовые рамки и обновляем доступное имя с учетом видимых подписей
+    public void RefreshAppearance() {
+        string name = "Кадр распознавания";
+        if (result is { Faces.Count: > 0 } recognized) {
+            string labels = string.Join(", ", recognized.Faces.Select(face => Appearance.Label(face, recognized)).OfType<string>());
+            name += labels.Length > 0 ? $". {labels}" : $". Найдено лиц: {recognized.Faces.Count}";
+        }
         AutomationProperties.SetName(this, name);
         InvalidateVisual();
-        previous?.Dispose();
     }
 
     // рисуем рамки поверх того же вписанного прямоугольника, в котором видны пиксели
@@ -56,18 +65,25 @@ internal sealed class FaceRecognitionPreview : Control {
             }
             foreach (RecognizedFace face in result.Faces) {
                 Rect bounds = FaceImportPreview.MapBounds(content, size.Width, size.Height, face.Bounds);
-                context.DrawRectangle(null, FramePen, bounds);
+                context.DrawRectangle(null, FramePen(face, result.ShowLabels), bounds);
+            }
+            if (!result.ShowLabels || result.EmptyCatalogue ||
+                !Appearance.ShowProfileNames && !Appearance.ShowUnknownLabels) {
+                return;
             }
 
             List<Rect> plaques = new(result.Faces.Count);
             foreach (RecognizedFace face in result.Faces) {
+                if (Appearance.Label(face, result) is not { } name) {
+                    continue;
+                }
                 Rect bounds = FaceImportPreview.MapBounds(content, size.Width, size.Height, face.Bounds);
-                string name = LabelFor(face, result.EmptyCatalogue);
+                Color color = Appearance.FrameColor(face, result.ShowLabels);
                 FormattedText label = new(name, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
-                    Typeface.Default, 14, Brushes.Black);
+                    Typeface.Default, 14, PlaqueText(color));
                 Rect plaque = PlaceLabel(content, bounds, new Size(label.Width + 8, label.Height + 4), plaques);
                 plaques.Add(plaque);
-                context.FillRectangle(Brushes.Gold, plaque);
+                context.FillRectangle(FramePen(face, result.ShowLabels).Brush!, plaque);
                 context.DrawText(label, new Point(plaque.X + 4, plaque.Y + 2));
             }
         }
@@ -115,12 +131,29 @@ internal sealed class FaceRecognitionPreview : Control {
         return null;
     }
 
-    // используем один и тот же текст над рамкой и в доступном имени кадра
-    private static string LabelFor(RecognizedFace face, bool emptyCatalogue) =>
-        face.Match.Profile?.Name ?? (emptyCatalogue ? "База пуста" : "Неизвестное лицо");
+    // повторно используем кисть рамки и плашки для одного цвета палитры
+    private IPen FramePen(RecognizedFace face, bool profilesAvailable) {
+        Color color = Appearance.FrameColor(face, profilesAvailable);
+        if (!framePens.TryGetValue(color, out IPen? pen)) {
+            framePens.Add(color, pen = new Pen(new SolidColorBrush(color), 2));
+        }
+        return pen;
+    }
+
+    // выбираем более контрастный текст по относительной яркости фона плашки
+    private static IBrush PlaqueText(Color color) {
+        double luminance = 0.2126 * Linear(color.R) + 0.7152 * Linear(color.G) + 0.0722 * Linear(color.B);
+        return luminance >= 0.179 ? Brushes.Black : Brushes.White;
+
+        // переводим восьмибитный канал sRGB в линейную яркость
+        static double Linear(byte channel) {
+            double value = channel / 255d;
+            return value <= 0.04045 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
+        }
+    }
 
     // передаем исходный BGR8 в непрозрачный bitmap без промежуточного кодирования
-    private static WriteableBitmap CreateBitmap(FaceImage frame) {
+    internal static WriteableBitmap CreateBitmap(FaceImage frame) {
         WriteableBitmap result = new(new PixelSize(frame.Width, frame.Height), new Vector(96, 96),
             PixelFormat.Bgra8888, AlphaFormat.Opaque);
         try {
